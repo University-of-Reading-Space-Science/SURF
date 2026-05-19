@@ -980,9 +980,9 @@ class SURF:
 
         buffersteps = np.fix(self.buffertime.to(u.s) / self.dt)
         buffertime = buffersteps * self.dt
-        model_time = np.arange(-buffertime.value, (self.simtime.to('s') + self.dt).value, self.dt.value) * self.dt.unit
+        model_time = np.arange(-buffertime.value, (self.simtime.to('s') + self.dt).value,
+                               self.dt.value) * self.dt.unit
         dlondt = self.twopi * self.dt / self.rotation_period
-        # OPTIMIZATION: Use actual nlon instead of always generating 128
         nlon = self.nlon  # Use the actual model longitude count
         self.model_time = model_time
 
@@ -1011,7 +1011,14 @@ class SURF:
             # centered on simulation longitude
             lon_start = (lon_out - simlon - dlondt)
             lon_stop = (lon_out + bufferlon)
-            lonint = np.arange(lon_start, lon_stop, dlondt)
+            # Use linspace instead of arange to guarantee exact size match
+            num_points = model_time.size
+            lonint = np.linspace(lon_start, lon_stop, num_points, endpoint=False)
+
+            # Size verification check (can be removed after testing)
+            assert lonint.size == model_time.size, \
+                f"Size mismatch: lonint ({lonint.size}) != model_time ({model_time.size})"
+
             # Rectify so that it is between 0 - 2pi
             loninit = zerototwopi(lonint)
             
@@ -1021,6 +1028,12 @@ class SURF:
             
             # convert from cr longitude to timesolve
             vinput = np.flipud(vinit) * (u.km / u.s)
+
+            # Additional safety check
+            if vinput.size != self.input_v_ts.shape[0]:
+                raise ValueError(f"vinput size ({vinput.size}) does not match "
+                                 f"input_v_ts rows ({self.input_v_ts.shape[0]})")
+
             # Store the input series
             self.input_v_ts[:, i] = vinput
 
@@ -1029,6 +1042,11 @@ class SURF:
                                   period=2 * np.pi)
                 # convert from cr longitude to timesolve
                 binput = np.flipud(binit)
+
+                if binput.size != self.input_b_ts.shape[0]:
+                    raise ValueError(f"binput size ({binput.size}) does not match "
+                                     f"input_b_ts rows ({self.input_b_ts.shape[0]})")
+
                 # Store the input series
                 self.input_b_ts[:, i] = binput
 
@@ -1038,6 +1056,10 @@ class SURF:
                                     period=2 * np.pi)
                 # convert from cr longitude to timesolve
                 rhoinput = np.flipud(rhoinit) * self.rho_boundary.unit
+
+                if rhoinput.size != self.input_rho_ts.shape[0]:
+                    raise ValueError(f"rhoinput size ({rhoinput.size}) does not match "
+                                     f"input_rho_ts rows ({self.input_rho_ts.shape[0]})")
                 # Store the input series
                 self.input_rho_ts[:, i] = rhoinput
 
@@ -1046,6 +1068,11 @@ class SURF:
                                      self.temp_boundary.value, period=2 * np.pi)
                 # convert from cr longitude to timesolve
                 tempinput = np.flipud(tempinit) * self.temp_boundary.unit
+
+                if tempinput.size != self.input_temp_ts.shape[0]:
+                    raise ValueError(f"tempinput size ({tempinput.size}) does not match "
+                                     f"input_temp_ts rows ({self.input_temp_ts.shape[0]})")
+
                 # Store the input series
                 self.input_temp_ts[:, i] = tempinput
 
