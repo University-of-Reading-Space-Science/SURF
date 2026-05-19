@@ -662,7 +662,8 @@ class CompressibleSolver:
             particles_enabled = True
             for group_name, n_p in num_particles.items():
                 inj_times = particle_injection_rate[group_name]
-                rel_times = particle_release_rate[group_name] if particle_release_rate and group_name in particle_release_rate else inj_times
+                rel_times = particle_release_rate[group_name] \
+                    if particle_release_rate and group_name in particle_release_rate else inj_times
                 behavior = 1 if 'cme' in group_name.lower() else 0
                 
                 particle_groups[group_name] = {
@@ -675,7 +676,8 @@ class CompressibleSolver:
                 }
         elif isinstance(num_particles, int) and num_particles > 0:
             particles_enabled = True
-            inj_times = particle_injection_rate if particle_injection_rate is not None else np.zeros(num_particles)
+            inj_times = particle_injection_rate \
+                if particle_injection_rate is not None else np.zeros(num_particles)
             rel_times = particle_release_rate if particle_release_rate is not None else inj_times
             particle_groups['default'] = {
                 'n_particles': num_particles,
@@ -926,7 +928,8 @@ def benchmark_solvers(r_grid, t_end, v_bc, rho_bc, T_bc, gamma=5.0/3.0,
     print(f"{'Method':<20} {'Time (s)':<12} {'Error v':<15} {'Error rho':<15}")
     print("="*70)
     for method, data in results.items():
-        print(f"{method:<20} {data['time']:<12.3f} {data['error_v']:<15.2e} {data['error_rho']:<15.2e}")
+        print(f"{method:<20} {data['time']:<12.3f} {data['error_v']:<15.2e} "
+              f"{data['error_rho']:<15.2e}")
     
     return results
 

@@ -32,8 +32,6 @@ import surf as surf
 import surf_inputs as surfIN
 
 
-
-
 def _is_compressible_solver(solver):
     return solver in ("hydro", "hydro-pcm")
 
@@ -83,16 +81,18 @@ def get_omni(starttime, endtime):
     return omni
 
 
-def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, dt=1 * u.day, ref_r=215 * u.solRad,
-                             corot_type='both', compressible=False):
+def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, dt=1 * u.day,
+                             ref_r=215 * u.solRad, corot_type='both', compressible=False):
     """
-    A function to download OMNI data and generate V_carr and time_grid for use with set_time_dependent_boundary
+    A function to download OMNI data and generate V_carr and time_grid for use with
+    set_time_dependent_boundary
 
     Args:
         runstart: Start time as a datetime
         runend: End time as a datetime
         nlon_grid: Int. If none specified, will be set to the current SURF value (usually 128)
-        omni_input: Optional input for supplying the OMNI data. If left as None, it will be downloaded at runtime.
+        omni_input: Optional input for supplying the OMNI data. If left as None, it will be
+                    downloaded at runtime.
         dt: time resolution, in days is 1*u.day.
         ref_r: radial distance to produce v at, 215*u.solRad by default.
         corot_type: String that determines corot type (both, back, forward)
@@ -101,8 +101,10 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, 
         Time: Array of times as modified Julian days
         Vcarr: Array of solar wind speeds (km/s) mapped as a function of Carr long and time
         bcarr: Array of Br mapped as a function of Carr long and time
-        rhocarr: (if compressible=True) Array of mass density (kg/m³) mapped as a function of Carr long and time
-        tcarr: (if compressible=True) Array of temperature (K) mapped as a function of Carr long and time
+        rhocarr: (if compressible=True) Array of mass density (kg/m³) mapped as a function of Carr
+                 long and time
+        tcarr: (if compressible=True) Array of temperature (K) mapped as a function of Carr long
+               and time
     """
 
     # check the coro_type is one of the accepted values
@@ -113,7 +115,8 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, 
     if nlon_grid is None:
         nlon_grid = nlon
     if not (nlon_grid == nlon):
-        print('Warning: vCarr generated for different longitude resolution than current SURF default')
+        print('Warning: vCarr generated for different longitude resolution than current SURF '
+              'default')
 
     # if omni data is not supplied, download it
     if omni_input is None:
@@ -151,7 +154,7 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, 
     for i in range(0, len(omni_int)):
         cr[i], cr_lon_init[i] = surfIN.datetime2surfinputs(omni_int['datetime'][i])
 
-    omni_int['Carr_lon'] = cr_lon_init.value  # remove unit as this confuses pd.DataFrame.copy() needed later
+    omni_int['Carr_lon'] = cr_lon_init.value  # remove unit as this confuses pd.DataFrame.copy()
     omni_int['Carr_lon_unwrap'] = np.unwrap(omni_int['Carr_lon'].to_numpy())
 
     omni_int['mjd'] = [t.mjd for t in omni_int['Time'].array]
@@ -161,7 +164,7 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, 
     ephem = h5py.File(dirs['ephemeris'], 'r')
     # convert ephemeric to mjd and interpolate to required times
     all_time = Time(ephem['EARTH']['HEEQ']['time'], format='jd').value - 2400000.5
-    omni_int['R'] = np.interp(omni_int['mjd'], all_time, ephem['EARTH']['HEEQ']['radius'][:])  # no unit as L1164
+    omni_int['R'] = np.interp(omni_int['mjd'], all_time, ephem['EARTH']['HEEQ']['radius'][:])
 
     # map each point back/forward to the reference radial distance
     omni_int['mjd_ref'] = omni_int['mjd']
@@ -181,12 +184,16 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, 
     omni_temp = omni_temp.sort_values(by=['Carr_lon_ref'])
 
     # now remap these speeds back on to the original time steps
-    omni_int['V_ref'] = np.interp(omni_int['Carr_lon_unwrap'], omni_temp['Carr_lon_ref'], omni_temp['V'])
-    omni_int['Br_ref'] = np.interp(omni_int['Carr_lon_unwrap'], omni_temp['Carr_lon_ref'], -omni_temp['BX_GSE'])
+    omni_int['V_ref'] = np.interp(omni_int['Carr_lon_unwrap'], omni_temp['Carr_lon_ref'],
+                                  omni_temp['V'])
+    omni_int['Br_ref'] = np.interp(omni_int['Carr_lon_unwrap'], omni_temp['Carr_lon_ref'],
+                                   -omni_temp['BX_GSE'])
     
     if compressible:
-        omni_int['N_ref'] = np.interp(omni_int['Carr_lon_unwrap'], omni_temp['Carr_lon_ref'], omni_temp['N'])
-        omni_int['T_ref'] = np.interp(omni_int['Carr_lon_unwrap'], omni_temp['Carr_lon_ref'], omni_temp['T'])
+        omni_int['N_ref'] = np.interp(omni_int['Carr_lon_unwrap'], omni_temp['Carr_lon_ref'],
+                                      omni_temp['N'])
+        omni_int['T_ref'] = np.interp(omni_int['Carr_lon_unwrap'], omni_temp['Carr_lon_ref'],
+                                      omni_temp['T'])
 
     # compute the longitudinal and time grids
     dphi_grid = 360 / nlon_grid
@@ -223,36 +230,48 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, 
         dt_back = (dlong_back / omega_synodic).to(u.day)
         dt_forward = (dlong_forward / omega_synodic).to(u.day)
 
-        vgrid_carr_recon_back[:, t] = np.interp(time_grid[t] - dt_back.value, omni_int['mjd'], omni_int['V_ref'],
-                                                left=np.nan, right=np.nan)
-        bgrid_carr_recon_back[:, t] = np.interp(time_grid[t] - dt_back.value, omni_int['mjd'], omni_int['Br_ref'],
-                                                left=np.nan, right=np.nan)
+        vgrid_carr_recon_back[:, t] = np.interp(time_grid[t] - dt_back.value, omni_int['mjd'],
+                                                omni_int['V_ref'], left=np.nan, right=np.nan)
+        bgrid_carr_recon_back[:, t] = np.interp(time_grid[t] - dt_back.value, omni_int['mjd'],
+                                                omni_int['Br_ref'], left=np.nan, right=np.nan)
 
-        vgrid_carr_recon_forward[:, t] = np.interp(time_grid[t] + dt_forward.value, omni_int['mjd'], omni_int['V_ref'],
-                                                   left=np.nan, right=np.nan)
-        bgrid_carr_recon_forward[:, t] = np.interp(time_grid[t] + dt_forward.value, omni_int['mjd'], omni_int['Br_ref'],
-                                                   left=np.nan, right=np.nan)
+        vgrid_carr_recon_forward[:, t] = np.interp(time_grid[t] + dt_forward.value, omni_int['mjd'],
+                                                   omni_int['V_ref'], left=np.nan, right=np.nan)
+        bgrid_carr_recon_forward[:, t] = np.interp(time_grid[t] + dt_forward.value, omni_int['mjd'],
+                                                   omni_int['Br_ref'], left=np.nan, right=np.nan)
 
-        numerator = (dt_forward * vgrid_carr_recon_back[:, t] + dt_back * vgrid_carr_recon_forward[:, t])
+        numerator = (dt_forward * vgrid_carr_recon_back[:, t] +
+                     dt_back * vgrid_carr_recon_forward[:, t])
         denominator = dt_forward + dt_back
         vgrid_carr_recon_both[:, t] = numerator / denominator
 
-        numerator = (dt_forward * bgrid_carr_recon_back[:, t] + dt_back * bgrid_carr_recon_forward[:, t])
+        numerator = (dt_forward * bgrid_carr_recon_back[:, t] +
+                     dt_back * bgrid_carr_recon_forward[:, t])
         bgrid_carr_recon_both[:, t] = numerator / denominator
         
         if compressible:
-            rhogrid_carr_recon_back[:, t] = np.interp(time_grid[t] - dt_back.value, omni_int['mjd'], omni_int['N_ref'],
-                                                    left=np.nan, right=np.nan)
-            rhogrid_carr_recon_forward[:, t] = np.interp(time_grid[t] + dt_forward.value, omni_int['mjd'], omni_int['N_ref'],
-                                                       left=np.nan, right=np.nan)
-            numerator = (dt_forward * rhogrid_carr_recon_back[:, t] + dt_back * rhogrid_carr_recon_forward[:, t])
+            rhogrid_carr_recon_back[:, t] = np.interp(time_grid[t] - dt_back.value, omni_int['mjd'],
+                                                      omni_int['N_ref'], left=np.nan, right=np.nan)
+
+            rhogrid_carr_recon_forward[:, t] = np.interp(time_grid[t] + dt_forward.value,
+                                                         omni_int['mjd'], omni_int['N_ref'],
+                                                         left=np.nan, right=np.nan)
+
+            numerator = (dt_forward * rhogrid_carr_recon_back[:, t] +
+                         dt_back * rhogrid_carr_recon_forward[:, t])
+
             rhogrid_carr_recon_both[:, t] = numerator / denominator
             
-            tgrid_carr_recon_back[:, t] = np.interp(time_grid[t] - dt_back.value, omni_int['mjd'], omni_int['T_ref'],
-                                                    left=np.nan, right=np.nan)
-            tgrid_carr_recon_forward[:, t] = np.interp(time_grid[t] + dt_forward.value, omni_int['mjd'], omni_int['T_ref'],
+            tgrid_carr_recon_back[:, t] = np.interp(time_grid[t] - dt_back.value, omni_int['mjd'],
+                                                    omni_int['T_ref'], left=np.nan, right=np.nan)
+
+            tgrid_carr_recon_forward[:, t] = np.interp(time_grid[t] + dt_forward.value,
+                                                       omni_int['mjd'], omni_int['T_ref'],
                                                        left=np.nan, right=np.nan)
-            numerator = (dt_forward * tgrid_carr_recon_back[:, t] + dt_back * tgrid_carr_recon_forward[:, t])
+
+            numerator = (dt_forward * tgrid_carr_recon_back[:, t] +
+                         dt_back * tgrid_carr_recon_forward[:, t])
+
             tgrid_carr_recon_both[:, t] = numerator / denominator
 
     # cut out the requested time
@@ -295,20 +314,21 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, 
                    bgrid_carr_recon_forward[:, mask]
 
 
-def generate_vCarr_from_OMNI_DTW(runstart, runend, nlon=None, omni_input=None, res='24h', psi_days=7 * u.day,
-                                 max_warp_days=3 * u.day, dtw_on='V'):
+def generate_vCarr_from_OMNI_DTW(runstart, runend, nlon=None, omni_input=None, res='24h',
+                                 psi_days=7 * u.day, max_warp_days=3 * u.day, dtw_on='V'):
     """
-    A function to download OMNI data and generate V_carr and time_grid for 
-    use with set_time_dependent_boundary. Uses dynamic time warping, rather than
-    corotation
+    A function to download OMNI data and generate V_carr and time_grid for use with
+    set_time_dependent_boundary. Uses dynamic time warping, rather than corotation
 
     Args:
         runstart: Datetime object. Start of the interval
         runend: Datetime object. End of the interval
         nlon: Int. If none specified, will be set to the current SURF value (usually 128)
         omni_input: Optional input of OMNI data. If left as None is downloaded at runtime.
-        res: String. Time averaging of OMNI prior to DTW. match to longitude (for nlon = 128, use '5h')
-        psi_days: Float, in units of days. DTW parameter, determines window to ignore at the start and end of the fit.
+        res: String. Time averaging of OMNI prior to DTW. match to longitude (for nlon = 128,
+             use '5h')
+        psi_days: Float, in units of days. DTW parameter, determines window to ignore at the start
+                  and end of the fit.
         max_warp_days: Float, in units of days. DTW parameter, determining maximum warp allowed.
         dtw_on: String. Name of the omni dataframe column to be used to determine the DTW paths
     Returns:
@@ -322,7 +342,8 @@ def generate_vCarr_from_OMNI_DTW(runstart, runend, nlon=None, omni_input=None, r
     if nlon is None:
         nlon = nlon_surf
     if not (nlon == nlon_surf):
-        print('Warning: vCarr generated for different longitude resolution than current SURF default')
+        print('Warning: vCarr generated for different longitude resolution than the current SURF '
+              'default')
 
     # Download and process OMNI if not provided
 
@@ -337,7 +358,8 @@ def generate_vCarr_from_OMNI_DTW(runstart, runend, nlon=None, omni_input=None, r
         # do some check on onmi_input?
         if ((omni_input.loc[0, 'datetime'] > starttime) |
                 (omni_input.loc[0, 'datetime'] > starttime)):
-            print('Warning: supplied OMNI data does not completely cover required interval (allow +/- 28 days)')
+            print('Warning: supplied OMNI data does not completely '
+                  'cover required interval (allow +/- 28 days)')
         omni = omni_input.copy()
 
     # extra processing
@@ -372,18 +394,19 @@ def generate_vCarr_from_OMNI_DTW(runstart, runend, nlon=None, omni_input=None, r
     dlon = 2 * np.pi / nlon
     clon_unwrap_grid = - np.arange(-2 * np.pi - dlon, -clon_min + 2 * np.pi, dlon)
 
-    v_clon = np.interp(-clon_unwrap_grid, -omni_res['clon_unwrap'].to_numpy(), omni_res['V'].to_numpy(),
-                       left=np.nan, right=np.nan)
-    mjd_clon = np.interp(-clon_unwrap_grid, -omni_res['clon_unwrap'].to_numpy(), omni_res['mjd'].to_numpy(),
-                         left=np.nan, right=np.nan)
-    bx_clon = np.interp(-clon_unwrap_grid, -omni_res['clon_unwrap'].to_numpy(), omni_res['BX_GSE'].to_numpy(),
-                        left=np.nan, right=np.nan)
-    dtwon_clon = np.interp(-clon_unwrap_grid, -omni_res['clon_unwrap'].to_numpy(), omni_res[dtw_on].to_numpy(),
-                           left=np.nan, right=np.nan)
+    v_clon = np.interp(-clon_unwrap_grid, -omni_res['clon_unwrap'].to_numpy(),
+                       omni_res['V'].to_numpy(), left=np.nan, right=np.nan)
+    mjd_clon = np.interp(-clon_unwrap_grid, -omni_res['clon_unwrap'].to_numpy(),
+                         omni_res['mjd'].to_numpy(), left=np.nan, right=np.nan)
+    bx_clon = np.interp(-clon_unwrap_grid, -omni_res['clon_unwrap'].to_numpy(),
+                        omni_res['BX_GSE'].to_numpy(), left=np.nan, right=np.nan)
+    dtwon_clon = np.interp(-clon_unwrap_grid, -omni_res['clon_unwrap'].to_numpy(),
+                           omni_res[dtw_on].to_numpy(), left=np.nan, right=np.nan)
 
     del omni_res
     # bung this in a dataframe
-    data = {'mjd': mjd_clon, 'V': v_clon, 'BX_GSE': bx_clon, dtw_on: dtwon_clon, 'clon_unwrap': clon_unwrap_grid}
+    data = {'mjd': mjd_clon, 'V': v_clon, 'BX_GSE': bx_clon, dtw_on: dtwon_clon,
+            'clon_unwrap': clon_unwrap_grid}
 
     omni_res = pd.DataFrame(data)
     omni_res['carr_lon'] = np.mod(clon_unwrap_grid, 2 * np.pi)
@@ -576,14 +599,17 @@ def remove_ICMEs(data_df, icmes, interpolate=True, icme_buffer=0.1 * u.day, inte
     A function to remove ICMEs from a given time series
 
     Args:
-        data_df: Pandas dataframe of time series with 'mjd' and reset index, such as provided by get_omni
+        data_df: Pandas dataframe of time series with 'mjd' and reset index, such as provided by
+                 get_omni
         icmes: list
         interpolate: boolean. Whether to interpolate through ICMEs NaNs. The default is True.
-        icme_buffer: Astropy Quantity with units of day. How much additional data to remove about the ICME boundaries.
-        interp_buffer: Astropy Quantity, with units of day. How much of an average to take up and downstream.
+        icme_buffer: Astropy Quantity with units of day. How much additional data to remove about
+                     the ICME boundaries.
+        interp_buffer: Astropy Quantity, with units of day. How much of an average to take up and
+                       downstream.
         params: list of strings. Which parameters to remove. The default is ['V', 'BX_GSE'].
-        fill_vals: list of floats, possibly with units. The fill values to use for interpolation if the upstream or
-                   downstream data are all nans.
+        fill_vals: list of floats, possibly with units. The fill values to use for interpolation
+                   if the upstream or downstream data are all nans.
     Returns:
         data: pd.dataframe with ICMEs removed from required params
     """
@@ -677,8 +703,8 @@ def remove_ICMEs(data_df, icmes, interpolate=True, icme_buffer=0.1 * u.day, inte
 
 def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.day):
     """
-    Scrape the DONKI database of interplanetary shocks at Earth or STEREO, to create a pseudo-ICME list in the same
-    format as the Cane and Richardson list.
+    Scrape the DONKI database of interplanetary shocks at Earth or STEREO, to create a pseudo-ICME
+    list in the same format as the Cane and Richardson list.
     Args:
         startdate: Datetime of the start of the window
         enddate: Datetime of the end of the window
@@ -714,7 +740,8 @@ def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.
         # put it in the same format as the Cane&Richardson ICME list
         L = len(icmes)
         for i in range(0, L):
-            icmes.loc[i, 'Shock_time'] = datetime.datetime.strptime(icmes.loc[i, 'eventTime'], '%Y-%m-%dT%H:%MZ')
+            icmes.loc[i, 'Shock_time'] = datetime.datetime.strptime(icmes.loc[i, 'eventTime'],
+                                                                    '%Y-%m-%dT%H:%MZ')
 
         # add a guess at the ICME end time
         icmes['ICME_end'] = icmes['Shock_time'] + datetime.timedelta(days=ICME_duration.value)
@@ -812,10 +839,8 @@ def ICMElist(filepath=None):
                                   16: 'V_transit'})
     return icmes
 
-def removeICMEs(omni, 
-                icme_list='CaneRichardson',
-                pre_icme_buffer=0.2,  # days
-                post_icme_buffer=1,  # days
+
+def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme_buffer=1,
                 interp_gaps=True):
     """
     Remove ICME periods from OMNI solar wind data.
@@ -886,7 +911,8 @@ def removeICMEs(omni,
     if interp_gaps:
         # now interp through all datagaps
         omni_noicmes = omni_noicmes.set_index('datetime')
-        omni_noicmes[['V', 'BX_GSE']] = omni_noicmes[['V', 'BX_GSE']].interpolate(method='time').ffill().bfill()
+        omni_noicmes[['V', 'BX_GSE']] = (omni_noicmes[['V', 'BX_GSE']].interpolate(method='time').
+                                         ffill().bfill())
         omni_noicmes = omni_noicmes.reset_index()
 
     return omni_noicmes
@@ -934,8 +960,7 @@ def _load_scaler_no_sklearn(filepath):
     return scaler
 
 
-def correct_inner_vlon_cnn_onnx(v_inner_array,
-                                data_dir=None):
+def correct_inner_vlon_cnn_onnx(v_inner_array, data_dir=None):
     """
     Corrects solar wind speed as a function of longitude using a 1D CNN model
     trained to account for stream interactions during backmapping from 1 AU 
@@ -987,12 +1012,9 @@ def correct_inner_vlon_cnn_onnx(v_inner_array,
     return Y_pred.T
 
 
-def omniSURF_forecast(ftime, simtime=27.27*u.day, 
-                        rmin=21.5*u.solRad, rmax=230*u.solRad, 
-                        dt_scale=4,
-                        omni_input=None, buffertime=5*u.day,
-                        run_2d=False, solver='huxt',
-                        rho_source='speed', temp_source='speed'):
+def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u.solRad,
+                      dt_scale=4, omni_input=None, buffertime=5*u.day, run_2d=False,
+                      solver='huxt'):
     """
     Create a SURF solar wind forecast initialized from in-situ OMNI observations.
     
@@ -1117,20 +1139,24 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day,
     
     # Backmap to the inner boundary with solver-dependent acceleration profile.
     if solver == 'huxt':
-        vcarr_rmin_back, bcarr_rmin_back = surfIN.map_v_boundary_inwards(omni_lon['V'].to_numpy()*u.km/u.s, 
-                                    Earth_R_km.to(u.solRad), rmin,
-                                    b_orig=-omni_lon['BX_GSE'].to_numpy())
+        vcarr_rmin_back, bcarr_rmin_back = surfIN.map_v_boundary_inwards(
+                                                omni_lon['V'].to_numpy()*u.km/u.s,
+                                                Earth_R_km.to(u.solRad), rmin,
+                                                b_orig=-omni_lon['BX_GSE'].to_numpy())
     else:
-        vcarr_rmin_back, bcarr_rmin_back = surfIN.map_v_boundary_inwards(omni_lon['V'].to_numpy()*u.km/u.s,
-                                    Earth_R_km.to(u.solRad), rmin,
-                                    b_orig=-omni_lon['BX_GSE'].to_numpy(), acc_profile='huxt', gamma=1.5)
+        vcarr_rmin_back, bcarr_rmin_back = surfIN.map_v_boundary_inwards(
+                                                omni_lon['V'].to_numpy()*u.km/u.s,
+                                                Earth_R_km.to(u.solRad), rmin,
+                                                b_orig=-omni_lon['BX_GSE'].to_numpy(),
+                                                acc_profile='huxt', gamma=1.5)
     
     
     # interp to typical SURF resolution
     dphi = 2*np.pi/surf.surf_constants()['nlong']
     longs = np.arange(dphi/2, 2*np.pi, dphi)
     vlon = np.interp(longs, omni_lon['lon_carr'], vcarr_rmin_back)
-    blon = np.interp(longs, omni_lon['lon_carr'], bcarr_rmin_back) if bcarr_rmin_back is not None else None
+    blon = np.interp(longs, omni_lon['lon_carr'], bcarr_rmin_back) \
+           if bcarr_rmin_back is not None else None
     
     # apply the CNN to the backmapped data
     vcarr_rmin_back_cnn = correct_inner_vlon_cnn_onnx(vlon.reshape(-1, 1))
@@ -1168,14 +1194,9 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day,
     return model
 
 
-def omniSURF_reconstruction(start_time, end_time, 
-                            rmin=21.5*u.solRad, rmax=230*u.solRad, 
-                            dt_scale=4, dt=1*u.day,
-                            omni_input=None,
-                            run_2d=False,
-                            solver='huxt',
-                            rho_source='speed',
-                            temp_source='speed'):
+def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u.solRad,
+                            dt_scale=4, dt=1*u.day, omni_input=None, run_2d=False, solver='huxt',
+                            rho_source='speed', temp_source='speed'):
     """
     Create a SURF solar wind reconstruction using OMNI observations over a time interval.
     
@@ -1445,12 +1466,8 @@ def omniSURF_reconstruction(start_time, end_time,
     return model
 
 
-def omniSURF_1au_out(start_time, end_time,
-                     rmax=230*u.solRad,
-                     dt_scale=4, dt=1*u.day,
-                     omni_input=None,
-                     run_2d=False,
-                     solver='hydro'):
+def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u.day,
+                     omni_input=None, run_2d=False, solver='hydro'):
     """
     Create a SURF solar wind simulation starting from ~1 AU using OMNI observations.
 
@@ -1479,7 +1496,6 @@ def omniSURF_1au_out(start_time, end_time,
     solver : str, optional
         Solver type. Default is 'hydro'. Valid options:
         - 'huxt': first-order HUXt advection solver
-        - 'huxt-pui': first-order HUXt advection solver with pick-up ions
         - 'hydro': second-order compressible HLLC+PLM solver
         - 'hydro-pcm': compressible HLLC+PCM solver
 
