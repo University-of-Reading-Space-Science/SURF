@@ -3883,7 +3883,7 @@ def load_SURF_run(filepath):
             
             cme.frame = cme_data['frame'][()].decode("utf-8")
 
-            label = cme_data['frame'][()].decode("utf-8")
+            label = cme_data['label'][()].decode("utf-8")
             if label == 'None':
                 cme.label = None
             else:
