@@ -96,7 +96,8 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, 
         dt: time resolution, in days is 1*u.day.
         ref_r: radial distance to produce v at, 215*u.solRad by default.
         corot_type: String that determines corot type (both, back, forward)
-        compressible: Boolean. If True, also return density and temperature arrays. Default is False.
+        compressible: Boolean. If True, also return density and temperature arrays. Default is
+                      False.
     Returns:
         Time: Array of times as modified Julian days
         Vcarr: Array of solar wind speeds (km/s) mapped as a function of Carr long and time
@@ -378,7 +379,8 @@ def generate_vCarr_from_OMNI_DTW(runstart, runend, nlon=None, omni_input=None, r
 
     # average up to a given res for a clearer plot
     omni_res = omni.resample(res, on='datetime').mean()
-    omni_res['datetime'] = Time(omni_res['mjd'], format='mjd').to_datetime(leap_second_strict='silent')
+    omni_res['datetime'] = (Time(omni_res['mjd'], format='mjd').
+                            to_datetime(leap_second_strict='silent'))
     omni_res.reset_index(drop=True, inplace=True)
 
     # compute carrington longitude of earth for each point
@@ -1383,11 +1385,11 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                 # Convert mass density to number density (cm^-3) for Parker mapping
                 n_col = (rho_col.value / m_p / 1e6) * u.cm**-3
                 # Get temperature at ref_r from empirical relation
-                _, T_col = S.get_density_temperature_from_velocity(
+                _, T_col = surf.get_density_temperature_from_velocity(
                     v_col.to(u.km/u.s).value, ref_r.to(u.solRad).value, gamma=1.5
                 )
                 # Map all properties from ref_r to rmin using Parker nozzle
-                _, n_new, _ = S.map_properties_parker(
+                _, n_new, _ = surf.map_properties_parker(
                     v_col, ref_r, rmin,
                     n_col, T_col * u.K, gamma=1.5
                 )
@@ -1409,11 +1411,11 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                 v_col = vcarr_215[:, t]
                 T_col = tcarr_215[:, t]  # K
                 # Get density at ref_r from empirical relation
-                n_col, _ = S.get_density_temperature_from_velocity(
+                n_col, _ = surf.get_density_temperature_from_velocity(
                     v_col.to(u.km/u.s).value, ref_r.to(u.solRad).value, gamma=1.5
                 )
                 # Map all properties from ref_r to rmin using Parker nozzle
-                _, _, T_new = S.map_properties_parker(
+                _, _, T_new = surf.map_properties_parker(
                     v_col, ref_r, rmin,
                     n_col * u.cm**-3, T_col, gamma=1.5
                 )

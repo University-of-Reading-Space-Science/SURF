@@ -1,3 +1,7 @@
+"""
+These classes and functions caontain the core functionality of SURF. They are used to set up,
+run, save, and load SURF simulations.
+"""
 import os
 
 import copy
@@ -17,6 +21,18 @@ from surf_solvers import create_solver as create_compressible_solver
 
 VALID_SOLVERS = ("huxt", "hydro", "hydro-pcm")
 
+# Units needed
+day = u.day
+km = u.km
+AU = u.au
+seconds = u.s
+km_per_s = km / seconds
+rad = u.rad
+deg = u.deg
+solRad = u.solRad
+kelvin = u.K
+per_cm_cube = u.cm**-3
+kg_per_cube = u.kg / u.m**3
 
 def validate_solver_name(solver):
     """
@@ -69,8 +85,8 @@ class Observer:
         if body.upper() in bodies:
             self.body = body.upper()
         else:
-            print("Warning, body {} not recognised.".format(body))
-            print("Only {} are valid.".format(bodies))
+            print(f"Warning, body {body} not recognised.")
+            print(f"Only {bodies} are valid.")
             print("Defaulting to Earth")
             self.body = "EARTH"
 
@@ -113,45 +129,45 @@ class Observer:
         else:
             r = ephem[self.body]['HEEQ']['radius'][id_epoch]
             self.r = np.interp(times.jd, epoch_time.jd, r)
-            self.r = (self.r * u.km).to(u.solRad)
+            self.r = (self.r * km).to(solRad)
 
             lon = np.deg2rad(ephem[self.body]['HEEQ']['longitude'][id_epoch])
             lon = np.unwrap(lon)
             self.lon = np.interp(times.jd, epoch_time.jd, lon)
             self.lon = zerototwopi(self.lon)
-            self.lon = self.lon * u.rad
+            self.lon = self.lon * rad
 
             lat = np.deg2rad(ephem[self.body]['HEEQ']['latitude'][id_epoch])
             self.lat = np.interp(times.jd, epoch_time.jd, lat)
-            self.lat = self.lat * u.rad
+            self.lat = self.lat * rad
 
             r = ephem[self.body]['HAE']['radius'][id_epoch]
             self.r_hae = np.interp(times.jd, epoch_time.jd, r)
-            self.r_hae = (self.r_hae * u.km).to(u.solRad)
+            self.r_hae = (self.r_hae * km).to(solRad)
 
             lon = np.deg2rad(ephem[self.body]['HAE']['longitude'][id_epoch])
             lon = np.unwrap(lon)
             self.lon_hae = np.interp(times.jd, epoch_time.jd, lon)
             self.lon_hae = zerototwopi(self.lon_hae)
-            self.lon_hae = self.lon_hae * u.rad
+            self.lon_hae = self.lon_hae * rad
 
             lat = np.deg2rad(ephem[self.body]['HAE']['latitude'][id_epoch])
             self.lat_hae = np.interp(times.jd, epoch_time.jd, lat)
-            self.lat_hae = self.lat_hae * u.rad
+            self.lat_hae = self.lat_hae * rad
 
             r = ephem[self.body]['CARR']['radius'][id_epoch]
             self.r_c = np.interp(times.jd, epoch_time.jd, r)
-            self.r_c = (self.r_c * u.km).to(u.solRad)
+            self.r_c = (self.r_c * km).to(solRad)
 
             lon = np.deg2rad(ephem[self.body]['CARR']['longitude'][id_epoch])
             lon = np.unwrap(lon)
             self.lon_c = np.interp(times.jd, epoch_time.jd, lon)
             self.lon_c = zerototwopi(self.lon_c)
-            self.lon_c = self.lon_c * u.rad
+            self.lon_c = self.lon_c * rad
 
             lat = np.deg2rad(ephem[self.body]['CARR']['latitude'][id_epoch])
             self.lat_c = np.interp(times.jd, epoch_time.jd, lat)
-            self.lat_c = self.lat_c * u.rad
+            self.lat_c = self.lat_c * rad
 
         ephem.close()
         return
@@ -180,11 +196,11 @@ class ConeCME:
                 Cone CME for each model time step.
     """
 
-    def __init__(self, t_launch=0.0 * u.s, longitude=0.0 * u.deg, latitude=0.0 * u.deg,
-                 v=1000.0 * (u.km / u.s), width=30.0 * u.deg, thickness=0.0 * u.solRad,
-                 initial_height=21.5 * u.solRad, cme_expansion=False, cme_fixed_duration=True,
-                 fixed_duration=12 * 60 * 60 * u.s, cme_density=np.nan * (u.kg / u.m**3),
-                 cme_temperature=np.nan * u.K, density_fraction=1, temperature_fraction=1,
+    def __init__(self, t_launch=0.0 * seconds, longitude=0.0 * deg, latitude=0.0 * deg,
+                 v=1000.0 * km_per_s, width=30.0 * deg, thickness=0.0 * solRad,
+                 initial_height=21.5 * solRad, cme_expansion=False, cme_fixed_duration=True,
+                 fixed_duration=12 * 60 * 60 * seconds, cme_density=np.nan * kg_per_cube,
+                 cme_temperature=np.nan * kelvin, density_fraction=1, temperature_fraction=1,
                  profile_type='square', label=None):
 
         """
@@ -214,9 +230,9 @@ class ConeCME:
         """
  
         self.t_launch = t_launch  # Time of CME launch, after the start of the simulation
-        lon = zerototwopi(longitude.to(u.rad).value) * u.rad
+        lon = zerototwopi(longitude.to(rad).value) * rad
         self.longitude = lon  # User-supplied Longitudinal launch direction of the CME
-        self.latitude = latitude.to(u.rad)  # Latitude launch direction of the CME
+        self.latitude = latitude.to(rad)  # Latitude launch direction of the CME
         self.v = v  # CME nose speed
         self.width = width  # Angular width
         self.initial_height = initial_height  # Initial CME height (should = SURF inner boundary)
@@ -224,7 +240,7 @@ class ConeCME:
         self.thickness = thickness  # Extra CME thickness
         self.coords = {}
         self.frame = 'NA'
-        self.longitude_surf = -1 * u.rad  # SURF longitude, adjusted to sidereal frame if necessary
+        self.longitude_surf = -1 * rad  # SURF longitude, adjusted to sidereal frame if necessary
         self.cme_expansion = cme_expansion
         self.cme_fixed_duration = cme_fixed_duration
         self.fixed_duration = fixed_duration
@@ -303,7 +319,7 @@ class ConeCME:
         cme_v_field = model.cme_particles_v[cme_id, :, :, :]
 
         # Setup dictionary to track this CME
-        self.coords = {j: {'time': np.array([]), 'model_time': np.array([]) * u.s,
+        self.coords = {j: {'time': np.array([]), 'model_time': np.array([]) * seconds,
                            'front_id': np.array([]) * u.dimensionless_unscaled,
                            'lon': np.array([]) * model.lon.unit,
                            'r': np.array([]) * model.r.unit,
@@ -328,10 +344,10 @@ class ConeCME:
 
                 # single longitude runs need different treatment to multi lon runs.
                 if lon.size == 1:
-                    if lon > np.pi * u.rad:
-                        lon -= 2 * np.pi * u.rad
-                    elif lon < -np.pi * u.rad:
-                        lon += 2 * np.pi * u.rad
+                    if lon > np.pi * rad:
+                        lon -= 2 * np.pi * rad
+                    elif lon < -np.pi * rad:
+                        lon += 2 * np.pi * rad
 
                     lons = np.hstack([lon, lon])
                     cme_r = np.hstack([cme_r_front, cme_r_back])
@@ -339,8 +355,8 @@ class ConeCME:
                     front_id = np.hstack([1.0, 0.0])
                 else:
                     # Correct the wrap arounds at +/-pi
-                    lon[lon > np.pi * u.rad] -= 2 * np.pi * u.rad
-                    lon[lon < -np.pi * u.rad] += 2 * np.pi * u.rad
+                    lon[lon > np.pi * rad] -= 2 * np.pi * rad
+                    lon[lon < -np.pi * rad] += 2 * np.pi * rad
 
                     # Find indices that sort the longitudes, to make a wraparound of lons
                     id_sort_inc = np.argsort(lon)
@@ -373,8 +389,8 @@ class ConeCME:
                     front_id = np.hstack([np.ones(cme_r_front.shape), np.zeros(cme_r_back.shape)])
 
                 # Save to dict
-                self.coords[j]['r'] = (cme_r * u.km).to(u.solRad)
-                self.coords[j]['v'] = cme_v * (u.km / u.s)
+                self.coords[j]['r'] = (cme_r * km).to(solRad)
+                self.coords[j]['v'] = cme_v * km_per_s
                 self.coords[j]['lon'] = lons + self.longitude
                 self.coords[j]['front_id'] = front_id * u.dimensionless_unscaled
                 self.coords[j]['lat'] = model.latitude.copy()
@@ -443,12 +459,12 @@ class ConeCME:
 
         # Center longitudes on CME nose, between -180:180
         arrive_lon = arrive_lon - self.longitude
-        id_low = arrive_lon < -180 * u.deg
-        id_high = arrive_lon > 180 * u.deg
+        id_low = arrive_lon < -180 * deg
+        id_high = arrive_lon > 180 * deg
         if np.any(id_low):
-            arrive_lon[id_low] += 360 * u.deg
+            arrive_lon[id_low] += 360 * deg
         elif np.any(id_high):
-            arrive_lon[id_high] -= 360 * u.deg
+            arrive_lon[id_high] -= 360 * deg
 
         hit = False
         t_front = []
@@ -489,7 +505,7 @@ class ConeCME:
                     # Instead, check when cme lon within tolerance lon of body
 
                     # If body and cme within 1.5 deg of each other, assume close enough for hit.
-                    if np.isclose(arrive_lon[i], lon_cme, atol=1.5 * u.deg):
+                    if np.isclose(arrive_lon[i], lon_cme, atol=1.5 * deg):
                         t_front.append(coord['time'].jd)
                         r_front.append(r_cme[0])
                         v_front.append(v_cme[0].value)
@@ -501,26 +517,26 @@ class ConeCME:
                     hit = True
                     hit_id = i
                     hit_lon = arrive_lon[i] + self.longitude
-                    hit_lon = zerototwopi(hit_lon) * u.rad
+                    hit_lon = zerototwopi(hit_lon) * rad
                     hit_rad = arrive_rad[i]
 
                     # Interpolate the arrival time and transit time
                     # from radial coords before and after body radius
                     t_arrive = np.interp(arrive_rad[i], r_front, t_front)
-                    t_transit = (t_arrive - t_front[0]) * u.d
+                    t_transit = (t_arrive - t_front[0]) * day
                     t_arrive = Time(t_arrive, format='jd')
 
                     v_arrive = np.interp(arrive_rad[i], r_front, v_front)
-                    hit_v = v_arrive * u.km / u.s
+                    hit_v = v_arrive * km_per_s
                     break
 
         if not hit:
             hit_id = False
             t_arrive = Time("0000-01-01T00:00:00")
-            t_transit = np.nan * u.d
-            hit_lon = np.nan * u.deg
-            hit_rad = np.nan * u.solRad
-            hit_v = np.nan * u.km / u.s
+            t_transit = np.nan * day
+            hit_lon = np.nan * deg
+            hit_rad = np.nan * solRad
+            hit_v = np.nan * km_per_s
 
         arrival_stats = {'hit': hit, 'hit_id': hit_id, 't_arrive': t_arrive, 't_transit': t_transit,
                          'lon': hit_lon, 'r': hit_rad, 'v': hit_v}
@@ -577,60 +593,75 @@ class SURF:
                 (in km/s).
     """
 
-    def __init__(self, v_boundary=np.nan * (u.km / u.s), b_boundary=np.nan, 
+    def __init__(self, v_boundary=np.nan * km_per_s, b_boundary=np.nan,
                  rho_boundary=np.nan, temp_boundary=np.nan,
-                 cr_num=np.nan, cr_lon_init=360.0 * u.deg,
-                 latitude=0 * u.deg, r_min=21.5 * u.solRad, r_max=240 * u.solRad,
-                 lon_out=np.nan * u.rad, lon_start=np.nan * u.rad, lon_stop=np.nan * u.rad,
-                 simtime=5.0 * u.day, dt_scale=1.0, frame='synodic',
-                 input_v_ts=np.nan * (u.km / u.s), input_b_ts=np.nan, 
-                 input_rho_ts=np.nan * (u.kg / u.m**3), input_temp_ts=np.nan * u.K, 
-                 input_iscme_ts=np.nan, input_t_ts=np.nan * u.s,
+                 cr_num=np.nan, cr_lon_init=360.0 * deg,
+                 latitude=0 * deg, r_min=21.5 * solRad, r_max=240 * solRad,
+                 lon_out=np.nan * rad, lon_start=np.nan * rad, lon_stop=np.nan * rad,
+                 simtime=5.0 * day, dt_scale=1.0, frame='synodic',
+                 input_v_ts=np.nan * km_per_s, input_b_ts=np.nan,
+                 input_rho_ts=np.nan * kg_per_cube, input_temp_ts=np.nan * kelvin,
+                 input_iscme_ts=np.nan, input_t_ts=np.nan * seconds,
                  track_cmes=True, solver='huxt', parallel=False):
         """
         Initialise the SURF model instance.
 
-            v_boundary: Inner solar wind speed boundary condition. An array of size nlon (default 128). Units of km/s.
-            b_boundary: Inner B polarity boundary condition. An array of size nlon (default 128). Units of km/s.
-            cr_num: Integer Carrington rotation number. Used to determine the planetary and spacecraft positions
+            v_boundary: Inner solar wind speed boundary condition. An array of size nlon
+                        (default 128). Units of km/s.
+            b_boundary: Inner B polarity boundary condition. An array of size nlon (default 128).
+                        Units of km/s.
+            cr_num: Integer Carrington rotation number. Used to determine the planetary and
+                    spacecraft positions
             cr_lon_init: Carrington longitude of Earth at model initialisation, in degrees.
             latitude: Helio latitude (from the equator) of SURF plane, in degrees
-            lon_out: A specific single longitude (relative to Earth) to compute SURF solution along, in degrees
-            lon_start: The first longitude (in a clockwise sense) of the longitude range to solve SURF over.
-            lon_stop: The last longitude (in a clockwise sense) of the longitude range to solve SURF over.
+            lon_out: A specific single longitude (relative to Earth) to compute SURF solution along,
+                     in degrees
+            lon_start: The first longitude (in a clockwise sense) of the longitude range to solve
+                       SURF over.
+            lon_stop: The last longitude (in a clockwise sense) of the longitude range to solve
+                      SURF over.
             r_min: The radial inner boundary distance of SURF.
             r_max: The radial outer boundary distance of SURF.
             simtime: Duration of the simulation window, in days.
-            dt_scale: Integer scaling number to set the model output time step relative to the models CFL time.
+            dt_scale: Integer scaling number to set the model output time step relative to the
+                      models CFL time.
             frame: string determining the rotation frame for the model
-            input_v_ts: Time series of inner boundary V conditions. For initialising SURF with, for example, 
-                           in-situ observations from L1. If used as keyword input argument, overrides v_boundary input.
-            input_bv_ts: Time series of inner boundary B conditions. For initialising SURF with, for example, 
-                            in-situ observations from L1. If used as keyword input argument, overrides b_boundary input.
-            input_rho_ts: Time series of inner boundary density conditions in kg/m³. For initialising SURF with, for example,
-                             in-situ observations from L1. If used as keyword input argument, overrides rho_boundary input.
-                             Only used if compressible=True.
-            input_temp_ts: Time series of inner boundary temperature conditions in Kelvin. For initialising SURF with, for example,
-                              in-situ observations from L1. If used as keyword input argument, overrides temp_boundary input.
-                              Only used if compressible=True.             
+            input_v_ts: Time series of inner boundary V conditions. For initialising SURF with,
+                        for example, in-situ observations from L1. If used as keyword input
+                        argument, overrides v_boundary input.
+            input_bv_ts: Time series of inner boundary B conditions. For initialising SURF with,
+                         for example, in-situ observations from L1. If used as keyword input
+                         argument, overrides b_boundary input.
+            input_rho_ts: Time series of inner boundary density conditions in kg/m³. For
+                          initialising SURF with, for example, in-situ observations from L1. If
+                          used as keyword input argument, overrides rho_boundary input. Only used
+                          if compressible=True.
+            input_temp_ts: Time series of inner boundary temperature conditions in Kelvin. For
+                           initialising SURF with, for example, in-situ observations from L1. If
+                           used as keyword input argument, overrides temp_boundary input. Only
+                           used if compressible=True.
             input_t_ts: Times of input_v_ts in seconds, including spin up.
-            input_iscme_ts: Boolean mask time series indicating what time steps correspond to CMEs in input_v_ts.
-                               If used as keyword input argument, overrides ConeCMEs past to surf.sovle().
-            save_full_v: Boolean flag to determine if full v field (including spin up) is saved for post-processing.
-            track_cmes: Boolean flag to determine if CMEs are tracked at run time (small speed reduction).
+            input_iscme_ts: Boolean mask time series indicating what time steps correspond to CMEs
+                            in input_v_ts. If used as keyword input argument, overrides ConeCMEs
+                            past to surf.sovle().
+            save_full_v: Boolean flag to determine if full v field (including spin up) is saved for
+                         post-processing.
+            track_cmes: Boolean flag to determine if CMEs are tracked at run time (small speed
+                        reduction).
             solver: String specifying the numerical solver to use. Options:
                      'huxt' (default): First-order HUXt advection scheme (incompressible)
                      'hydro': Second-order compressible HLLC+PLM solver
                      'hydro-pcm': Compressible HLLC+PCM solver
-            parallel: Boolean flag to enable parallel computation across longitude slices (default True).
-                     Uses joblib threading backend for parallelization. Set to False for debugging
-                     or if running on a single-core system.
-            rho_boundary: Inner density boundary condition in kg/m³. An array of size nlon. Only used if compressible=True.
-                         If not provided, defaults to realistic solar wind density scaled from 1 AU (5 protons/cm³) 
-                         using r⁻² scaling to r_min.
-            temp_boundary: Inner temperature boundary condition in Kelvin. An array of size nlon. Only used if compressible=True.
-                          If not provided, defaults to realistic solar wind temperature scaled from 1 AU (10⁵ K)
-                          using r⁻⁰·⁶⁷ scaling to r_min.
+            parallel: Boolean flag to enable parallel computation across longitude slices
+                      (default True). Uses joblib threading backend for parallelization. Set to
+                      False for debugging or if running on a single-core system.
+            rho_boundary: Inner density boundary condition in kg/m³. An array of size nlon. Only
+                          used if compressible=True. If not provided, defaults to realistic solar
+                          wind density scaled from 1 AU (5 protons/cm³) using r⁻² scaling to r_min.
+            temp_boundary: Inner temperature boundary condition in Kelvin. An array of size nlon.
+                           Only used if compressible=True. If not provided, defaults to realistic
+                           solar wind temperature scaled from 1 AU (10⁵ K) using r⁻⁰·⁶⁷ scaling to
+                           r_min.
         """
 
         # some constants and units
@@ -638,8 +669,8 @@ class SURF:
         self.twopi = constants['twopi']
         self.daysec = constants['daysec']
         self.kms = constants['kms']
-        self.alpha = constants['alpha']  # Scale parameter for residual SW acceleration (incompressible)
-        self.r_accel = constants['r_accel']  # Spatial scale parameter for residual SW acceleration (incompressible)
+        self.alpha = constants['alpha']  # Scale parameter for SW accel. (incompressible)
+        self.r_accel = constants['r_accel']  # Spatial scale param for SW accel. (incompressible)
         self.gamma = constants['gamma']  # Adiabatic index for compressible solver
         # Use a per-instance cache namespace so changes in constants are picked up
         # when a new SURF instance is created, while still reusing lookups within
@@ -665,7 +696,7 @@ class SURF:
 
         # set the frame of reference. Synodic keeps ES line at 0 longitude.
         # sidereal means Earth moves to increasing longitude with time
-        assert (frame == 'synodic' or frame == 'sidereal')
+        assert frame in ['synodic', 'sidereal']
         self.frame = frame
         if frame == 'synodic':
             self.rotation_period = constants['synodic_period']  # Solar Synodic period from Earth.
@@ -696,7 +727,7 @@ class SURF:
                   "surf_analysis.get_observer_time_series()")
 
         # Set up the latitude
-        self.latitude = latitude.to(u.rad)
+        self.latitude = latitude.to(rad)
 
         # Setup time coords - in seconds
         self.simtime = simtime.to('s')  # number of days to simulate (in seconds)
@@ -716,7 +747,7 @@ class SURF:
             print("Warning: No V boundary conditions supplied. Using default")
             self.v_boundary = 400 * np.ones(self.nlong) * self.kms
             lon_boundary, dlon, nlon = longitude_grid()
-            self.v_boundary_lons = lon_boundary * u.rad
+            self.v_boundary_lons = lon_boundary * rad
         elif not np.all(np.isnan(v_boundary)):
             # check that the implicit time step from vlong is not comparable to the SURF timestep
             assert v_boundary.size < 4600  # this equates to about 9 mins
@@ -726,7 +757,7 @@ class SURF:
             nv = len(v_boundary)
             dlon = 2 * np.pi / nv
             self.v_boundary_lons = np.arange(dlon / 2, 2 * np.pi - dlon / 2 + dlon / 10,
-                                             dlon) * u.rad
+                                             dlon) * rad
 
         # Keep a protected version that isn't processed for use in saving/loading model runs
         self._v_boundary_init_ = self.v_boundary.copy()
@@ -747,7 +778,7 @@ class SURF:
             nb = len(b_boundary)
             dlon = 2 * np.pi / nb
             self.b_boundary_lons = np.arange(dlon / 2, 2 * np.pi - dlon / 2 + dlon / 10,
-                                             dlon) * u.rad
+                                             dlon) * rad
 
         # Handle rho and temp boundaries for compressible solver (rotatation done after cr_lon_init
         # is set)
@@ -755,8 +786,8 @@ class SURF:
             if np.all(np.isnan(rho_boundary)):
                 # Calculate density using empirical velocity-density relation derived from 
                 # OMNI data mapped via Parker nozzle solution
-                v_kms = self.v_boundary.to(u.km/u.s).value
-                r_inner = r_min.to(u.solRad).value
+                v_kms = self.v_boundary.to(km_per_s).value
+                r_inner = r_min.to(solRad).value
                 n_sw, _ = get_density_temperature_from_velocity(
                     v_kms, r_inner, gamma=self.gamma,
                     cache_id=self._density_temp_cache_id
@@ -765,7 +796,7 @@ class SURF:
                 # Convert density from cm^-3 to kg/m^3
                 # n [cm^-3] * m_p [kg] * 1e6 [cm^3/m^3] = rho [kg/m^3]
                 m_p = 1.67262192e-27  # proton mass in kg
-                self.rho_boundary = n_sw * m_p * 1e6 * (u.kg / u.m**3)
+                self.rho_boundary = n_sw * m_p * 1e6 * kg_per_cube
                 self.rho_boundary_lons = self.v_boundary_lons
             elif not np.all(np.isnan(rho_boundary)):
                 assert rho_boundary.size < 4600  # this equates to about 9 mins
@@ -774,17 +805,17 @@ class SURF:
                 nrho = len(rho_boundary)
                 dlon = 2 * np.pi / nrho
                 self.rho_boundary_lons = np.arange(dlon / 2, 2 * np.pi - dlon / 2 + dlon / 10,
-                                                   dlon) * u.rad
+                                                   dlon) * rad
 
             if np.all(np.isnan(temp_boundary)):
                 # Calculate temperature using empirical velocity-temperature relation
                 # derived from OMNI data mapped via Parker nozzle solution
-                v_kms = self.v_boundary.to(u.km/u.s).value
-                r_inner = self.r[0].to(u.solRad).value
+                v_kms = self.v_boundary.to(km_per_s).value
+                r_inner = self.r[0].to(solRad).value
                 _, temp_from_velocity = get_density_temperature_from_velocity(
                     v_kms, r_inner, gamma=self.gamma,
                     cache_id=self._density_temp_cache_id)
-                self.temp_boundary = temp_from_velocity * u.K
+                self.temp_boundary = temp_from_velocity * kelvin
                 self.temp_boundary_lons = self.v_boundary_lons
             elif not np.all(np.isnan(temp_boundary)):
                 assert temp_boundary.size < 4600  # this equates to about 9 mins
@@ -793,7 +824,7 @@ class SURF:
                 ntemp = len(temp_boundary)
                 dlon = 2 * np.pi / ntemp
                 self.temp_boundary_lons = np.arange(dlon / 2, 2 * np.pi - dlon / 2 + dlon / 10,
-                                                    dlon) * u.rad
+                                                    dlon) * rad
 
         # add a flag for tracking streaklines
         self.track_streak = False
@@ -802,16 +833,16 @@ class SURF:
         if np.isnan(cr_num):
             print('No initiation time specified. Defaulting to start of CR2000, 20/2/2003')
             self.cr_num = 2000 * u.dimensionless_unscaled
-            cr_lon_init = 0 * u.rad
+            cr_lon_init = 0 * rad
         else:
             self.cr_num = cr_num * u.dimensionless_unscaled
 
         # Check cr_lon_init, make sure in 0-2pi range.
         self.cr_lon_init = cr_lon_init.to('rad')
-        if (self.cr_lon_init < 0.0 * u.rad) | (self.cr_lon_init > self.twopi * u.rad):
+        if (self.cr_lon_init < 0.0 * rad) | (self.cr_lon_init > self.twopi * rad):
             print(f"Warning: cr_lon_init={self.cr_lon_init}, outside expected range. Rectifying to"
                   f"0-2pi.")
-            self.cr_lon_init = zerototwopi(self.cr_lon_init.value) * u.rad
+            self.cr_lon_init = zerototwopi(self.cr_lon_init.value) * rad
 
             # Compute model UTC initalisation time
         cr_frac = self.cr_num.value + ((self.twopi - self.cr_lon_init.value) / self.twopi)
@@ -852,7 +883,7 @@ class SURF:
 
         # Compute the buffertime required to spin up SURF, based on minimum speed on the inner
         # boundary and span of radial grid
-        self.buffertime = 1.05 * (self.rrel[-1] / self.v_boundary.min()).to(u.day)
+        self.buffertime = 1.05 * (self.rrel[-1] / self.v_boundary.min()).to(day)
 
         # Preallocate space for the solar wind fields for the cme and ambient solution.
         # Use Fortran order (column-major) for better cache efficiency during solve:
@@ -876,25 +907,25 @@ class SURF:
         if self.compressible:
             # Use Fortran order for cache-efficient memory access during solve
             self.rho_grid = np.zeros((self.nt_out, self.nr, self.nlon),
-                                     order='F') * (u.kg / u.m**3)
+                                     order='F') * kg_per_cube
             self.temp_grid = np.zeros((self.nt_out, self.nr, self.nlon),
-                                      order='F') * u.K
+                                      order='F') * kelvin
             # Note: Grids are initialized to zero here and will be populated during solve()
 
             # Compute typical solar wind values at the inner boundary for use in 
             # setting default CME values. Map typical 1 AU values to the model inner boundary
             # using Parker nozzle relations.
             const_1au = surf_constants()
-            r_1au = 215 * u.solRad
+            r_1au = 215 * solRad
             self.v_sw_inner, self.n_sw_inner, self.T_sw_inner = map_properties_parker(
                 const_1au['v_sw_1au'], r_1au, self.r[0], 
                 const_1au['n_sw_1au'], const_1au['T_sw_1au'], 
                 gamma=self.gamma
             )
-            self.T_sw_inner = self.T_sw_inner * u.K
+            self.T_sw_inner = self.T_sw_inner * kelvin
             # Convert number density to mass density
             m_p = 1.67262192e-27  # proton mass in kg
-            self.rho_sw_inner = self.n_sw_inner * m_p * 1e6 * (u.kg / u.m**3)
+            self.rho_sw_inner = self.n_sw_inner * m_p * 1e6 * kg_per_cube
             
 
 
@@ -903,18 +934,18 @@ class SURF:
         self.model_params = np.array([self.dtdr.value, self.alpha, self.r_accel.value,
                                       self.dt_scale.value, self.nt_out, self.nr, self.nlon,
                                       self.r[0].to('km').value,
-                                      self.rotation_period.to(u.s).value, self.gamma])
+                                      self.rotation_period.to(seconds).value, self.gamma])
 
         # Process inputs for time dependent boundary conditions, e.g., from in-situ data
         self.input_b_ts = np.nan
         self.input_b_ts_flag = False
         self.input_iscme_ts = np.nan
         self.input_iscme_ts_flag = False
-        self.input_v_ts = np.nan * (u.km / u.s)
+        self.input_v_ts = np.nan * km_per_s
         self.input_v_ts_flag = False
-        self.input_rho_ts = np.nan * (u.kg / u.m**3)
+        self.input_rho_ts = np.nan * kg_per_cube
         self.input_rho_ts_flag = False
-        self.input_temp_ts = np.nan * u.K
+        self.input_temp_ts = np.nan * kelvin
         self.input_temp_ts_flag = False
         if not np.all(np.isnan(input_v_ts)):
 
@@ -960,13 +991,13 @@ class SURF:
             elif compressible:
                 # Create default temperature values based on V, same as for 1D case
                 # Calculate temperature using empirical velocity-temperature relation
-                v_kms = self.input_v_ts.to(u.km/u.s).value
-                r_inner = self.r[0].to(u.solRad).value
+                v_kms = self.input_v_ts.to(km_per_s).value
+                r_inner = self.r[0].to(solRad).value
                 _, temp_from_velocity = get_density_temperature_from_velocity(
                     v_kms, r_inner, gamma=self.gamma,
                     cache_id=self._density_temp_cache_id
                 )
-                self.input_temp_ts = temp_from_velocity * u.K
+                self.input_temp_ts = temp_from_velocity * kelvin
                 self.input_temp_ts_flag = True
 
         return
@@ -978,7 +1009,7 @@ class SURF:
             None
         """
 
-        buffersteps = np.fix(self.buffertime.to(u.s) / self.dt)
+        buffersteps = np.fix(self.buffertime.to(seconds) / self.dt)
         buffertime = buffersteps * self.dt
         model_time = np.arange(-buffertime.value, (self.simtime.to('s') + self.dt).value,
                                self.dt.value) * self.dt.unit
@@ -992,12 +1023,12 @@ class SURF:
         bufferlon = self.twopi * buffertime / self.rotation_period
 
         # Variables to store the input conditions.
-        self.input_v_ts = np.nan * np.ones((model_time.size, nlon)) * (u.km / u.s)
+        self.input_v_ts = np.nan * np.ones((model_time.size, nlon)) * km_per_s
         if self.track_b:
             self.input_b_ts = np.nan * np.ones((model_time.size, nlon))
         if self.compressible:
-            self.input_rho_ts = np.nan * np.ones((model_time.size, nlon)) * (u.kg / u.m**3)
-            self.input_temp_ts = np.nan * np.ones((model_time.size, nlon)) * u.K
+            self.input_rho_ts = np.nan * np.ones((model_time.size, nlon)) * kg_per_cube
+            self.input_temp_ts = np.nan * np.ones((model_time.size, nlon)) * kelvin
 
         # Loop through model longitudes and compute boundary conditions at each radial profile.
         for i in range(self.lon.size):
@@ -1027,7 +1058,7 @@ class SURF:
                               period=2 * np.pi)
             
             # convert from cr longitude to timesolve
-            vinput = np.flipud(vinit) * (u.km / u.s)
+            vinput = np.flipud(vinit) * km_per_s
 
             # Additional safety check
             if vinput.size != self.input_v_ts.shape[0]:
@@ -1438,13 +1469,13 @@ class SURF:
         if hasattr(self, 'compressible') and self.compressible:
             if hasattr(self, 'v_boundary') and hasattr(self, 'temp_boundary'):
                 # Recalculate temperature using new gamma value
-                v_kms = self.v_boundary.to(u.km/u.s).value
-                r_inner = self.r[0].to(u.solRad).value
+                v_kms = self.v_boundary.to(km_per_s).value
+                r_inner = self.r[0].to(solRad).value
                 _, temp_from_velocity = get_density_temperature_from_velocity(
                     v_kms, r_inner, gamma=new_gamma,
                     cache_id=self._density_temp_cache_id
                 )
-                self.temp_boundary = temp_from_velocity * u.K
+                self.temp_boundary = temp_from_velocity * kelvin
     
     def get_final_state(self):
         """
@@ -1517,9 +1548,9 @@ class SURF:
                 self._temp_init[i] = temp[:, i].copy()
 
         # Zero the buffer time so ts_from_vlong skips spin-up
-        self.buffertime = 0.0 * u.day
+        self.buffertime = 0.0 * day
 
-    def solve(self, cme_list, streak_carr=np.array([])*u.rad, save=False, tag=''):
+    def solve(self, cme_list, streak_carr=np.array([])*rad, save=False, tag=''):
         """
         Solve SURF for the provided longitudinal boundary conditions and cme list. Updates the
         SURF.v_grid
@@ -1538,7 +1569,7 @@ class SURF:
         self.model_params = np.array([self.dtdr.value, self.alpha, self.r_accel.value,
                                       self.dt_scale.value, self.nt_out, self.nr, self.nlon,
                                       self.r[0].to('km').value,
-                                      self.rotation_period.to(u.s).value, self.gamma])
+                                      self.rotation_period.to(seconds).value, self.gamma])
 
         # ======================================================================
         # Generate ambient solar wind time series
@@ -1567,17 +1598,17 @@ class SURF:
                     # if the solution is in the sideral frame, adjust CME longitudes
                     earthpos = self.get_observer('EARTH')
                     # time and longitude from start of run
-                    dt_t0 = (earthpos.time - self.time_init).to(u.s)
+                    dt_t0 = (earthpos.time - self.time_init).to(seconds)
                     dlon_t0 = earthpos.lon_hae - earthpos.lon_hae[0]
                     # find the CME hae longitude relative to the run start
-                    cme_hae = np.interp(cme.t_launch.to(u.s).value,
+                    cme_hae = np.interp(cme.t_launch.to(seconds).value,
                                         dt_t0.value, dlon_t0)
                     # adjust the CME HEEQ longitude accordingly
-                    cme.longitude_surf = zerototwopi(cme.longitude + cme_hae) * u.rad
+                    cme.longitude_surf = zerototwopi(cme.longitude + cme_hae) * rad
                 else:
                     cme.longitude_surf = cme.longitude
 
-                if cme.t_launch >= 0*u.s:
+                if cme.t_launch >= 0*seconds:
                     # add the CME to the list
                     cme_list_checked.append(cme)
                 else:
@@ -1607,14 +1638,15 @@ class SURF:
         # sanity check the CME initial height is the same as the model inner boundary
         if len(self.cmes) > 0:
             for cme in self.cmes:
-                assert (self.r[0] == cme.initial_height)
+                assert self.r[0] == cme.initial_height
 
         # check CME speeds aren't so fast they will butt up agains the CFL condition.
         if len(self.cmes) > 0:
             constants = surf_constants()
             v_max = constants['v_max']
             for cme in self.cmes:
-
+                print(v_max)
+                print(cme.v)
                 if cme.v >= v_max:
                     raise ValueError(f'CME speed {cme.v} is larger than allowed for CFL limit'
                                      f' of {v_max}')
@@ -1642,8 +1674,8 @@ class SURF:
             # Create dummy CME list to sort the boundaries
             self.cmes = []
             for n in range(0, n_cme):
-                cme = ConeCME(t_launch=0 * u.s, longitude=0 * u.deg,
-                              width=0 * u.deg, v=0 * self.kms, thickness=0 * u.solRad)
+                cme = ConeCME(t_launch=0 * seconds, longitude=0 * deg,
+                              width=0 * deg, v=0 * self.kms, thickness=0 * solRad)
                 self.cmes.append(cme)
         else:
             # CME input has not been specified, but ConeCME's may have been input
@@ -1673,9 +1705,9 @@ class SURF:
                             rho_ambient=self.ambient_rho_ts[:, i].value,
                             temp_ambient=self.ambient_temp_ts[:, i].value,
                             compressible=True)
-                        self.input_v_ts[:, i] = v * (u.km / u.s)
-                        self.input_rho_ts[:, i] = rho * (u.kg / u.m**3)
-                        self.input_temp_ts[:, i] = temp * u.K
+                        self.input_v_ts[:, i] = v * km_per_s
+                        self.input_rho_ts[:, i] = rho * kg_per_cube
+                        self.input_temp_ts[:, i] = temp * kelvin
                     else:
                         v, isincme, rho, temp = add_cmes_to_input_series(
                             self.input_v_ts[:, i].value,
@@ -1687,7 +1719,7 @@ class SURF:
                             rho_ambient=None,
                             temp_ambient=None,
                             compressible=False)
-                        self.input_v_ts[:, i] = v * (u.km / u.s)
+                        self.input_v_ts[:, i] = v * km_per_s
                     self.input_iscme_ts[:, i] = isincme
 
         # Set up the CME test particle position field
@@ -1731,14 +1763,14 @@ class SURF:
             for istreak, carr in enumerate(streak_carr):
 
                 # convert from Carrington longitude to model lon at t=0
-                lon_src = zerototwopi((carr - self.cr_lon_init)) * u.rad
+                lon_src = zerototwopi((carr - self.cr_lon_init)) * rad
 
                 # adjust the source longitude for the spin-up time
-                dl_spinup = 2 * np.pi * self.buffertime.to(u.s) / self.rotation_period
-                lon_0 = zerototwopi(lon_src.to(u.rad).value - dl_spinup)
+                dl_spinup = 2 * np.pi * self.buffertime.to(seconds) / self.rotation_period
+                lon_0 = zerototwopi(lon_src.to(rad).value - dl_spinup)
 
                 # compute the model longitude of the streak line footpoint with time
-                streak_lon_t = (lon_0 + time_from_start * 2 * np.pi / self.rotation_period) * u.rad
+                streak_lon_t = (lon_0 + time_from_start * 2 * np.pi / self.rotation_period) * rad
 
                 # save the streakline footpoint longitude on the model time step
                 self.streak_lon_r0[:, istreak] = np.interp(self.time_out, self.model_time,
@@ -1750,9 +1782,9 @@ class SURF:
                     for irot in range(0, nrot):
                         # find the time index of the streakline at the given lon
                         id_in = np.argmin(abs(streak_lon_t -
-                                              (lon - self.dlon / 2 + 2 * np.pi * irot * u.rad)))
+                                              (lon - self.dlon / 2 + 2 * np.pi * irot * rad)))
                         id_out = np.argmin(abs(streak_lon_t -
-                                               (lon + self.dlon / 2 + 2 * np.pi * irot * u.rad)))
+                                               (lon + self.dlon / 2 + 2 * np.pi * irot * rad)))
 
                         # if id_out ==0, then the streakline hasn't made it to that lon
                         if id_in > 0 and id_in < len(time_from_start) - 1:
@@ -1817,14 +1849,13 @@ class SURF:
                     
                     # Save density and temperature output for compressible solver
                     if self.compressible:
-                        self.rho_grid[:, :, i] = rho_out * (u.kg / u.m**3)
-                        self.temp_grid[:, :, i] = temp_out * u.K
+                        self.rho_grid[:, :, i] = rho_out * kg_per_cube
+                        self.temp_grid[:, :, i] = temp_out * kelvin
             else:
                 # Serial execution (original loop)
                 for i in range(self.lon.size):
-                    i, v, cme_r_bounds, cme_v_bounds, hcs_r, streak_r, rho_out, temp_out = self.process_longitude(
-                        i, n_cme, n_hcs_max, streak_times
-                    )
+                    i, v, cme_r_bounds, cme_v_bounds, hcs_r, streak_r, rho_out, temp_out = (
+                        self.process_longitude(i, n_cme, n_hcs_max, streak_times))
                     
                     # Save the output at each longitude
                     self.v_grid[:, :, i] = v * self.kms
@@ -1837,8 +1868,8 @@ class SURF:
                     
                     # Save density and temperature output for compressible solver
                     if self.compressible:
-                        self.rho_grid[:, :, i] = rho_out * (u.kg / u.m**3)
-                        self.temp_grid[:, :, i] = temp_out * u.K
+                        self.rho_grid[:, :, i] = rho_out * kg_per_cube
+                        self.temp_grid[:, :, i] = temp_out * kelvin
 
         # Update CMEs positions by tracking through the solution.
         if self.track_cmes:
@@ -1860,14 +1891,14 @@ class SURF:
             self.b_grid = bgrid_from_hcs(self.hcs_particles_r, self.input_b_ts,
                                          self.model_time.value,
                                          self.time_out.value,
-                                         self.r.to(u.km).value, lons)
+                                         self.r.to(km).value, lons)
 
         # Convert grids back to C order (row-major) for compatibility with rest of codebase
         # This ensures all downstream analysis and plotting code works as expected
         self.v_grid = np.ascontiguousarray(self.v_grid.value) * self.kms
         if self.compressible:
-            self.rho_grid = np.ascontiguousarray(self.rho_grid.value) * (u.kg / u.m**3)
-            self.temp_grid = np.ascontiguousarray(self.temp_grid.value) * u.K
+            self.rho_grid = np.ascontiguousarray(self.rho_grid.value) * kg_per_cube
+            self.temp_grid = np.ascontiguousarray(self.temp_grid.value) * kelvin
 
         if save:
             if tag == '':
@@ -1889,12 +1920,12 @@ class SURF:
              out_filepath: Full path to the saved file.
         """
         # Open up hdf5 data file for the HI flow stats
-        filename = "SURF_CR{:03d}_{}.hdf5".format(np.int32(self.cr_num.value), tag)
+        filename = f"SURF_CR{np.int32(self.cr_num.value):03d}_{tag}.hdf5"
         out_filepath = os.path.join(self._data_dir_, filename)
 
         if os.path.isfile(out_filepath):
             # File exists, so delete and start new.
-            print("Warning: {} already exists. Overwriting".format(out_filepath))
+            print(f"Warning: {out_filepath} already exists. Overwriting")
             os.remove(out_filepath)
 
         out_file = h5py.File(out_filepath, 'w')
@@ -1902,7 +1933,7 @@ class SURF:
         # Save the Cone CME parameters to a new group.
         allcmes = out_file.create_group('ConeCMEs')
         for i, cme in enumerate(self.cmes):
-            cme_name = "ConeCME_{:02d}".format(i)
+            cme_name = f"ConeCME_{i:02d}"
             cmegrp = allcmes.create_group(cme_name)
             for k, v in cme.__dict__.items():
 
@@ -1930,7 +1961,7 @@ class SURF:
                 if k == "coords":
                     coordgrp = cmegrp.create_group(k)
                     for time, position in v.items():
-                        time_label = "t_out_{:03d}".format(time)
+                        time_label = f"t_out_{time:03d}"
                         timegrp = coordgrp.create_group(time_label)
                         for pos_label, pos_data in position.items():
                             if pos_label == 'time':
@@ -2028,7 +2059,8 @@ class SURF:
         each model timestep. This is only well-defined if the model was initialised with a
         Carrington rotation number.
         Args:
-            body: String specifying which body to look up. Valid bodies are Earth, Venus, Mercury, STA, and STB.
+            body: String specifying which body to look up. Valid bodies are Earth, Venus, Mercury,
+                  STA, and STB.
         Returns:
             obs: An Observer instance for body at times from SURF.time_init + SURF.time_out
         """
@@ -2053,11 +2085,11 @@ class SURF3d:
     
     """
 
-    def __init__(self, v_map=np.nan * (u.km / u.s), v_map_lat=np.nan * u.rad,
-                 v_map_long=np.nan * u.rad, cr_num=np.nan, cr_lon_init=360.0 * u.deg,
-                 latitude_max=30 * u.deg, latitude_min=-30 * u.deg, r_min=30 * u.solRad,
-                 r_max=240 * u.solRad, lon_out=np.nan * u.rad, lon_start=np.nan * u.rad,
-                 lon_stop=np.nan * u.rad, simtime=5.0 * u.day, dt_scale=1.0):
+    def __init__(self, v_map=np.nan * km_per_s, v_map_lat=np.nan * rad,
+                 v_map_long=np.nan * rad, cr_num=np.nan, cr_lon_init=360.0 * deg,
+                 latitude_max=30 * deg, latitude_min=-30 * deg, r_min=30 * solRad,
+                 r_max=240 * solRad, lon_out=np.nan * rad, lon_start=np.nan * rad,
+                 lon_stop=np.nan * rad, simtime=5.0 * day, dt_scale=1.0):
         """
         Initialise the SURF3D instance.
 
@@ -2088,15 +2120,15 @@ class SURF3d:
         """
 
         # Define latitude grid
-        self.latitude_min = latitude_min.to(u.rad)
-        self.latitude_max = latitude_max.to(u.rad)
+        self.latitude_min = latitude_min.to(rad)
+        self.latitude_max = latitude_max.to(rad)
         self.lat, self.nlat = latitude_grid(self.latitude_min, self.latitude_max)
 
-        assert (len(v_map_lat) == len(v_map[:, 1]))
-        assert (len(v_map_long) == len(v_map[1, :]))
+        assert len(v_map_lat) == len(v_map[:, 1])
+        assert len(v_map_long) == len(v_map[1, :])
 
         # Get the SURF longitudinal grid
-        longs, dlon, nlon = longitude_grid(lon_start=0.0 * u.rad, lon_stop=2 * np.pi * u.rad)
+        longs, dlon, nlon = longitude_grid(lon_start=0.0 * rad, lon_stop=2 * np.pi * rad)
 
         # Extract the vr value at the given latitudes
         self.v_in = []
@@ -2106,7 +2138,7 @@ class SURF3d:
                 vlong[ilong] = np.interp(thislat.value, v_map_lat.value, v_map[:, ilong].value)
 
             # Interpolate this longitudinal profile to the SURF resolution
-            self.v_in.append(np.interp(longs.value, v_map_long.value, vlong) * u.km / u.s)
+            self.v_in.append(np.interp(longs.value, v_map_long.value, vlong) * km_per_s)
 
         # Set up the model at each latitude
         self.SURFlat = []
@@ -2121,7 +2153,7 @@ class SURF3d:
 
     def solve(self, cme_list):
         """
-        Compute solution of SURF3d instance.
+        Compute the solution of the SURF3d instance.
         Args:
             cme_list: A list of ConeCME objects to solve
         Returns:
@@ -2140,25 +2172,25 @@ def surf_constants():
         constants: A dictionary of constants that configure SURF
     """
     nlong = 128  # Number of longitude bins for a full longitude grid [128]
-    dr = 1.5 * u.solRad  # Radial grid step. With v_max, this sets the model time step [1.5 Rs]
+    dr = 1.5 * solRad  # Radial grid step. With v_max, this sets the model time step [1.5 Rs]
     nlat = 45  # Number of latitude bins for a full latitude grid [45]
-    v_max = 3000 * u.km / u.s  # Maximum expected solar wind speed. Sets timestep [3000 km/s]
+    v_max = 3000 * km_per_s  # Maximum expected solar wind speed. Sets timestep [3000 km/s]
 
     # CONSTANTS - DON'T CHANGE
     twopi = 2.0 * np.pi
-    daysec = 24 * 60 * 60 * u.s
-    kms = u.km / u.s
+    daysec = 24 * 60 * 60 * seconds
+    kms = km_per_s
     alpha = 0.15 * u.dimensionless_unscaled  # Scale parameter for residual SW acceleration
                                              # (for incompressible only)
-    r_accel = 50 * u.solRad  # Spatial scale parameter for residual SW acceleration
+    r_accel = 50 * solRad  # Spatial scale parameter for residual SW acceleration
     gamma = 1.5 # Adiabatic index for compressible solver (1.5 for solar wind?)
     synodic_period = 27.2753 * daysec  # Solar Synodic rotation period from Earth.
     sidereal_period = 25.38 * daysec  # Solar sidereal rotation period
     
     # Typical 1 AU solar wind conditions. Used for CME perturbations and reference values
-    v_sw_1au = 400 * u.km / u.s  # Typical solar wind speed at 1 AU
-    n_sw_1au = 5 * u.cm**-3  # Typical solar wind density at 1 AU (~5 protons/cm³)
-    T_sw_1au = 1e5 * u.K  # Typical solar wind temperature at 1 AU (~100,000 K)
+    v_sw_1au = 400 * km_per_s  # Typical solar wind speed at 1 AU
+    n_sw_1au = 5 * per_cm_cube  # Typical solar wind density at 1 AU (~5 protons/cm³)
+    T_sw_1au = 1e5 * kelvin  # Typical solar wind temperature at 1 AU (~100,000 K)
     empirical_n_adjust_amp = 0.2  # Max fractional density remap amplitude applied at 0.1 AU
     empirical_T_adjust_amp = 0.1  # Max fractional temperature remap amplitude applied at 0.1 AU
 
@@ -2175,7 +2207,7 @@ def surf_constants():
 
 
 
-def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.rad,
+def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * rad,
                   save=False, tag='', verbose=True):
     """
     Run a SURF simulation in time chunks to limit peak memory usage.
@@ -2213,8 +2245,8 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
     model : SURF
         The same model instance, with concatenated output grids.
     """
-    chunk_simtime = chunk_simtime.to(u.s)
-    total_simtime = model.simtime.to(u.s)
+    chunk_simtime = chunk_simtime.to(seconds)
+    total_simtime = model.simtime.to(seconds)
 
     # Work out how many chunks are needed.
     # If the last chunk would be too short to produce any output time steps
@@ -2229,8 +2261,8 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
     n_chunks += 1
     if verbose:
         print(f"solve_chunked: 1 spin-up + {n_chunks - 1} data chunk(s) "
-              f"of up to {chunk_simtime.to(u.day):.1f} "
-              f"(total {total_simtime.to(u.day):.1f})")
+              f"of up to {chunk_simtime.to(day):.1f} "
+              f"(total {total_simtime.to(day):.1f})")
 
     # ------------------------------------------------------------------
     # Ensure we have the full input time series (including spin-up)
@@ -2270,8 +2302,8 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
     time_out_chunks = []
 
     state = None  # will hold the restart state after each chunk
-    t_elapsed = 0.0 * u.s
-    ideal_elapsed = 0.0 * u.s   # tracks ideal chunk boundaries for splitting
+    t_elapsed = 0.0 * seconds
+    ideal_elapsed = 0.0 * seconds   # tracks ideal chunk boundaries for splitting
 
     for ic in range(n_chunks):
         is_spinup = (ic == 0)
@@ -2279,12 +2311,12 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
         if is_spinup:
             # First chunk is spin-up only: run the buffer period with
             # simtime=0 so no model output is produced.
-            this_chunk = 0.0 * u.s
-            ideal_end = 0.0 * u.s
-            chunk_start = 0.0 * u.s
-            model.simtime = 0.0 * u.s
+            this_chunk = 0.0 * seconds
+            ideal_end = 0.0 * seconds
+            chunk_start = 0.0 * seconds
+            model.simtime = 0.0 * seconds
             if verbose:
-                print(f"  spin-up: buffertime = {full_buffertime.to(u.day):.2f}")
+                print(f"  spin-up: buffertime = {full_buffertime.to(day):.2f}")
         else:
             ideal_remaining = total_simtime - ideal_elapsed
             this_chunk = min(chunk_simtime, ideal_remaining)
@@ -2294,7 +2326,7 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
                 # Compressible solver: start from last actual output time so
                 # there is no evolution gap between state capture and restart.
                 chunk_start = t_elapsed
-                model.simtime = (ideal_end - chunk_start).to(u.s)
+                model.simtime = (ideal_end - chunk_start).to(seconds)
             else:
                 # HUXt-family solvers: iter_count-based output — ideal
                 # boundaries avoid time_out alignment issues.
@@ -2303,8 +2335,8 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
 
             if verbose:
                 print(f"  chunk {ic}/{n_chunks - 1}: "
-                      f"t = {chunk_start.to(u.day):.2f} .. "
-                      f"{ideal_end.to(u.day):.2f}")
+                      f"t = {chunk_start.to(day):.2f} .. "
+                      f"{ideal_end.to(day):.2f}")
 
         # --- Configure the model for this chunk ---
 
@@ -2341,9 +2373,9 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
                                 order='F') * model.kms
         if model.compressible:
             model.rho_grid = np.zeros((model.nt_out, model.nr, model.nlon),
-                                      order='F') * (u.kg / u.m**3)
+                                      order='F') * kg_per_cube
             model.temp_grid = np.zeros((model.nt_out, model.nr, model.nlon),
-                                       order='F') * u.K
+                                       order='F') * kelvin
 
         if state is not None:
             # Restart from previous chunk — skip spin-up
@@ -2354,11 +2386,11 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
             model.buffertime = full_buffertime
         # else: set_initial_state already zeroed buffertime
 
-        buffersteps = np.fix(model.buffertime.to(u.s) / model.dt)
+        buffersteps = np.fix(model.buffertime.to(seconds) / model.dt)
         buffertime_exact = buffersteps * model.dt
         chunk_model_time = np.arange(
             -buffertime_exact.value,
-            (model.simtime.to(u.s) + model.dt).value,
+            (model.simtime.to(seconds) + model.dt).value,
             model.dt.value
         ) * model.dt.unit
         model.model_time = chunk_model_time
@@ -2399,15 +2431,15 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
             model.input_iscme_ts_flag = True
 
         if model.compressible:
-            chunk_input_rho = np.zeros((nt_chunk, nlon)) * (u.kg / u.m**3)
-            chunk_input_temp = np.zeros((nt_chunk, nlon)) * u.K
+            chunk_input_rho = np.zeros((nt_chunk, nlon)) * kg_per_cube
+            chunk_input_temp = np.zeros((nt_chunk, nlon)) * kelvin
             for j in range(nlon):
                 chunk_input_rho[:, j] = np.interp(
                     abs_times, full_mt, full_input_rho_ts[:, j].value
-                ) * (u.kg / u.m**3)
+                ) * kg_per_cube
                 chunk_input_temp[:, j] = np.interp(
                     abs_times, full_mt, full_input_temp_ts[:, j].value
-                ) * u.K
+                ) * kelvin
             model.input_rho_ts = chunk_input_rho
             model.input_temp_ts = chunk_input_temp
 
@@ -2432,7 +2464,7 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
             if model.compressible and model.nt_out > 0:
                 # Compressible: next chunk must start from where the state
                 # was captured (last output time) to avoid evolution gaps.
-                t_elapsed = chunk_start + model.time_out[-1].to(u.s)
+                t_elapsed = chunk_start + model.time_out[-1].to(seconds)
             else:
                 # HUXt: iter_count-based output — ideal boundaries are fine.
                 t_elapsed = ideal_end
@@ -2444,8 +2476,8 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
     model.time_out = np.concatenate([t.value for t in time_out_chunks]) * model.dt.unit
     model.nt_out = model.v_grid.shape[0]
     if model.compressible:
-        model.rho_grid = np.concatenate(rho_chunks, axis=0) * (u.kg / u.m**3)
-        model.temp_grid = np.concatenate(temp_chunks, axis=0) * u.K
+        model.rho_grid = np.concatenate(rho_chunks, axis=0) * kg_per_cube
+        model.temp_grid = np.concatenate(temp_chunks, axis=0) * kelvin
     if b_chunks:
         model.b_grid = np.concatenate(b_chunks, axis=0)
 
@@ -2605,20 +2637,20 @@ def map_properties_parker(velocity, r_from, r_to, density_from, temperature_from
                All returned as astropy Quantities.
     
     Example:
-        >>> v_1AU = 400 * u.km / u.s
-        >>> n_1AU = 5 * u.cm**-3
-        >>> T_1AU = 1e5 * u.K
-        >>> v_01AU, n_01AU, T_01AU = map_properties_parker(v_1AU, 215*u.solRad, 21.5*u.solRad, n_1AU, T_1AU)
+        >>> v_out = 400 * u.km / u.s
+        >>> n_out = 5 * u.cm**-3
+        >>> T_out = 1e5 * u.K
+        >>> v_in, n_in, T_in = map_properties_parker(v_out, 1*u.au, 0.1*u.au, n_1AU, T_1AU)
     """
     
     # Extract values in standard units
-    v_from_kms = velocity.to(u.km/u.s).value
-    T_from = temperature_from.to(u.K).value
-    n_from = density_from.to(u.cm**-3).value
+    v_from_kms = velocity.to(km_per_s).value
+    T_from = temperature_from.to(kelvin).value
+    n_from = density_from.to(per_cm_cube).value
     
     # Convert radii to km for the JIT function
-    r_from_km = r_from.to(u.km).value
-    r_to_km = r_to.to(u.km).value
+    r_from_km = r_from.to(km).value
+    r_to_km = r_to.to(km).value
     
     # Check if we have scalar or array input
     is_scalar = np.isscalar(v_from_kms) or (hasattr(v_from_kms, 'shape') and v_from_kms.shape == ())
@@ -2641,7 +2673,7 @@ def map_properties_parker(velocity, r_from, r_to, density_from, temperature_from
         T_to = T_to[0]
     
     # Return with units
-    return v_to_kms * u.km / u.s, n_to * u.cm**-3, T_to * u.K
+    return v_to_kms * km_per_s, n_to * per_cm_cube, T_to * kelvin
 
 
 def get_omni_lookup_table_at_distance(r_target, lookup_table_path=None):
@@ -2666,7 +2698,7 @@ def get_omni_lookup_table_at_distance(r_target, lookup_table_path=None):
     
     Example:
         >>> v_01au, n_01au, T_01au = get_omni_lookup_table_at_distance(0.1*u.au)
-        >>> v_30Rs, n_30Rs, T_30Rs = get_omni_lookup_table_at_distance(30*u.solRad)
+        >>> v_30Rs, n_30Rs, T_30Rs = get_omni_lookup_table_at_distance(30*solRad)
     """
     # Default path to lookup table
     if lookup_table_path is None:
@@ -2684,7 +2716,7 @@ def get_omni_lookup_table_at_distance(r_target, lookup_table_path=None):
     T_1au = data[:, 2]  # K
     
     # Reference distance (1 AU)
-    r_1au = 1.0 * u.au
+    r_1au = 1.0 * AU
     
     # Map each entry to the target distance
     v_target = np.zeros_like(v_1au)
@@ -2693,16 +2725,16 @@ def get_omni_lookup_table_at_distance(r_target, lookup_table_path=None):
     
     for i in range(len(v_1au)):
         v_out, n_out, T_out = map_properties_parker(
-            v_1au[i] * u.km / u.s,
+            v_1au[i] * km_per_s,
             r_1au,
             r_target,
-            n_1au[i] * u.cm**-3,
-            T_1au[i] * u.K
+            n_1au[i] * per_cm_cube,
+            T_1au[i] * kelvin
         )
         
-        v_target[i] = v_out.to(u.km / u.s).value
-        n_target[i] = n_out.to(u.cm**-3).value
-        T_target[i] = T_out.to(u.K).value
+        v_target[i] = v_out.to(km_per_s).value
+        n_target[i] = n_out.to(per_cm_cube).value
+        T_target[i] = T_out.to(kelvin).value
     
     return v_target, n_target, T_target
 
@@ -2742,9 +2774,9 @@ def get_density_temperature_from_velocity(v_value, r_target, gamma=1.5, cache_id
 
     # Accept either astropy Quantity (distance) or scalar in solar radii.
     if isinstance(r_target, u.Quantity):
-        r_target_q = r_target.to(u.solRad)
+        r_target_q = r_target.to(solRad)
     else:
-        r_target_q = r_target * u.solRad
+        r_target_q = r_target * solRad
     
     lookup_key = (round(float(r_target_q.value), 12), round(float(gamma), 12))
 
@@ -2766,7 +2798,7 @@ def get_density_temperature_from_velocity(v_value, r_target, gamma=1.5, cache_id
     return n_interp, T_interp
 
 
-def radial_grid(r_min=30.0 * u.solRad, r_max=240. * u.solRad):
+def radial_grid(r_min=30.0 * solRad, r_max=240. * solRad):
     """
     Define the radial grid of the SURF model. Step size is fixed, but inner and outer boundary may
     be specified.
@@ -2781,16 +2813,16 @@ def radial_grid(r_min=30.0 * u.solRad, r_max=240. * u.solRad):
     """
     if r_min >= r_max:
         print("Warning, r_min cannot be less than r_max. Defaulting to r_min=30rs and r_max=240rs")
-        r_min = 30 * u.solRad
-        r_max = 240 * u.solRad
+        r_min = 30 * solRad
+        r_max = 240 * solRad
 
-    if r_min < 2.0 * u.solRad:
+    if r_min < 2.0 * solRad:
         print("Warning, r_min should not be less than 5.0rs. Defaulting to 5.0rs")
-        r_min = 5.0 * u.solRad
+        r_min = 5.0 * solRad
 
-    if r_max > 10000 * u.solRad:
+    if r_max > 10000 * solRad:
         print("Warning, r_max should not be more than 400rs. Defaulting to 400rs")
-        r_max = 400 * u.solRad
+        r_max = 400 * solRad
 
     constants = surf_constants()
     dr = constants['dr']
@@ -2798,11 +2830,11 @@ def radial_grid(r_min=30.0 * u.solRad, r_max=240. * u.solRad):
     r = r * dr.unit
     nr = r.size
     # acceleration is scaled relative to 30rS
-    rrel = r - 30 * u.solRad
+    rrel = r - 30 * solRad
     return r, dr, rrel, nr
 
 
-def longitude_grid(lon_out=np.nan * u.rad, lon_start=np.nan * u.rad, lon_stop=np.nan * u.rad):
+def longitude_grid(lon_out=np.nan * rad, lon_start=np.nan * rad, lon_stop=np.nan * rad):
     """
     Define the longitude grid of the SURF model.
     Args:
@@ -2820,20 +2852,20 @@ def longitude_grid(lon_out=np.nan * u.rad, lon_start=np.nan * u.rad, lon_stop=np
     longitude_range = False
     if np.isfinite(lon_out):
         # Select single longitude only. Check in range
-        if (lon_out < 0 * u.rad) | (lon_out > twopi * u.rad):
+        if (lon_out < 0 * rad) | (lon_out > twopi * rad):
             lon_out = zerototwopi(lon_out.to('rad').value)
-            lon_out = lon_out * u.rad
+            lon_out = lon_out * rad
 
         single_longitude = True
     elif np.isfinite(lon_start) & np.isfinite(lon_stop):
         # Select a range of longitudes. Check limits in range.
-        if (lon_start < 0 * u.rad) | (lon_start > twopi * u.rad):
+        if (lon_start < 0 * rad) | (lon_start > twopi * rad):
             lon_start = zerototwopi(lon_start.to('rad').value)
-            lon_start = lon_start * u.rad
+            lon_start = lon_start * rad
 
-        if (lon_stop < 0 * u.rad) | (lon_stop > twopi * u.rad):
+        if (lon_stop < 0 * rad) | (lon_stop > twopi * rad):
             lon_stop = zerototwopi(lon_stop.to('rad').value)
-            lon_stop = lon_stop * u.rad
+            lon_stop = lon_stop * rad
 
         longitude_range = True
 
@@ -2843,8 +2875,8 @@ def longitude_grid(lon_out=np.nan * u.rad, lon_start=np.nan * u.rad, lon_stop=np
     lon_min_full = dlon / 2.0
     lon_max_full = twopi - (dlon / 2.0)
     lon, dlon = np.linspace(lon_min_full, lon_max_full, nlon, retstep=True)
-    lon = lon * u.rad
-    dlon = dlon * u.rad
+    lon = lon * rad
+    dlon = dlon * rad
 
     # Now get only the selected longitude or range of longitudes
     if single_longitude:
@@ -2878,9 +2910,9 @@ def latitude_grid(latitude_min=np.nan, latitude_max=np.nan):
         nlat: Number of latitude positions between given limits
     """
     # Check the inputs.
-    assert (latitude_max > latitude_min)
-    assert (np.absolute(latitude_max) <= (np.pi / 2) * u.rad)
-    assert (np.absolute(latitude_min) <= (np.pi / 2) * u.rad)
+    assert latitude_max > latitude_min
+    assert np.absolute(latitude_max) <= (np.pi / 2) * rad
+    assert np.absolute(latitude_min) <= (np.pi / 2) * rad
 
     # Form the full longitude grid.
     nlat = surf_constants()['nlat']
@@ -2889,7 +2921,7 @@ def latitude_grid(latitude_min=np.nan, latitude_max=np.nan):
     sinlat_min_full = - 1 + dsinlat / 2.0
     sinlat_max_full = 1 - dsinlat / 2.0
     sinlat, dsinlat = np.linspace(sinlat_min_full, sinlat_max_full, nlat, retstep=True)
-    lat = np.arcsin(sinlat) * u.rad
+    lat = np.arcsin(sinlat) * rad
 
     # Now get only the selected range of latitudes
     id_match = (lat >= latitude_min) & (lat <= latitude_max)
@@ -3737,7 +3769,7 @@ def load_SURF_run(filepath):
         cr_num = np.int32(data['cr_num'])
         cr_lon_init = data['cr_lon_init'][()] * u.Unit(data['cr_lon_init'].attrs['unit'])
         simtime = data['simtime'][()] * u.Unit(data['simtime'].attrs['unit'])
-        simtime = simtime.to(u.day)
+        simtime = simtime.to(day)
         dt_scale = data['dt_scale'][()]
         v_boundary = data['_v_boundary_init_'][()] * u.Unit(data['_v_boundary_init_'].attrs['unit'])
         r = data['r'][()] * u.Unit(data['r'].attrs['unit'])
@@ -3768,7 +3800,7 @@ def load_SURF_run(filepath):
             b_boundary_lons = (data['b_boundary_lons'][()] *
                                u.Unit(data['b_boundary_lons'].attrs['unit']))
 
-        # Load compressible boundaries if they exist (for backward compatibility with older saved files)
+        # Load compressible boundaries if they exist (for backward compatibility with older files)
         if compressible:
             if '_rho_boundary_init_' in data:
                 rho_boundary = data['_rho_boundary_init_'][()]
@@ -3804,7 +3836,7 @@ def load_SURF_run(filepath):
             constructor_kwargs['b_boundary'] = b_boundary
             
         if compressible:
-            # Note: compressible boundaries are provided but model doesn't have compressible flag
+            # Note: compressible boundaries are provided but model doesn't have a compressible flag
             # They will be handled after model creation
             if 'rho_boundary' in locals():
                 constructor_kwargs['rho_boundary'] = rho_boundary
@@ -3893,11 +3925,11 @@ def load_SURF_run(filepath):
             # Use the same dictionary structure as defined in ConeCME._track_
             coords_group = cme_data['coords']
             coords_data = {j: {'time': np.array([]),
-                               'model_time': np.array([]) * u.s,
+                               'model_time': np.array([]) * seconds,
                                'lon': np.array([]) * model.lon.unit,
-                               'r': np.array([]) * u.km,
-                               'lat': np.array([]) * u.rad,
-                               'v': np.array([]) * u.km / u.s}
+                               'r': np.array([]) * km,
+                               'lat': np.array([]) * rad,
+                               'v': np.array([]) * km_per_s}
                            for j in range(len(coords_group))}
 
             for time_key, pos in coords_group.items():

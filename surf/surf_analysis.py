@@ -1,4 +1,6 @@
-
+"""
+This module contains functions for plotting and analysing the SURF simulations.
+"""
 import os
 
 import sys
@@ -23,6 +25,17 @@ import surf as surf
 import surf_inputs as surfIN
 import surf_insitu as surfIS
 
+# Units needed
+day = u.day
+km = u.km
+seconds = u.s
+km_per_s = km / seconds
+rad = u.rad
+deg = u.deg
+solRad = u.solRad
+kelvin = u.K
+per_cm_cube = u.cm**-3
+kg_per_cube = u.kg / u.m**3
 
 mpl.rc("axes", labelsize=16)
 mpl.rc("ytick", labelsize=16)
@@ -48,17 +61,17 @@ def get_figure_dir():
 
 
 def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, minimalplot=False,
-         plotHCS=True,  annotateplot=True, trace_earth_connection=False, plot_rmax=None):
+         plotHCS=True, annotateplot=True, trace_earth_connection=False, plot_rmax=None):
     """
-    Make a contour plot on polar axis of the solar wind solution at a specific time for HUXt solver.
+    Make a contour plot on a polar axis of the solar wind solution at a specific time.
     Args:
-        model: An instance of the SURF class with a completed solution.
+        model: An instance of the HUXt class with a completed solution.
         time: Time to look up closet model time to (with an astropy.unit of time).
         save: Boolean to determine if the figure is saved.
         tag: String to append to the filename if saving the figure.
-        fighandle: Figure handle for placing plot in existing figure.
+        fighandle: Figure handle for placing a plot in an existing figure.
         axhandle: Axes handle for placing plot in existing axes.
-        minimalplot: Boolean, if True removes colorbar, planets, spacecraft, and labels.
+        minimalplot: Boolean. If true, removes colorbar, planets, spacecraft, and labels.
         plotHCS: Boolean, if True plots heliospheric current sheet coordinates
         annotateplot: Boolean, whether to include text and legends
         trace_earth_connection: boolean, whether to plot Earth-connected field. Slow.
@@ -77,13 +90,13 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
         fig, ax = plt.subplots(figsize=(10, 10), subplot_kw={"projection": "polar"})
     else:
         fig = fighandle
-        ax = axhandle    
+        ax = axhandle
 
     id_t = np.argmin(np.abs(model.time_out - time))
 
     # Get plotting data
     lon_arr, dlon, nlon = surf.longitude_grid()
-    lon, rad = np.meshgrid(lon_arr.value, model.r.value)
+    lon, radius = np.meshgrid(lon_arr.value, model.r.value)
 
     orig_cmap = mpl.cm.viridis
     # make a copy
@@ -95,7 +108,7 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
     dv = 10
     ylab = r"$V_{SW}$" + "\n[km/s]"
 
-    # Insert into full array
+    # Insert into the full array
     if lon_arr.size != model.lon.size:
         v = np.zeros((model.nr, nlon)) * np.nan
         if model.lon.size != 1:
@@ -107,11 +120,11 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
     else:
         v = v_sub
 
-    # Pad out to fill the full 2pi of contouring
+    # Pad out to fill the full 360 deg of contouring
     pad = lon[:, 0].reshape((lon.shape[0], 1)) + model.twopi
     lon = np.concatenate((lon, pad), axis=1)
-    pad = rad[:, 0].reshape((rad.shape[0], 1))
-    rad = np.concatenate((rad, pad), axis=1)
+    pad = radius[:, 0].reshape((radius.shape[0], 1))
+    radius = np.concatenate((radius, pad), axis=1)
     pad = v[:, 0].reshape((v.shape[0], 1))
     v = np.concatenate((v, pad), axis=1)
 
@@ -119,7 +132,7 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
     mymap.set_under([0, 0, 0])
     levels = np.arange(plotvmin, plotvmax + dv, dv)
 
-    cnt = ax.contourf(lon, rad, v, levels=levels, cmap=mymap, extend='both')
+    cnt = ax.contourf(lon, radius, v, levels=levels, cmap=mymap, extend='both')
 
     cnt.set(edgecolor="face")
 
@@ -129,7 +142,7 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
         for j, cme in enumerate(model.cmes):
             cid = np.mod(j, len(cme_colors))
             cme_lons = cme.coords[id_t]['lon']
-            cme_r = cme.coords[id_t]['r'].to(u.solRad)
+            cme_r = cme.coords[id_t]['r'].to(solRad)
             if np.any(np.isfinite(cme_r)):
                 # Pad out to close the profile.
                 cme_lons = np.append(cme_lons, cme_lons[0])
@@ -139,12 +152,12 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
     ax.set_ylim(0, model.r.value.max())
     ax.set_yticklabels([])
     ax.set_xticklabels([])
-    
+
     # plot the Sun
     ax.plot(0, 0, 'o', color=[1.0, 0.5, 0.25], markersize=16)
 
     if not minimalplot:
-        
+
         # determine which bodies should be plotted
         planet_list = get_planets_to_plot(model)
         spacecraft_list = get_spacecraft_to_plot(model)
@@ -154,7 +167,7 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
         styles = observer_styles()
         for body in observers_list:
             obs = model.get_observer(body)
-            deltalon = 0.0 * u.rad
+            deltalon = 0.0 * rad
             if model.frame == 'sidereal':
                 earth_pos = model.get_observer('EARTH')
                 deltalon = earth_pos.lon_hae[id_t] - earth_pos.lon_hae[0]
@@ -167,20 +180,20 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
         if annotateplot:
             ax.legend(ncol=len(observers_list), loc='lower center', frameon=False, fontsize=14,
                       handletextpad=0.1, columnspacing=0.5,  bbox_to_anchor=(0.5, -0.18))
-            
+
         ax.patch.set_facecolor('slategrey')
         pos = ax.get_position()
-        new_pos = [pos.x0, pos.y0 + 0.1, pos.width, pos.height]
+        new_pos = (pos.x0, pos.y0 + 0.1, pos.width, pos.height)
         ax.set_position(new_pos)
 
-        # Add color bar
+        # Add a colour bar
         pos = ax.get_position()
         dw = 0.004
         dh = 0.06
         left = pos.x0 + dw
         bottom = pos.y0 - dh
         wid = pos.width - 2 * dw
-        cbaxes = fig.add_axes([left, bottom, wid*0.84, 0.03])
+        cbaxes = fig.add_axes((left, bottom, wid * 0.84, 0.03))
         cbar1 = fig.colorbar(cnt, cax=cbaxes, orientation='horizontal')
         cbar1.set_ticks(np.arange(plotvmin, plotvmax, dv * 10))
         cbaxes.text(1.15, -0.4, ylab, fontsize=15, transform=cbaxes.transAxes,
@@ -188,76 +201,77 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
 
         if annotateplot:
             # Add label
-            label = "{:3.2f} days".format(model.time_out[id_t].to(u.day).value)
+            label = f"{model.time_out[id_t].to(day).value:3.2f} days"
             label = label + '\n ' + (model.time_init + time).strftime('%Y-%m-%d %H:%M')
             ax.text(0.98, -0.01, label, fontsize=15, transform=ax.transAxes,
                     horizontalalignment='right')
-    
-            label = "SURF-HUXt \nLat: {:3.0f} deg".format(model.latitude.to(u.deg).value)
-            ax.text(0.02, -0.01, label, fontsize=15, transform=ax.transAxes,)
+
+            label = f"HUXt2D \nLat: {model.latitude.to(deg).value:3.0f} deg"
+            ax.text(0.02, -0.01, label, fontsize=15, transform=ax.transAxes)
 
         # plot any tracked streaklines
         if model.track_streak:
             nstreak = len(model.streak_particles_r[0, :, 0, 0])
-            r_max = model.r[-1].to(u.solRad).value
-            dr = (model.r[1] - model.r[0]).to(u.solRad).value  # Grid spacing
-            
             for istreak in range(0, nstreak):
                 # construct the streakline from multiple rotations
                 nrot = len(model.streak_particles_r[0, 0, :, 0])
                 streak_r = []
                 streak_lon = []
-                
                 for irot in range(0, nrot):
                     streak_lon = streak_lon + model.lon.value.tolist()
                     streak_r = streak_r + (
-                            model.streak_particles_r[id_t, istreak, irot, :]
-                            * u.km.to(u.solRad)).value.tolist()
-                    
+                            model.streak_particles_r[id_t, istreak, irot, :] *
+                            km.to(solRad)).value.tolist()
+
                 # get the real values for plotting
-                streak_lon = np.array(streak_lon)
-                streak_r = np.array(streak_r)
-                
-                # Filter: keep only finite values that are well within the domain
-                # Exclude particles within 2*dr of the outer boundary to avoid awkward connections
-                mask = np.isfinite(streak_r) & (streak_r < (r_max - 2*dr))
-                plotlon = streak_lon[mask]
-                plotr = streak_r[mask]
-                
+                mask = np.isfinite(streak_r)
+                plotlon = np.array(streak_lon)[mask]
+                plotr = np.array(streak_r)[mask]
                 if len(plotr) > 0:
-                    # for plotting only, fix the inner most point on the inner bounday.
-                    r_min = model.r[0].to(u.solRad).value
-                    if plotr[-1] > r_min:
-                        dr_inner = plotr[-1] - r_min
-                        # compute the long of the footpoint assuming a constant solar wind speed
-                        dt = (dr_inner * u.solRad / (350 * u.km / u.s)).to(u.s)
-                        dlon_streak = (2*np.pi)*(dt/model.rotation_period).value 
-                        inner_lon = zerototwopi(plotlon[-1] + dlon_streak)
-                        # check that this new longitude was actually simulated
-                        if np.nanmin(abs(model.lon - inner_lon*u.rad)) < dlon:
-                            plotr = np.append(plotr, r_min)
-                            plotlon = np.append(plotlon, inner_lon)
-                    
+                    # for plotting only, fix the innermost point on the inner bounday.
+                    r_min = model.r[0].to(solRad).value
+                    dr = plotr[-1] - r_min
+                    # compute the long of the footpoint assuming a constant solar wind speed
+                    dt = (dr * solRad / (350 * km_per_s)).to(seconds)
+                    dlon_streak = (2 * np.pi) * (dt / model.rotation_period).value
+                    inner_lon = zerototwopi(plotlon[-1] + dlon_streak)
+                    # check that this new longitude was actually simulated
+                    if np.nanmin(abs(model.lon - inner_lon * rad)) < dlon:
+                        plotr = np.append(plotr, r_min)
+                        plotlon = np.append(plotlon, inner_lon)
+
+                    # for plotting only, fix the outermost point on the outer boundary
+                    r_max = model.r[-1].to(solRad).value
+                    dr = r_max - plotr[0]
+                    # compute the long of the outer footpoint assuming a constant solar wind speed
+                    dt = (dr * solRad / (450 * km_per_s)).to(seconds)
+                    dlon_streak = (2 * np.pi) * (dt / model.rotation_period).value
+                    outer_lon = zerototwopi(plotlon[0] - dlon_streak)
+                    # check that this new longitude was actually simulated
+                    if np.nanmin(abs(model.lon - outer_lon * rad)) < dlon:
+                        plotr = np.append(r_max, plotr)
+                        plotlon = np.append(outer_lon, plotlon)
+
                 # plot the streakline
                 ax.plot(plotlon, plotr, 'k')
 
         # plot any HCS that have been traced
         if plotHCS and hasattr(model, 'b_grid'):
             for i in range(0, len(model.hcs_particles_r[:, 0, 0, 0])):
-                r = model.hcs_particles_r[i, id_t, 0, :] * u.km.to(u.solRad)
+                r = model.hcs_particles_r[i, id_t, 0, :] * km.to(solRad)
                 lons = model.lon
                 ax.plot(lons, r, 'w.')
-                
+
     if trace_earth_connection:
-        plotlon, plotr, optimal_lon, optimal_t = find_Earth_connected_field_line(model, time)
+        plotlon, plotr, _, _ = find_Earth_connected_field_line(model, time)
         ax.plot(plotlon, plotr, 'w')
-        
+
     if plot_rmax:
         ax.set_rmax(plot_rmax)
 
     if save:
         cr_num = np.int32(model.cr_num.value)
-        filename = "SURF-HUXt_CR{:03d}_{}_frame_{:03d}.png".format(cr_num, tag, id_t)
+        filename = f"HUXt_CR{cr_num:03d}_{tag}_frame_{id_t:03d}.png"
         figure_dir = get_figure_dir()
         filepath = figure_dir.joinpath(filename)
         fig.savefig(filepath)
@@ -268,28 +282,27 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
 def animate(model, tag, duration=10, fps=20, plotHCS=True, trace_earth_connection=False,
             outputfilepath='', plot_rmax=None):
     """
-    Animate the model solution, and save as an MP4.
+    Animate the model solution and save as an MP4.
     Args:
-        model: An instance of the SURF class with a completed solution.
+        model: An instance of the HUXt class with a completed solution.
         tag: String to append to the filename of the animation.
         duration: the movie duration, in seconds
         fps: frames per second
         plotHCS: Boolean flag on whether to plot the heliospheric current sheet location.
-        trace_earth_connection: Boolean flag on whether to plot the earth connected streak line.
-        outputfilepath: full path, including filename if output is to be saved anywhere other than
-                        SURF/figures
-        plot_rmax: float (no units, but in rS). Limit outer boundary to help with field lines
-                   during CMEs
+        trace_earth_connection: Boolean flag for whether to plot the Earth-connected streak line.
+        outputfilepath: The full path of the outputfile.
+        plot_rmax: float (no units, but in rS). Limit outer boundary to help with field lines during
+                   CMEs
     Returns:
         None
     """
-    
+
     interval = (1/fps)*1000
     nframes = int(duration*1000/interval)
-    
+
     exp_time = int(nframes*0.2)
     print('Rendering ' + str(nframes) + ' frames. Expected time: ' + str(exp_time) + ' secs')
-    
+
     def make_frame(frame):
         """
         Produce the frame required by MoviePy.VideoClip.
@@ -299,43 +312,32 @@ def animate(model, tag, duration=10, fps=20, plotHCS=True, trace_earth_connectio
             frame: An image array for rendering to movie clip.
         """
         plt.clf()  # Clear the previous frame
-        
+        ax = fig.add_subplot(111, projection='polar')
+
         # Get the time index closest to this fraction of movie duration
         i = np.int32((model.nt_out - 1) * frame / nframes)
-        
-        # Use plot_compressible for compressible models, otherwise use standard plot
-        if hasattr(model, 'compressible') and model.compressible:
-            plot_compressible(model, model.time_out[i], fighandle=fig, minimalplot=False, 
-                            annotateplot=True, plot_rmax=plot_rmax)
-        else:
-            ax = fig.add_subplot(111, projection='polar')
-            plot(model, model.time_out[i], fighandle=fig, axhandle=ax, plotHCS=plotHCS,
-                 trace_earth_connection=trace_earth_connection, plot_rmax=plot_rmax)
+        plot(model, model.time_out[i], fighandle=fig, axhandle=ax, plotHCS=plotHCS,
+             trace_earth_connection=trace_earth_connection, plot_rmax=plot_rmax)
         return frame
-    
-    # Create a new figure - size depends on compressible mode
-    if hasattr(model, 'compressible') and model.compressible:
-        fig, ax = plt.subplots(figsize=(24, 8))
-    else:
-        fig, ax = plt.subplots(figsize=(10, 10), subplot_kw={"projection": "polar"})
-    
+
+    # Create a new figure
+    fig, _ = plt.subplots(figsize=(10, 10), subplot_kw={"projection": "polar"})
+
     # Create the animation
     ani = FuncAnimation(fig, make_frame, frames=range(nframes), interval=interval)
-    
+
     # set up the save path
     if outputfilepath:
         filepath = outputfilepath
     else:
         cr_num = np.int32(model.cr_num.value)
-        filename = "SURF_CR{:03d}_{}_movie.mp4".format(cr_num, tag)
+        filename = f"HUXt_CR{cr_num:03d}_{tag}_movie.mp4"
         figure_dir = get_figure_dir()
         filepath = figure_dir.joinpath(filename)
 
     # Save the animation as a movie file
     ani.save(filepath, writer='ffmpeg')
     print('mp4 file written to ' + str(filepath))
-
-    return
 
 
 def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimalplot=False, 
@@ -665,8 +667,7 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
         pos_right = axes[2].get_position()
         
         # Add time label at top right, aligned with right edge of right panel
-        time_label = "{:3.2f} days".format(model.time_out[id_t].to(u.day).value)
-        #time_label = time_label +  " | " + (model.time_init + time).strftime('%Y-%m-%d %H:%M')
+        time_label = f"{model.time_out[id_t].to(u.day).value:3.2f} days"
         fig.text(pos_right.x1, pos_right.y1 + 0.01, time_label, fontsize=15, fontweight='bold',
                 horizontalalignment='right', verticalalignment='bottom')
         
@@ -1179,7 +1180,7 @@ def plot_radial(model, time, lon, save=False, tag=''):
             id_lon = np.argmin(np.abs(model.lon - lon))
             lon = model.lon[id_lon]
 
-    # Create figure with multiple panels for compressible models
+    # Create a figure with multiple panels for compressible models
     is_compressible = hasattr(model, 'compressible') and model.compressible
     if is_compressible:
         fig, axes = plt.subplots(3, 1, figsize=(14, 14), sharex=True)
@@ -1225,7 +1226,7 @@ def plot_radial(model, time, lon, save=False, tag=''):
         r_back = r_back[id_cme_lon]
 
         id_cme = (model.r >= r_back) & (model.r <= r_front)
-        label = "CME {:02d}".format(c)
+        label = f"CME {c:02d}"
         ax.plot(model.r[id_cme], model.v_grid[id_t, id_cme, id_lon], '.',
                 color=cme_colors[cc], label=label)
 
@@ -1257,8 +1258,8 @@ def plot_radial(model, time, lon, save=False, tag=''):
     fig.subplots_adjust(left=0.1, bottom=0.1, right=0.95, top=0.95)
 
     # Add label
-    time_label = " Time: {:3.2f} days".format(time_out)
-    lon_label = " Lon: {:3.2f}$^\\circ$".format(lon_out)
+    time_label = f" Time: {time_out:3.2f} days"
+    lon_label = f" Lon: {lon_out:3.2f}$^\\circ$"
     label = "SURF" + time_label + lon_label
     if is_compressible:
         axes[0].set_title(label, fontsize=20)
@@ -1267,7 +1268,7 @@ def plot_radial(model, time, lon, save=False, tag=''):
 
     if save:
         cr_num = np.int32(model.cr_num.value)
-        lon_tag = "{}deg".format(lon.to(u.deg).value)
+        lon_tag = f"{lon.to(u.deg).value}deg"
         filename = (f"SURF_CR{cr_num:03d}_{tag}_radial_profile_lon_"
                     f"{lon_tag}_frame_{id_t:03d}.png")
         figure_dir = get_figure_dir()
@@ -1357,12 +1358,10 @@ def plot_timeseries(model, radius, lon, save=False, tag=''):
     fig.subplots_adjust(left=0.1, bottom=0.1, right=0.95, top=0.95)
 
     # Add label
-    #radius_label = " Radius: {:3.2f}".format(r_out) + "$R_{sun}$ "
-    #lon_label = " Longitude: {:3.2f}".format(lon_out) + "$^\\circ$"
     if is_compressible:
-        label = "SURF-{}".format(_compressible_solver_label(model)) #+ radius_label #+ lon_label
+        label = f"SURF-{_compressible_solver_label(model)}"
     else:   
-        label = "SURF-HUXt" #+ radius_label #+ lon_label
+        label = "SURF-HUXt"
     if is_compressible:
         axes[0].set_title(label, fontsize=20)
     else:
@@ -1372,8 +1371,8 @@ def plot_timeseries(model, radius, lon, save=False, tag=''):
         cr_num = np.int32(model.cr_num.value)
         r_tag = np.int32(r_out)
         lon_tag = np.int32(lon_out)
-        template_string = "SURF1D_CR{:03d}_{}_time_series_radius_{:03d}_lon_{:03d}.png"
-        filename = template_string.format(cr_num, tag, r_tag, lon_tag)
+        filename = (f"SURF1D_CR{cr_num:03d}_{tag}_time_series_radius_{r_tag:03d}_lon_"
+                           f"{lon_tag:03d}.png")
         figure_dir = get_figure_dir()
         filepath = figure_dir.joinpath(filename)
         fig.savefig(filepath)
@@ -1569,7 +1568,7 @@ def get_SURF_at_position_HEEQ(model, target_mjd, target_r, target_lon_heeq):
                     if hasattr(model, 'b_grid'):
                         bpol[t] = model.b_grid[id_t, id_r, 0]
                     if is_compressible:
-                        density[t] = model.rho_grid[id_t, id_r, 0].value / m_p / 1e6  # Convert to protons/cm³
+                        density[t] = model.rho_grid[id_t, id_r, 0].value / m_p / 1e6
                         temperature[t] = model.temp_grid[id_t, id_r, 0].value
                 else:
                     speed[t] = np.interp(model_lon_obs, model.lon.value,
@@ -1616,9 +1615,9 @@ def get_horizons_body_for_SURF(t_start, t_stop, step='12H', naif_code=799, body_
     examples of common NAIF body codes.
 
     Args:
-        t_start   (astropy.time.Time): Start time of the query.
-        t_stop    (astropy.time.Time): Stop time of the query.
-        step      (str): Time step string accepted by JPL Horizons, e.g. '12H', '1d'.
+        t_start (astropy.time.Time): Start time of the query.
+        t_stop (astropy.time.Time): Stop time of the query.
+        step (str): Time step string accepted by JPL Horizons, e.g. '12H', '1d'.
                          Default '12H'.
         naif_code (int): JPL Horizons NAIF body code. Default 799 (Uranus).
                          Other examples: 199 Mercury, 299 Venus, 399 Earth, 499 Mars,
@@ -1795,7 +1794,7 @@ def plot_earth_timeseries(model, plot_omni=True, save=False, tag='', timefromrun
 
     if save:
         cr_num = np.int32(model.cr_num.value)
-        filename = "SURF_CR{:03d}_{}_earth_timeseries.png".format(cr_num, tag)
+        filename = f"SURF_CR{cr_num:03d}_{tag}_earth_timeseries.png"
         figure_dir = get_figure_dir()
         filepath = figure_dir.joinpath(filename)
         fig.savefig(filepath)
@@ -1962,16 +1961,16 @@ def plot3d_radial_lat_slice(model3d, time, lon=np.nan * u.deg, save=False, tag='
     cbar1.set_ticks(np.arange(plotvmin, plotvmax, dv * 10))
 
     # Add label
-    label = "   Time: {:3.2f} days".format(model.time_out[id_t].to(u.day).value)
+    label = f"   Time: {model.time_out[id_t].to(u.day).value:3.2f} days"
     label = label + '\n ' + (model.time_init + time).strftime('%Y-%m-%d %H:%M')
     fig.text(0.70, pos.y0, label, fontsize=16)
 
-    label = "SURF3D \nLong: {:3.1f} deg".format(lon_out.to(u.deg).value)
+    label = f"SURF3D \nLong: {lon_out.to(u.deg).value:3.1f} deg"
     fig.text(0.175, pos.y0, label, fontsize=16)
 
     if save:
         cr_num = np.int32(model.cr_num.value)
-        filename = "SURF_CR{:03d}_{}_3D_frame_{:03d}.png".format(cr_num, tag, id_t)
+        filename = f"SURF_CR{cr_num:03d}_{tag}_3D_frame_{id_t:03d}.png"
         figure_dir = get_figure_dir()
         filepath = figure_dir.joinpath(filename)
         fig.savefig(filepath)
@@ -2027,7 +2026,7 @@ def animate_3d(model3d, lon=0.0 * u.deg, tag='', duration=10, fps=20, outputfile
         filepath = outputfilepath
     else:
         cr_num = np.int32(model.cr_num.value)
-        filename = "SURF_CR{:03d}_{}_3D_movie.mp4".format(cr_num, tag)
+        filename = f"SURF_CR{cr_num:03d}_{tag}_3D_movie.mp4"
         figure_dir = get_figure_dir()
         filepath = figure_dir.joinpath(filename)
     
@@ -2166,7 +2165,7 @@ def plot_bpol(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan
         cbar1.set_ticks(np.arange(plotvmin, plotvmax, 1))
 
         # Add label
-        label = "   Time: {:3.2f} days".format(model.time_out[id_t].to(u.day).value)
+        label = f"   Time: {model.time_out[id_t].to(u.day).value:3.2f} days"
         label = label + '\n ' + (model.time_init + time).strftime('%Y-%m-%d %H:%M')
         fig.text(0.70, pos.y0, label, fontsize=16)
 
@@ -2209,7 +2208,7 @@ def plot_bpol(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan
 
     if save:
         cr_num = np.int32(model.cr_num.value)
-        filename = "SURF_CR{:03d}_{}_bpol_frame_{:03d}.png".format(cr_num, tag, id_t)
+        filename = f"SURF_CR{cr_num:03d}_{tag}_bpol_frame_{id_t:03d}.png"
         figure_dir = get_figure_dir()
         filepath = figure_dir.joinpath(filename)
         fig.savefig(filepath)
@@ -2245,9 +2244,9 @@ def trace_field_line_out(v_trl_kms, longrid_rad, rgrid_km, tgrid_s, start_lon, t
     nr = len(rgrid_km)
     
     # check the dimensions of the grid
-    assert (len(v_trl_kms[:, 0, 0]) == nt)
-    assert (len(v_trl_kms[0, :, 0]) == nr)
-    assert (len(v_trl_kms[0, 0, :]) == nlon)
+    assert len(v_trl_kms[:, 0, 0]) == nt
+    assert len(v_trl_kms[0, :, 0]) == nr
+    assert len(v_trl_kms[0, 0, :]) == nlon
     
     dt_phi_s = rot_period_s / nlon
     dt_s = tgrid_s[1] - tgrid_s[0]
@@ -2273,7 +2272,7 @@ def trace_field_line_out(v_trl_kms, longrid_rad, rgrid_km, tgrid_s, start_lon, t
         if id_lon >= nlon:
             id_lon = 0
     
-    # move each particle  forward
+    # move each particle forward
     for it in range(id_t_start, id_t_stop):  # loop through the required time range
         for ilon in range(0, nlon):  # loop through each longitude and move the particles forward
             if ~np.isnan(r_streak_km[it, ilon]):
@@ -2332,7 +2331,7 @@ def min_distance_streakline_point(streak_lon_rad, streak_r_km, point_lon_rad, po
     inty = np.interp(np.linspace(0, total_length, num_interpolated_points + 1),
                      padded_cumulative_distances, y)
 
-    # find closest point to Earth
+    # find the closest point to Earth
     distances = np.sqrt((intx - Ex)**2 + (inty - Ey)**2)
     
     # Replace NaN values with a large value
@@ -2459,7 +2458,7 @@ def find_Earth_connected_field_line(model, time):
         optimal_t: The time step at the field line start, in seconds from start of model run
     """
 
-    assert (model.dt_scale == 1)
+    assert model.dt_scale == 1
 
     buffertime = 6 * u.day  # the tracing this time before the ballistic start time estimate
     buffer_time_s = buffertime.to(u.s).value
@@ -2607,7 +2606,7 @@ def run_WSA_SURF_td_wedge_about_observer(start_dt, stop_dt, vel_path, vel_format
     obj_min_r = np.min(coords['r_AU']) * 215
     obj_max_r = np.max(coords['r_AU']) * 215  
     
-    assert (obj_min_r >= r_min.to(u.solRad).value)
+    assert obj_min_r >= r_min.to(u.solRad).value
 
     minlat = np.floor(obj_min_lat)
     maxlat = np.ceil(obj_max_lat)
@@ -2664,7 +2663,7 @@ def zerototwopi(angles):
     Returns:
         angles_out: a numpy array of angles constrained to 0 - 2pi domain.
     """
-    # Check if angles has astropy unit.
+    # Check if angles is an astropy unit.
     if isinstance(angles, u.Quantity):
         angles_out = angles.to(u.rad).value
     else:
