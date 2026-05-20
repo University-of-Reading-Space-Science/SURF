@@ -12,7 +12,7 @@ from pathlib import Path
 import pickle
 import ssl
 import sys
-sys.path.insert(0, os.path.abspath('..'))
+
 import urllib
 from urllib.request import urlopen
 # Suppress SSL warnings for unverified HTTPS requests
@@ -32,7 +32,7 @@ from scipy.io import netcdf_file, readsav
 from scipy import interpolate
 from sunpy.coordinates import sun
 
-import surf as surf
+from surf import surf as s
 
 # Units needed
 day = u.day
@@ -447,7 +447,7 @@ def map_v_inwards(v_orig, r_orig, lon_orig, r_new):
     """
 
     # Get the acceleration parameters
-    constants = surf.surf_constants()
+    constants = s.surf_constants()
     alpha = constants['alpha']  # Scale parameter for residual SW acceleration
     r_h = constants['r_accel'].to(km).value  # Spatial scale parameter for SW acceleration
     synodic_period = constants['synodic_period'].to(seconds).value
@@ -496,7 +496,7 @@ def map_v_inwards_parker(v_orig, r_orig, lon_orig, r_new, gamma=1.5):
         lon_new: Carrington longitude at r_new. Units of rad.
     """
 
-    constants = surf.surf_constants()
+    constants = s.surf_constants()
     Tsyn = constants['synodic_period'].to(seconds).value
 
     # Get velocity in km/s and radial distances
@@ -506,10 +506,10 @@ def map_v_inwards_parker(v_orig, r_orig, lon_orig, r_new, gamma=1.5):
     r_new_km = r_new.to(km).value
 
     # Get density and temperature at r_orig from 1 AU look-up table
-    n_orig, T_orig = surf.get_density_temperature_from_velocity(v_kms, r_orig_rs, gamma=gamma)
+    n_orig, T_orig = s.get_density_temperature_from_velocity(v_kms, r_orig_rs, gamma=gamma)
 
     # Map v, n, T from r_orig to r_new using the Parker nozzle solution
-    v_new, n_new, T_new = surf.map_properties_parker(v_orig, r_orig, r_new, n_orig * per_cm_cube,
+    v_new, n_new, T_new = s.map_properties_parker(v_orig, r_orig, r_new, n_orig * per_cm_cube,
                                                      T_orig * kelvin, gamma=gamma)
 
     # Compute transit time via numerical integration of dr / v(r) along the Parker profile
@@ -527,7 +527,7 @@ def map_v_inwards_parker(v_orig, r_orig, lon_orig, r_new, gamma=1.5):
     # Shape will be (nsteps, nvelocities)
     v_profile_list = []
     for r_i_km in r_grid_km:
-        v_i_arr, _, _ = surf._compute_parker_mapping(
+        v_i_arr, _, _ = s._compute_parker_mapping(
             v_kms_arr, T_orig_arr, n_orig_arr, r_orig_km, r_i_km, gamma
         )
         v_profile_list.append(v_i_arr)
@@ -1144,7 +1144,7 @@ def cone_dict_to_cme_list(model, cme_params):
 
         thick = 0 * solRad
 
-        cme = surf.ConeCME(t_launch=dt_cme, longitude=lon, latitude=lat, width=wid, v=speed,
+        cme = s.ConeCME(t_launch=dt_cme, longitude=lon, latitude=lat, width=wid, v=speed,
                         thickness=thick, initial_height=iheight, label=f"CME_{cme_id:02d}")
         cme_list.append(cme)
 
@@ -1190,7 +1190,7 @@ def ConeFile_to_ConeCME_list_time(filepath, time):
     assert filepath.is_file()
 
     cr, cr_lon_init = datetime2surfinputs(time)
-    dummymodel = surf.SURF(v_boundary=np.ones(128) * 400 * (u.km / u.s), simtime=1 * u.day,
+    dummymodel = s.SURF(v_boundary=np.ones(128) * 400 * (u.km / u.s), simtime=1 * u.day,
                            cr_num=cr, cr_lon_init=cr_lon_init, lon_out=0.0 * u.deg,
                            r_min=21.5 * u.solRad)
 
@@ -1280,9 +1280,9 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
     returns:
         model: A HUXt instance initialised with the fully time dependent boundary conditions.
     """
-    all_lons, dlon, nlon = surf.longitude_grid()
+    all_lons, dlon, nlon = s.longitude_grid()
     assert len(vgrid_Carr[:, 0]) == nlon
-    surf.validate_solver_name(solver)
+    s.validate_solver_name(solver)
 
     # see if br boundary conditions are supplied
     do_b = False
@@ -1304,7 +1304,7 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
 
     # set up the dummy model class
     if np.isfinite(lon_out):
-        model = surf.SURF(v_boundary=np.ones(nlon) * 400 * km_per_s,
+        model = s.SURF(v_boundary=np.ones(nlon) * 400 * km_per_s,
                        lon_out=lon_out,
                        latitude=latitude,
                        r_min=r_min, r_max=r_max,
@@ -1313,7 +1313,7 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
                        frame='synodic', track_cmes=track_cmes,
                        solver=solver)
     else:
-        model = surf.SURF(v_boundary=np.ones(nlon) * 400 * km_per_s,
+        model = s.SURF(v_boundary=np.ones(nlon) * 400 * km_per_s,
                        lon_start=lon_start, lon_stop=lon_stop,
                        latitude=latitude,
                        r_min=r_min, r_max=r_max,
@@ -1332,7 +1332,7 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
     latitude = model.latitude
     time_init = model.time_init
 
-    constants = surf.surf_constants()
+    constants = s.surf_constants()
     rotation_period = None
     if frame == 'synodic':
         rotation_period = constants['synodic_period']
@@ -1454,7 +1454,7 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
         surf_kwargs['lon_start'] = lon_start
         surf_kwargs['lon_stop'] = lon_stop
     
-    model = surf.SURF(**surf_kwargs)
+    model = s.SURF(**surf_kwargs)
 
     return model
 
@@ -1570,7 +1570,7 @@ def get_earth_lat(dt):
     cr, cr_lon_init = datetime2surfinputs(dt)
     # Use the SURF ephemeris data to get Earth lat over the CR
     # ========================================================
-    dummymodel = surf.SURF(v_boundary=np.ones(128)*400*(u.km/u.s), simtime=0.1*u.day, cr_num=cr,
+    dummymodel = s.SURF(v_boundary=np.ones(128)*400*(u.km/u.s), simtime=0.1*u.day, cr_num=cr,
                            cr_lon_init=cr_lon_init, lon_out=0.0*u.deg)
     # retrieve a bodies position at each model timestep:
     earth = dummymodel.get_observer('earth')

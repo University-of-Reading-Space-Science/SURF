@@ -28,8 +28,8 @@ import json
 import joblib
 import onnxruntime as ort
 
-import surf as surf
-import surf_inputs as surfIN
+from surf import surf as s
+from surf import surf_inputs as sin
 
 
 def _is_compressible_solver(solver):
@@ -112,7 +112,7 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, 
     assert corot_type == 'both' or corot_type == 'back' or corot_type == 'forward'
 
     # set the default longitude grid, check specified value
-    all_lons, dlon, nlon = surf.longitude_grid()
+    all_lons, dlon, nlon = s.longitude_grid()
     if nlon_grid is None:
         nlon_grid = nlon
     if not (nlon_grid == nlon):
@@ -153,7 +153,7 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, 
     cr = np.ones(len(omni_int))
     cr_lon_init = np.ones(len(omni_int)) * u.rad
     for i in range(0, len(omni_int)):
-        cr[i], cr_lon_init[i] = surfIN.datetime2surfinputs(omni_int['datetime'][i])
+        cr[i], cr_lon_init[i] = sin.datetime2surfinputs(omni_int['datetime'][i])
 
     omni_int['Carr_lon'] = cr_lon_init.value  # remove unit as this confuses pd.DataFrame.copy()
     omni_int['Carr_lon_unwrap'] = np.unwrap(omni_int['Carr_lon'].to_numpy())
@@ -161,7 +161,7 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, 
     omni_int['mjd'] = [t.mjd for t in omni_int['Time'].array]
 
     # get the Earth radial distance info.
-    dirs = surf._setup_dirs_()
+    dirs = s._setup_dirs_()
     ephem = h5py.File(dirs['ephemeris'], 'r')
     # convert ephemeric to mjd and interpolate to required times
     all_time = Time(ephem['EARTH']['HEEQ']['time'], format='jd').value - 2400000.5
@@ -225,8 +225,8 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, 
         Elong = omni_int['Carr_lon'][t_id] * u.rad
 
         # get the Carrington longitude difference from current Earth pos
-        dlong_back = surfIN.zerototwopi(lon_grid.value - Elong.value) * u.rad
-        dlong_forward = surfIN.zerototwopi(Elong.value - lon_grid.value) * u.rad
+        dlong_back = sin.zerototwopi(lon_grid.value - Elong.value) * u.rad
+        dlong_forward = sin.zerototwopi(Elong.value - lon_grid.value) * u.rad
 
         dt_back = (dlong_back / omega_synodic).to(u.day)
         dt_forward = (dlong_forward / omega_synodic).to(u.day)
@@ -339,7 +339,7 @@ def generate_vCarr_from_OMNI_DTW(runstart, runend, nlon=None, omni_input=None, r
     """
 
     # set the default longitude grid, check specified value
-    all_lons_surf, dlon_surf, nlon_surf = surf.longitude_grid()
+    all_lons_surf, dlon_surf, nlon_surf = s.longitude_grid()
     if nlon is None:
         nlon = nlon_surf
     if not (nlon == nlon_surf):
@@ -370,7 +370,7 @@ def generate_vCarr_from_OMNI_DTW(runstart, runend, nlon=None, omni_input=None, r
     omni[[dtw_on]] = omni[[dtw_on]].interpolate(method='linear', axis=0).ffill().bfill()
 
     # get the carrington longitude
-    temp = surfIN.datetime2surfinputs(omni['datetime'].to_numpy())
+    temp = sin.datetime2surfinputs(omni['datetime'].to_numpy())
     omni['carr_lon'] = temp[1].value
     # unwrap this.
     omni['clon_unwrap'] = np.unwrap(omni['carr_lon'].to_numpy())
@@ -384,7 +384,7 @@ def generate_vCarr_from_OMNI_DTW(runstart, runend, nlon=None, omni_input=None, r
     omni_res.reset_index(drop=True, inplace=True)
 
     # compute carrington longitude of earth for each point
-    temp = surfIN.datetime2surfinputs(omni_res['datetime'].to_numpy())
+    temp = sin.datetime2surfinputs(omni_res['datetime'].to_numpy())
     omni_res['carr_lon'] = temp[1].value
     # unwrap this.
     omni_res['clon_unwrap'] = np.unwrap(omni_res['carr_lon'].to_numpy())
@@ -792,7 +792,7 @@ def ICMElist(filepath=None):
     """
     
     if filepath is None:
-        datapath = surf._setup_dirs_()['insitu']
+        datapath = s._setup_dirs_()['insitu']
         filepath = os.path.join(datapath,
                                 'Richardson_Cane_Porcessed_ICME_list.csv')
     
@@ -983,7 +983,7 @@ def correct_inner_vlon_cnn_onnx(v_inner_array, data_dir=None):
     """
     
     if data_dir is None:
-        data_dir = surf._setup_dirs_()['insitu']
+        data_dir = s._setup_dirs_()['insitu']
 
     # Load scalers without requiring sklearn to be installed
     y_scaler = _load_scaler_no_sklearn(os.path.join(data_dir, 'y_scaler_torch.save'))
@@ -1090,7 +1090,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     >>> import surf.surf_analysis as SA
     >>> ts = SA.get_observer_timeseries(model, observer='Earth')
     """
-    surf.validate_solver_name(solver)
+    s.validate_solver_name(solver)
     
     # if no omni data provided, download it and remove ICMEs
     if omni_input is None:
@@ -1132,7 +1132,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     
     # now map back to the inner boundary
     # Get Earth's radial distance from ephemeris data
-    dirs = surf._setup_dirs_()
+    dirs = s._setup_dirs_()
     ephem = h5py.File(dirs['ephemeris'], 'r')
     # convert ephemeris to mjd and interpolate to required time
     all_time = Time(ephem['EARTH']['HEEQ']['time'], format='jd').value - 2400000.5
@@ -1141,12 +1141,12 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     
     # Backmap to the inner boundary with solver-dependent acceleration profile.
     if solver == 'huxt':
-        vcarr_rmin_back, bcarr_rmin_back = surfIN.map_v_boundary_inwards(
+        vcarr_rmin_back, bcarr_rmin_back = sin.map_v_boundary_inwards(
                                                 omni_lon['V'].to_numpy()*u.km/u.s,
                                                 Earth_R_km.to(u.solRad), rmin,
                                                 b_orig=-omni_lon['BX_GSE'].to_numpy())
     else:
-        vcarr_rmin_back, bcarr_rmin_back = surfIN.map_v_boundary_inwards(
+        vcarr_rmin_back, bcarr_rmin_back = sin.map_v_boundary_inwards(
                                                 omni_lon['V'].to_numpy()*u.km/u.s,
                                                 Earth_R_km.to(u.solRad), rmin,
                                                 b_orig=-omni_lon['BX_GSE'].to_numpy(),
@@ -1154,7 +1154,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     
     
     # interp to typical SURF resolution
-    dphi = 2*np.pi/surf.surf_constants()['nlong']
+    dphi = 2*np.pi/s.surf_constants()['nlong']
     longs = np.arange(dphi/2, 2*np.pi, dphi)
     vlon = np.interp(longs, omni_lon['lon_carr'], vcarr_rmin_back)
     blon = np.interp(longs, omni_lon['lon_carr'], bcarr_rmin_back) \
@@ -1173,21 +1173,21 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
         vcarr_rmin_back_cnn[vcarr_rmin_back_cnn <250] = 250
     
     # set up the model run to start 5 days before the forecast time, to allow for CMEs
-    cr, cr_lon_init = surfIN.datetime2surfinputs(ftime - datetime.timedelta(days=buffertime.value))
+    cr, cr_lon_init = sin.datetime2surfinputs(ftime - datetime.timedelta(days=buffertime.value))
     
     # Get Earth latitude - using get_earth_lat if available, otherwise default to 0
-    Elat = surfIN.get_earth_lat(ftime)
+    Elat = sin.get_earth_lat(ftime)
 
     
     if run_2d:
-        model = surf.SURF(v_boundary=vcarr_rmin_back_cnn.flatten() * u.km/u.s, 
+        model = s.SURF(v_boundary=vcarr_rmin_back_cnn.flatten() * u.km/u.s,
                       b_boundary=blon, 
                       cr_num=cr, cr_lon_init=cr_lon_init,
                       simtime=simtime, r_min=rmin, r_max=rmax, 
                       dt_scale=dt_scale, latitude=Elat, frame='synodic', 
                       track_cmes=False, solver=solver)
     else:
-        model = surf.SURF(v_boundary=vcarr_rmin_back_cnn.flatten() * u.km/u.s, 
+        model = s.SURF(v_boundary=vcarr_rmin_back_cnn.flatten() * u.km/u.s,
                       b_boundary=blon, 
                       cr_num=cr, cr_lon_init=cr_lon_init,
                       simtime=simtime, r_min=rmin, r_max=rmax, 
@@ -1281,7 +1281,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     >>> import surf.surf_analysis as SA
     >>> ts = SA.get_observer_timeseries(model, observer='Earth')
     """
-    surf.validate_solver_name(solver)
+    s.validate_solver_name(solver)
     
     # If no OMNI data provided, download it and remove ICMEs
     if omni_input is None:
@@ -1324,7 +1324,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     
     if solver == 'huxt':
         for t in range(nt):
-            mapped = surfIN.map_v_boundary_inwards(
+            mapped = sin.map_v_boundary_inwards(
                 vcarr_215[:, t],
                 ref_r,
                 rmin,
@@ -1337,7 +1337,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                 bcarr_rmin[:, t] = np.nan
     else:
         for t in range(nt):
-            mapped = surfIN.map_v_boundary_inwards(
+            mapped = sin.map_v_boundary_inwards(
                 vcarr_215[:, t],
                 ref_r,
                 rmin,
@@ -1385,11 +1385,11 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                 # Convert mass density to number density (cm^-3) for Parker mapping
                 n_col = (rho_col.value / m_p / 1e6) * u.cm**-3
                 # Get temperature at ref_r from empirical relation
-                _, T_col = surf.get_density_temperature_from_velocity(
+                _, T_col = s.get_density_temperature_from_velocity(
                     v_col.to(u.km/u.s).value, ref_r.to(u.solRad).value, gamma=1.5
                 )
                 # Map all properties from ref_r to rmin using Parker nozzle
-                _, n_new, _ = surf.map_properties_parker(
+                _, n_new, _ = s.map_properties_parker(
                     v_col, ref_r, rmin,
                     n_col, T_col * u.K, gamma=1.5
                 )
@@ -1411,11 +1411,11 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                 v_col = vcarr_215[:, t]
                 T_col = tcarr_215[:, t]  # K
                 # Get density at ref_r from empirical relation
-                n_col, _ = surf.get_density_temperature_from_velocity(
+                n_col, _ = s.get_density_temperature_from_velocity(
                     v_col.to(u.km/u.s).value, ref_r.to(u.solRad).value, gamma=1.5
                 )
                 # Map all properties from ref_r to rmin using Parker nozzle
-                _, _, T_new = surf.map_properties_parker(
+                _, _, T_new = s.map_properties_parker(
                     v_col, ref_r, rmin,
                     n_col * u.cm**-3, T_col, gamma=1.5
                 )
@@ -1428,11 +1428,11 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     simtime = (Time(end_time).mjd - Time(start_time).mjd) * u.day
     
     # Get Earth latitude
-    Elat = surfIN.get_earth_lat(start_time)
+    Elat = sin.get_earth_lat(start_time)
     
     # Create SURF model with time-dependent boundary
     if run_2d:
-        model = surfIN.set_time_dependent_boundary(
+        model = sin.set_time_dependent_boundary(
             vgrid_Carr=vcarr_rmin_cnn * u.km/u.s,
             time_grid=time_grid,
             starttime=start_time,
@@ -1448,7 +1448,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
             solver=solver, track_cmes=False
         )
     else:
-        model = surfIN.set_time_dependent_boundary(
+        model = sin.set_time_dependent_boundary(
             vgrid_Carr=vcarr_rmin_cnn * u.km/u.s,
             time_grid=time_grid,
             starttime=start_time,
@@ -1507,7 +1507,7 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
         Initialized (but not yet solved) SURF model object with time-dependent
         boundary conditions. Call model.solve([]) to run the simulation.
     """
-    surf.validate_solver_name(solver)
+    s.validate_solver_name(solver)
 
     rmin = 215 * u.solRad
 
@@ -1554,11 +1554,11 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
     simtime = (Time(end_time).mjd - Time(start_time).mjd) * u.day
 
     # Get Earth latitude
-    Elat = surfIN.get_earth_lat(start_time)
+    Elat = sin.get_earth_lat(start_time)
 
     # Create SURF model with time-dependent boundary
     if run_2d:
-        model = surfIN.set_time_dependent_boundary(
+        model = sin.set_time_dependent_boundary(
             vgrid_Carr=vcarr * u.km/u.s,
             time_grid=time_grid,
             starttime=start_time,
@@ -1574,7 +1574,7 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
             solver=solver, track_cmes=False
         )
     else:
-        model = surfIN.set_time_dependent_boundary(
+        model = sin.set_time_dependent_boundary(
             vgrid_Carr=vcarr * u.km/u.s,
             time_grid=time_grid,
             starttime=start_time,

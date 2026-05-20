@@ -16,7 +16,7 @@ from numba import jit
 from pathlib import Path
 from sunpy.coordinates import sun
 
-from surf_solvers import create_solver as create_compressible_solver
+from surf.surf_solvers import create_solver as create_compressible_solver
 
 
 VALID_SOLVERS = ("huxt", "hydro", "hydro-pcm")
@@ -1645,8 +1645,6 @@ class SURF:
             constants = surf_constants()
             v_max = constants['v_max']
             for cme in self.cmes:
-                print(v_max)
-                print(cme.v)
                 if cme.v >= v_max:
                     raise ValueError(f'CME speed {cme.v} is larger than allowed for CFL limit'
                                      f' of {v_max}')
