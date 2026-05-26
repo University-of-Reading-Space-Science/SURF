@@ -276,27 +276,27 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
 
 
 def animate(model, tag, duration=10, fps=20, plotHCS=True, trace_earth_connection=False,
-            outputfilepath='', plot_rmax=None):
+            outputfilepath='',
+            plot_rmax=None):
     """
-    Animate the model solution and save as an MP4.
+    Animate the model solution, and save as an MP4.
     Args:
-        model: An instance of the HUXt class with a completed solution.
+        model: An instance of the SURF class with a completed solution.
         tag: String to append to the filename of the animation.
         duration: the movie duration, in seconds
         fps: frames per second
         plotHCS: Boolean flag on whether to plot the heliospheric current sheet location.
-        trace_earth_connection: Boolean flag for whether to plot the Earth-connected streak line.
-        outputfilepath: The full path of the outputfile.
-        plot_rmax: float (no units, but in rS). Limit outer boundary to help with field lines during
-                   CMEs
+        trace_earth_connection: Boolean flag on whether to plot the earth connected streak line.
+        outputfilepath: full path, including filename if output is to be saved anywhere other than SURF/figures
+        plot_rmax: float (no units, but in rS). Limit outer boundary to help with field lines during CMEs
     Returns:
         None
     """
 
-    interval = (1/fps)*1000
-    nframes = int(duration*1000/interval)
+    interval = (1 / fps) * 1000
+    nframes = int(duration * 1000 / interval)
 
-    exp_time = int(nframes*0.2)
+    exp_time = int(nframes * 0.2)
     print('Rendering ' + str(nframes) + ' frames. Expected time: ' + str(exp_time) + ' secs')
 
     def make_frame(frame):
@@ -308,16 +308,25 @@ def animate(model, tag, duration=10, fps=20, plotHCS=True, trace_earth_connectio
             frame: An image array for rendering to movie clip.
         """
         plt.clf()  # Clear the previous frame
-        ax = fig.add_subplot(111, projection='polar')
 
         # Get the time index closest to this fraction of movie duration
         i = np.int32((model.nt_out - 1) * frame / nframes)
-        plot(model, model.time_out[i], fighandle=fig, axhandle=ax, plotHCS=plotHCS,
-             trace_earth_connection=trace_earth_connection, plot_rmax=plot_rmax)
+
+        # Use plot_compressible for compressible models, otherwise use standard plot
+        if hasattr(model, 'compressible') and model.compressible:
+            plot_compressible(model, model.time_out[i], fighandle=fig, minimalplot=False,
+                              annotateplot=True, plot_rmax=plot_rmax)
+        else:
+            ax = fig.add_subplot(111, projection='polar')
+            plot(model, model.time_out[i], fighandle=fig, axhandle=ax, plotHCS=plotHCS,
+                 trace_earth_connection=trace_earth_connection, plot_rmax=plot_rmax)
         return frame
 
-    # Create a new figure
-    fig, _ = plt.subplots(figsize=(10, 10), subplot_kw={"projection": "polar"})
+    # Create a new figure - size depends on compressible mode
+    if hasattr(model, 'compressible') and model.compressible:
+        fig, ax = plt.subplots(figsize=(24, 8))
+    else:
+        fig, ax = plt.subplots(figsize=(10, 10), subplot_kw={"projection": "polar"})
 
     # Create the animation
     ani = FuncAnimation(fig, make_frame, frames=range(nframes), interval=interval)
@@ -327,7 +336,7 @@ def animate(model, tag, duration=10, fps=20, plotHCS=True, trace_earth_connectio
         filepath = outputfilepath
     else:
         cr_num = np.int32(model.cr_num.value)
-        filename = f"HUXt_CR{cr_num:03d}_{tag}_movie.mp4"
+        filename = "SURF_CR{:03d}_{}_movie.mp4".format(cr_num, tag)
         figure_dir = get_figure_dir()
         filepath = figure_dir.joinpath(filename)
 
@@ -335,8 +344,10 @@ def animate(model, tag, duration=10, fps=20, plotHCS=True, trace_earth_connectio
     ani.save(filepath, writer='ffmpeg')
     print('mp4 file written to ' + str(filepath))
 
+    return
 
-def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimalplot=False, 
+
+def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimalplot=False,
                       annotateplot=True, plot_rmax=None, plotHCS=True):
     """
     Make three contour plots on polar axes of the compressible solar wind solution at a specific
