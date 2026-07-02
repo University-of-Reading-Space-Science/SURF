@@ -6,9 +6,9 @@ from pathlib import Path
 
 import astropy.units as u
 from astropy.time import Time
-import matplotlib.pyplot as plt
 import matplotlib as mpl
-from matplotlib.animation import FuncAnimation
+import matplotlib.pyplot as plt
+from matplotlib.animation import FFMpegWriter, FuncAnimation, PillowWriter, writers
 import numpy as np
 from numba import jit
 import pandas as pd
@@ -290,7 +290,7 @@ def animate(model, tag, duration=10, fps=20, plotHCS=True, trace_earth_connectio
         outputfilepath: full path, including filename if output is to be saved anywhere other than SURF/figures
         plot_rmax: float (no units, but in rS). Limit outer boundary to help with field lines during CMEs
     Returns:
-        None
+        pathlib.Path: Full path to the saved animation file.
     """
 
     interval = (1 / fps) * 1000
@@ -333,18 +333,32 @@ def animate(model, tag, duration=10, fps=20, plotHCS=True, trace_earth_connectio
 
     # set up the save path
     if outputfilepath:
-        filepath = outputfilepath
+        filepath = Path(outputfilepath)
     else:
         cr_num = np.int32(model.cr_num.value)
         filename = "SURF_CR{:03d}_{}_movie.mp4".format(cr_num, tag)
         figure_dir = get_figure_dir()
         filepath = figure_dir.joinpath(filename)
 
-    # Save the animation as a movie file
-    ani.save(filepath, writer='ffmpeg')
-    print('mp4 file written to ' + str(filepath))
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
 
-    return
+    # Prefer MP4 via ffmpeg; gracefully fall back to GIF when ffmpeg is unavailable.
+    if filepath.suffix.lower() == ".gif":
+        writer = PillowWriter(fps=fps)
+    elif writers.is_available("ffmpeg"):
+        writer = FFMpegWriter(fps=fps)
+    else:
+        fallback_path = filepath.with_suffix(".gif")
+        print("ffmpeg writer unavailable; saving GIF instead at " + str(fallback_path))
+        filepath = fallback_path
+        writer = PillowWriter(fps=fps)
+
+    # Save the animation as a movie file
+    ani.save(str(filepath), writer=writer)
+    print('animation file written to ' + str(filepath))
+
+    return filepath
 
 
 def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimalplot=False,

@@ -13,8 +13,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from astropy.io import fits
 from astropy.time import Time
-from PyQt6.QtCore import QDateTime, QObject, Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtCore import QDateTime, QObject, Qt, QThread, QUrl, pyqtSignal
+from PyQt6.QtGui import QColor, QDesktopServices, QPainter
 from PyQt6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -105,6 +105,10 @@ class ModelParametersTab(QWidget):
         model_box = QGroupBox("Model Parameters")
         form = QFormLayout()
 
+        self.solver_combo = QComboBox()
+        self.solver_combo.addItems(["HUXt", "hydro", "hydro-pcm"])
+        self.solver_combo.setCurrentText("HUXt")
+
         self.rmin_spin = QDoubleSpinBox()
         self.rmin_spin.setRange(0.0, 1000.0)
         self.rmin_spin.setSingleStep(0.1)
@@ -120,13 +124,13 @@ class ModelParametersTab(QWidget):
         self.lon_min_spin = QDoubleSpinBox()
         self.lon_min_spin.setRange(-360.0, 360.0)
         self.lon_min_spin.setSingleStep(1.0)
-        self.lon_min_spin.setValue(0.0)
+        self.lon_min_spin.setValue(315.0)
         self.lon_min_spin.setSuffix(" deg")
 
         self.lon_max_spin = QDoubleSpinBox()
         self.lon_max_spin.setRange(-360.0, 360.0)
         self.lon_max_spin.setSingleStep(1.0)
-        self.lon_max_spin.setValue(360.0)
+        self.lon_max_spin.setValue(45.0)
         self.lon_max_spin.setSuffix(" deg")
 
         self.latitude_spin = QDoubleSpinBox()
@@ -199,6 +203,7 @@ class ModelParametersTab(QWidget):
         start_carr_layout.addWidget(self.cr_lon_init_spin)
         start_carr_row.setLayout(start_carr_layout)
 
+        form.addRow("Solver", self.solver_combo)
         form.addRow("Radial bounds", r_bounds_row)
         form.addRow("Run model", run_mode_row)
         form.addRow("Latitude", self.latitude_spin)
@@ -253,6 +258,7 @@ class ModelParametersTab(QWidget):
     def get_state(self):
         """Return current values as a plain dictionary for code generation."""
         return {
+            "solver": self.solver_combo.currentText().lower(),
             "rmin": self.rmin_spin.value(),
             "rmax": self.rmax_spin.value(),
             "lon_min": self.lon_min_spin.value(),
@@ -787,7 +793,7 @@ class InSituAmbientTab(QWidget):
 
         info = QLabel(
             "Uses the model start time and run time to initialize the OMNI-based "
-            "SURF setup following Example 27."
+            "SURF setup."
         )
         info.setWordWrap(True)
 
@@ -804,7 +810,7 @@ class InSituAmbientTab(QWidget):
 
 
 class OmniAmbientTab(QWidget):
-    """Controls for Example-20 OMNI-driven time-dependent boundaries."""
+    """Controls for OMNI-driven time-dependent boundaries."""
 
     def __init__(self):
         super().__init__()
@@ -812,7 +818,7 @@ class OmniAmbientTab(QWidget):
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        box = QGroupBox("OMNI boundary (Example 20)")
+        box = QGroupBox("OMNI outwards boundary")
         form = QFormLayout()
 
         self.use_215_inner_boundary_toggle = QCheckBox(
@@ -822,7 +828,7 @@ class OmniAmbientTab(QWidget):
 
         info = QLabel(
             "Build time-dependent boundary conditions directly from OMNI observations "
-            "following Example 20."
+            "for outward model runs."
         )
         info.setWordWrap(True)
 
@@ -1192,8 +1198,8 @@ class AmbientSolarWindTab(QWidget):
             ("User specified", "user_specified"),
             ("MAS", "mas"),
             ("WSA", "wsa"),
-            ("InSitu-backmapped", "insitu_backmapped"),
-            ("OMNI", "omni"),
+            ("OMNI-backmapped", "insitu_backmapped"),
+            ("OMNI outwards", "omni"),
             ("CorTom", "cortom"),
         ]
         for label, source_key in source_specs:
@@ -1228,8 +1234,8 @@ class AmbientSolarWindTab(QWidget):
         self.source_tabs.addTab(self.user_tab, "User specified")
         self.source_tabs.addTab(self.mas_tab, "MAS")
         self.source_tabs.addTab(self.wsa_tab, "WSA")
-        self.source_tabs.addTab(self.insitu_tab, "InSitu-backmapped")
-        self.source_tabs.addTab(self.omni_tab, "OMNI")
+        self.source_tabs.addTab(self.insitu_tab, "OMNI-backmapped")
+        self.source_tabs.addTab(self.omni_tab, "OMNI outwards")
         self.source_tabs.addTab(self.cortom_tab, "CorTom")
 
         self._source_tab_indices = {
@@ -1422,12 +1428,118 @@ class VisualisationTab(QWidget):
         self.map_rmax_spin.setEnabled(enabled)
 
 
+class MoviesTab(QWidget):
+    """Tab containing controls for generating post-run SURF animations."""
+
+    def __init__(self):
+        super().__init__()
+
+        layout = QVBoxLayout()
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        movie_box = QGroupBox("Animation (sa.animate)")
+        movie_form = QFormLayout()
+
+        self.movie_tag_edit = QLineEdit("gui")
+
+        self.movie_duration_spin = QDoubleSpinBox()
+        self.movie_duration_spin.setRange(1.0, 600.0)
+        self.movie_duration_spin.setSingleStep(1.0)
+        self.movie_duration_spin.setValue(10.0)
+        self.movie_duration_spin.setSuffix(" s")
+
+        self.movie_fps_spin = QSpinBox()
+        self.movie_fps_spin.setRange(1, 60)
+        self.movie_fps_spin.setValue(5)
+        self.movie_fps_spin.setSuffix(" fps")
+
+        self.movie_plot_hcs_toggle = QCheckBox("Plot HCS")
+        self.movie_plot_hcs_toggle.setChecked(True)
+
+        self.movie_trace_earth_toggle = QCheckBox("Trace Earth connection (slow)")
+
+        self.movie_limit_rmax_toggle = QCheckBox("Limit outer radius")
+        self.movie_limit_rmax_toggle.toggled.connect(self._on_movie_limit_rmax_toggled)
+        self.movie_rmax_spin = QDoubleSpinBox()
+        self.movie_rmax_spin.setRange(1.0, 5000.0)
+        self.movie_rmax_spin.setSingleStep(5.0)
+        self.movie_rmax_spin.setValue(240.0)
+        self.movie_rmax_spin.setSuffix(" Rs")
+        self.movie_rmax_spin.setEnabled(False)
+
+        rmax_row = QWidget()
+        rmax_layout = QHBoxLayout()
+        rmax_layout.setContentsMargins(0, 0, 0, 0)
+        rmax_layout.addWidget(self.movie_limit_rmax_toggle)
+        rmax_layout.addWidget(self.movie_rmax_spin)
+        rmax_layout.addStretch(1)
+        rmax_row.setLayout(rmax_layout)
+
+        self.movie_output_edit = QLineEdit()
+        self.movie_output_edit.setReadOnly(True)
+        self.movie_output_edit.setPlaceholderText("Use default SURF figures path (.gif)")
+        self.movie_output_button = QPushButton("Select output")
+        self.movie_output_button.clicked.connect(self._select_output_path)
+        self.movie_clear_output_button = QPushButton("Clear")
+        self.movie_clear_output_button.clicked.connect(self.movie_output_edit.clear)
+
+        output_row = QWidget()
+        output_layout = QHBoxLayout()
+        output_layout.setContentsMargins(0, 0, 0, 0)
+        output_layout.addWidget(self.movie_output_edit, 1)
+        output_layout.addWidget(self.movie_output_button)
+        output_layout.addWidget(self.movie_clear_output_button)
+        output_row.setLayout(output_layout)
+
+        self.movie_play_on_complete_toggle = QCheckBox("Play movie when complete")
+        self.movie_play_on_complete_toggle.setChecked(True)
+
+        self.generate_movie_button = QPushButton("Generate Movie")
+
+        movie_form.addRow("Tag", self.movie_tag_edit)
+        movie_form.addRow("Duration", self.movie_duration_spin)
+        movie_form.addRow("Frame rate", self.movie_fps_spin)
+        movie_form.addRow("", self.movie_plot_hcs_toggle)
+        movie_form.addRow("", self.movie_trace_earth_toggle)
+        movie_form.addRow("", rmax_row)
+        movie_form.addRow("Output", output_row)
+        movie_form.addRow("", self.movie_play_on_complete_toggle)
+        movie_form.addRow(self.generate_movie_button)
+        movie_box.setLayout(movie_form)
+
+        layout.addWidget(movie_box)
+        self.setLayout(layout)
+
+    def _on_movie_limit_rmax_toggled(self, enabled: bool):
+        """Enable outer-radius spin box only when radius limiting is requested."""
+        self.movie_rmax_spin.setEnabled(enabled)
+
+    def _select_output_path(self):
+        """Select an optional explicit GIF/MP4 path for movie output."""
+        start_dir = str(sa.get_figure_dir())
+        filepath, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Select movie output",
+            start_dir,
+            "GIF animation (*.gif);;MP4 video (*.mp4)",
+        )
+        if filepath:
+            lower_path = filepath.lower()
+            if not lower_path.endswith((".gif", ".mp4")):
+                if "MP4" in selected_filter:
+                    filepath += ".mp4"
+                else:
+                    filepath += ".gif"
+            self.movie_output_edit.setText(filepath)
+
+
 class CmeTab(QWidget):
     """Tab for creating and managing ConeCME entries for model runs."""
 
     def __init__(self):
         super().__init__()
         self._cmes = []
+        self.current_solver = "huxt"
         self.model_start_datetime = datetime.datetime.utcnow()
         self._last_model_start_datetime = None
         self.model_inner_boundary_rs = 21.5
@@ -1656,6 +1768,24 @@ class CmeTab(QWidget):
         self._sync_launch_datetime_from_day()
         self._on_cme_plasma_mode_changed(self.cme_plasma_mode_combo.currentText())
         self._update_initial_height_style()
+        self.set_solver(self.current_solver)
+
+    def set_solver(self, solver_name: str):
+        """Enable CME plasma controls only for compressible solvers."""
+        solver_key = str(solver_name).strip().lower()
+        self.current_solver = solver_key
+        plasma_allowed = solver_key in ("hydro", "hydro-pcm")
+
+        self.cme_plasma_mode_combo.setEnabled(plasma_allowed)
+        self.fraction_row.setEnabled(plasma_allowed)
+        self.absolute_row.setEnabled(plasma_allowed)
+
+        if not plasma_allowed:
+            self.cme_plasma_mode_combo.blockSignals(True)
+            self.cme_plasma_mode_combo.setCurrentText("Fraction of ambient")
+            self.cme_plasma_mode_combo.blockSignals(False)
+
+        self._on_cme_plasma_mode_changed(self.cme_plasma_mode_combo.currentText())
 
     def load_cone_file(self):
         """Load CMEs from a cone2bc .in file and append them to the CME list."""
@@ -1932,6 +2062,7 @@ class SurfMainWindow(QMainWindow):
         self.run_worker = None
         self.last_terminal_output = "No run output available yet."
         self.last_model = None
+        self.post_run_tabs_visible = False
 
         central = QWidget()
         root_layout = QVBoxLayout()
@@ -1941,21 +2072,22 @@ class SurfMainWindow(QMainWindow):
         self.ambient_tab = AmbientSolarWindTab()
         self.cme_tab = CmeTab()
         self.visualisation_tab = VisualisationTab()
+        self.movies_tab = MoviesTab()
 
         self.tabs.addTab(self.model_tab, "Model Parameters")
         self.tabs.addTab(self.ambient_tab, "Ambient Solar Wind")
         self.tabs.addTab(self.cme_tab, "CMEs")
-        self.tabs.addTab(self.visualisation_tab, "Visualisation")
-        self.tabs.setTabEnabled(3, False)
 
         self.visualisation_tab.plot_map_button.clicked.connect(self.plot_map)
         self.visualisation_tab.plot_radial_button.clicked.connect(self.plot_radial)
         self.visualisation_tab.plot_timeseries_button.clicked.connect(self.plot_timeseries)
+        self.movies_tab.generate_movie_button.clicked.connect(self.generate_movie)
         self.model_tab.one_d_toggle.toggled.connect(self._on_1d_mode_changed)
         self.model_tab.start_datetime.dateTimeChanged.connect(
             self._on_model_start_datetime_input_changed
         )
         self.model_tab.include_bpol_toggle.toggled.connect(self.ambient_tab.set_include_bpol)
+        self.model_tab.solver_combo.currentTextChanged.connect(self.cme_tab.set_solver)
         self.model_tab.start_datetime_updated.connect(self.cme_tab.set_model_start_datetime)
         self.model_tab.rmin_spin.valueChanged.connect(self.ambient_tab.set_model_inner_boundary)
         self.model_tab.latitude_spin.valueChanged.connect(self.ambient_tab.set_model_latitude)
@@ -1968,6 +2100,7 @@ class SurfMainWindow(QMainWindow):
         self.cme_tab.set_model_start_datetime(self.model_tab.start_datetime.dateTime().toPyDateTime())
         self.cme_tab.set_model_inner_boundary(self.model_tab.rmin_spin.value())
         self.cme_tab.set_model_run_duration_days(self.model_tab.simtime_spin.value())
+        self.cme_tab.set_solver(self.model_tab.solver_combo.currentText())
         root_layout.addWidget(self.tabs)
 
         footer = QHBoxLayout()
@@ -2016,6 +2149,7 @@ class SurfMainWindow(QMainWindow):
             "import surf.surf as s",
             "",
             "# Generated by SURF GUI",
+            f"solver = {state['solver']!r}",
             f"rmin = {state['rmin']} * u.solRad",
             f"rmax = {state['rmax']} * u.solRad",
             f"lon_start = {state['lon_min']} * u.deg",
@@ -2103,7 +2237,7 @@ class SurfMainWindow(QMainWindow):
             boundary_lines.append("")
         elif ambient["source"] == "insitu_backmapped":
             boundary_lines = [
-                "# Boundary is initialized from OMNI observations using Example 27 helpers.",
+                "# Boundary is initialized from OMNI observations.",
                 "insitu_rmin = rmin",
                 "",
             ]
@@ -2155,6 +2289,7 @@ class SurfMainWindow(QMainWindow):
                         "    rmin=insitu_rmin,",
                         "    rmax=rmax,",
                         "    dt_scale=4,",
+                        "    solver=solver,",
                         f"    run_2d={str(not state['is_1d'])},",
                         ")",
                     ]
@@ -2168,6 +2303,7 @@ class SurfMainWindow(QMainWindow):
                         "    rmin=insitu_rmin,",
                         "    rmax=rmax,",
                         "    dt_scale=4,",
+                        "    solver=solver,",
                         f"    run_2d={str(not state['is_1d'])},",
                         ")",
                     ]
@@ -2186,6 +2322,7 @@ class SurfMainWindow(QMainWindow):
                     "    dt_scale=4,",
                     "    latitude=latitude,",
                     "    lon_out=0.0 * u.deg,",
+                    "    solver=solver,",
                 ]
                 if include_bpol:
                     omni_call_lines.append("    bgrid_Carr=omni_bcarr,")
@@ -2210,6 +2347,7 @@ class SurfMainWindow(QMainWindow):
                     "    frame=frame,",
                     "    lon_start=lon_start,",
                     "    lon_stop=lon_stop,",
+                    "    solver=solver,",
                 ]
                 if include_bpol:
                     omni_call_lines.append("    bgrid_Carr=omni_bcarr,")
@@ -2249,6 +2387,7 @@ class SurfMainWindow(QMainWindow):
                     "    frame=frame,",
                     "    simtime=simtime,",
                     "    dt_scale=4,",
+                    "    solver=solver,",
                     ")",
                 ]
             )
@@ -2329,6 +2468,18 @@ class SurfMainWindow(QMainWindow):
         """Propagate 1D mode UI state to visualisation controls."""
         self.visualisation_tab.set_1d_mode(enabled)
 
+    def _show_post_run_tabs(self):
+        """Add post-run tabs with a spacer once a model result is available."""
+        if self.post_run_tabs_visible:
+            return
+
+        spacer_tab = QWidget()
+        spacer_index = self.tabs.addTab(spacer_tab, " ")
+        self.tabs.setTabEnabled(spacer_index, False)
+        self.tabs.addTab(self.visualisation_tab, "Plots")
+        self.tabs.addTab(self.movies_tab, "Movies")
+        self.post_run_tabs_visible = True
+
     def show_generated_code(self):
         """Show a text window with generated script based on current GUI state."""
         self._sync_model_inner_boundary_for_omni()
@@ -2392,6 +2543,25 @@ class SurfMainWindow(QMainWindow):
         """Update status after a successful plotting call."""
         self.status_label.setText(f"{action} generated.")
 
+    def _movie_output_path(self, tag: str) -> Path:
+        """Return output path for the movie, using explicit path when provided."""
+        explicit_path = self.movies_tab.movie_output_edit.text().strip()
+        if explicit_path:
+            return Path(explicit_path)
+
+        cr_num = np.int32(self.last_model.cr_num.value)
+        filename = f"SURF_CR{cr_num:03d}_{tag}_movie.gif"
+        return sa.get_figure_dir().joinpath(filename)
+
+    def _play_movie_file(self, filepath: Path):
+        """Open the generated movie file in the system default media player."""
+        if not filepath.exists():
+            self.status_label.setText(f"Movie generated, but file not found at {filepath}.")
+            return
+
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(filepath))):
+            self.status_label.setText(f"Movie generated at {filepath}, but auto-play failed.")
+
     def _on_ambient_error(self, error_text: str):
         """Capture ambient-tab tracebacks and surface a concise status message."""
         self._append_terminal_output(error_text)
@@ -2412,15 +2582,26 @@ class SurfMainWindow(QMainWindow):
                 if self.visualisation_tab.map_limit_rmax_toggle.isChecked()
                 else None
             )
-            sa.plot(
-                self.last_model,
-                plot_time,
-                minimalplot=self.visualisation_tab.map_minimalplot_toggle.isChecked(),
-                plotHCS=self.visualisation_tab.map_plot_hcs_toggle.isChecked(),
-                annotateplot=self.visualisation_tab.map_annotate_toggle.isChecked(),
-                trace_earth_connection=self.visualisation_tab.map_trace_earth_toggle.isChecked(),
-                plot_rmax=plot_rmax,
-            )
+            selected_solver = self.model_tab.solver_combo.currentText().strip().lower()
+            if selected_solver == "huxt":
+                sa.plot(
+                    self.last_model,
+                    plot_time,
+                    minimalplot=self.visualisation_tab.map_minimalplot_toggle.isChecked(),
+                    plotHCS=self.visualisation_tab.map_plot_hcs_toggle.isChecked(),
+                    annotateplot=self.visualisation_tab.map_annotate_toggle.isChecked(),
+                    trace_earth_connection=self.visualisation_tab.map_trace_earth_toggle.isChecked(),
+                    plot_rmax=plot_rmax,
+                )
+            else:
+                sa.plot_compressible(
+                    self.last_model,
+                    plot_time,
+                    minimalplot=self.visualisation_tab.map_minimalplot_toggle.isChecked(),
+                    annotateplot=self.visualisation_tab.map_annotate_toggle.isChecked(),
+                    plot_rmax=plot_rmax,
+                    plotHCS=self.visualisation_tab.map_plot_hcs_toggle.isChecked(),
+                )
             plt.show()
             self._on_plot_succeeded("2D map")
         except Exception:
@@ -2456,6 +2637,53 @@ class SurfMainWindow(QMainWindow):
         except Exception:
             self._on_plot_failed("Time series")
 
+    def generate_movie(self):
+        """Generate a SURF movie using options aligned with sa.animate."""
+        if self.last_model is None:
+            self.status_label.setText("Run SURF first to enable movie generation.")
+            return
+
+        original_text = self.movies_tab.generate_movie_button.text()
+        original_style = self.movies_tab.generate_movie_button.styleSheet()
+        self.movies_tab.generate_movie_button.setEnabled(False)
+        self.movies_tab.generate_movie_button.setText("Rendering movie frames")
+        self.movies_tab.generate_movie_button.setStyleSheet(
+            "QPushButton { background-color: #b22222; color: white; font-weight: 600; }"
+        )
+        QApplication.processEvents()
+
+        try:
+            tag = self.movies_tab.movie_tag_edit.text().strip() or "gui"
+            duration = self.movies_tab.movie_duration_spin.value()
+            fps = self.movies_tab.movie_fps_spin.value()
+            plot_rmax = (
+                self.movies_tab.movie_rmax_spin.value()
+                if self.movies_tab.movie_limit_rmax_toggle.isChecked()
+                else None
+            )
+            output_path = self._movie_output_path(tag)
+
+            saved_path = sa.animate(
+                self.last_model,
+                tag=tag,
+                duration=duration,
+                fps=fps,
+                plotHCS=self.movies_tab.movie_plot_hcs_toggle.isChecked(),
+                trace_earth_connection=self.movies_tab.movie_trace_earth_toggle.isChecked(),
+                outputfilepath=str(output_path),
+                plot_rmax=plot_rmax,
+            )
+            self._on_plot_succeeded("Movie")
+
+            if self.movies_tab.movie_play_on_complete_toggle.isChecked():
+                self._play_movie_file(Path(saved_path) if saved_path else output_path)
+        except Exception:
+            self._on_plot_failed("Movie generation")
+        finally:
+            self.movies_tab.generate_movie_button.setEnabled(True)
+            self.movies_tab.generate_movie_button.setText(original_text)
+            self.movies_tab.generate_movie_button.setStyleSheet(original_style)
+
     def _on_run_finished(self, success: bool, message: str, terminal_output: str, model_obj):
         """Handle SURF completion state and update UI styling/availability."""
         self.run_button.setEnabled(True)
@@ -2467,7 +2695,7 @@ class SurfMainWindow(QMainWindow):
             self._set_run_button_success_style()
             self.status_label.setText(message)
             self.last_model = model_obj
-            self.tabs.setTabEnabled(3, True)
+            self._show_post_run_tabs()
         else:
             self._set_run_button_failed_style()
             self.status_label.setText(message + " Open 'Show Terminal Output' for details.")
