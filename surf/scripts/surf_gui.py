@@ -149,6 +149,17 @@ class ModelParametersTab(QWidget):
         self.simtime_spin.setValue(5.0)
         self.simtime_spin.setSuffix(" day")
 
+        self.streak_lines_toggle = QCheckBox("Enable streak lines")
+        self.streak_lines_toggle.setChecked(False)
+        self.streak_lines_toggle.toggled.connect(self._on_streak_lines_toggled)
+
+        self.streak_spacing_spin = QDoubleSpinBox()
+        self.streak_spacing_spin.setRange(1.0, 180.0)
+        self.streak_spacing_spin.setSingleStep(1.0)
+        self.streak_spacing_spin.setValue(10.0)
+        self.streak_spacing_spin.setSuffix(" deg")
+        self.streak_spacing_spin.setEnabled(False)
+
         self.include_bpol_toggle = QCheckBox("Include bpol in run")
         self.include_bpol_toggle.setChecked(False)
 
@@ -209,6 +220,8 @@ class ModelParametersTab(QWidget):
         form.addRow("Latitude", self.latitude_spin)
         form.addRow("Frame", self.frame_combo)
         form.addRow("Run time", self.simtime_spin)
+        form.addRow("Streak lines", self.streak_lines_toggle)
+        form.addRow("Streak spacing", self.streak_spacing_spin)
         form.addRow("Magnetic boundary", self.include_bpol_toggle)
         form.addRow("Start / Carrington", start_carr_row)
 
@@ -225,6 +238,10 @@ class ModelParametersTab(QWidget):
         self.lon_max_spin.setEnabled(not enabled)
         if enabled:
             self.frame_combo.setCurrentText("synodic")
+
+    def _on_streak_lines_toggled(self, enabled: bool):
+        """Enable spacing input only when streak-line tracing is requested."""
+        self.streak_spacing_spin.setEnabled(enabled)
 
     def _sync_from_datetime(self):
         """Update Carrington fields from datetime input."""
@@ -267,6 +284,8 @@ class ModelParametersTab(QWidget):
             "is_1d": self.one_d_toggle.isChecked(),
             "frame": self.frame_combo.currentText(),
             "simtime_days": self.simtime_spin.value(),
+            "streak_lines_enabled": self.streak_lines_toggle.isChecked(),
+            "streak_spacing_deg": self.streak_spacing_spin.value(),
             "include_bpol": self.include_bpol_toggle.isChecked(),
             "start_datetime": self.start_datetime.dateTime().toString("yyyy-MM-dd HH:mm:ss"),
             "cr_num": self.cr_num_spin.value(),
@@ -2438,7 +2457,17 @@ class SurfMainWindow(QMainWindow):
                 ]
             )
 
-        lines.append("model.solve(cme_list)")
+        lines.extend(
+            [
+                "",
+                (
+                    f"streak_carr = np.arange(0.0, 360.0, {state['streak_spacing_deg']}) * u.deg"
+                    if state.get("streak_lines_enabled", False)
+                    else "streak_carr = np.array([]) * u.deg"
+                ),
+                "model.solve(cme_list, streak_carr=streak_carr)",
+            ]
+        )
 
         return "\n".join(lines) + "\n"
 
