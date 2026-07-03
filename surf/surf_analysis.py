@@ -7,6 +7,7 @@ from pathlib import Path
 import astropy.units as u
 from astropy.time import Time
 import matplotlib as mpl
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 from matplotlib.animation import FFMpegWriter, FuncAnimation, PillowWriter, writers
 import numpy as np
@@ -715,14 +716,14 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
     return fig, axes
 
 
-def plot_compressible_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=False, 
-                               annotateplot=True, plot_rmax=None, plotHCS=True, polar_var='P_DYN'):
+def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=False,
+                 annotateplot=True, plot_rmax=None, plotHCS=True, polar_var='V'):
     """
     Make a plot with two subfigures: left shows top-down polar view of selected variable,
-    right shows Earth timeseries of V, n, T, and P_dyn.
+    right shows Earth timeseries.
     
     Args:
-        model: An instance of the SURF class with a completed compressible solution.
+        model: An instance of the SURF class with a completed solution.
         time: Time to look up closest model time to (with an astropy.unit of time).
         save: Boolean to determine if the figure is saved.
         tag: String to append to the filename if saving the figure.
@@ -733,17 +734,19 @@ def plot_compressible_with_ts(model, time, save=False, tag='', fighandle=np.nan,
                    during CMEs
         plotHCS: Boolean, if True plots heliospheric current sheet coordinates
         polar_var: String specifying variable to plot in left polar subplot.
-                   Options: 'P_DYN' (default), 'V', 'n', 'T'
+               Compressible options: 'P_DYN', 'V', 'n', 'T'.
+               In incompressible mode only 'V' is supported.
     Returns:
         fig: Figure handle.
         subfigs: Array of subfigure handles [subfig_left, subfig_right].
         ax_polar: The polar axis in the left subfigure.
-        axes_ts: Array of axes handles for the timeseries plots [ax_v, ax_n, ax_T, ax_P].
+        axes_ts: Array of axes handles for the timeseries plots.
     """
-    
-    if not hasattr(model, 'rho_grid') or not hasattr(model, 'temp_grid'):
-        raise ValueError("Model must be run with a compressible solver "
-                         "(solver='hydro' or 'hydro-pcm') to use plot_compressible_with_ts")
+
+    is_compressible = hasattr(model, 'rho_grid') and hasattr(model, 'temp_grid')
+    if not is_compressible and polar_var != 'V':
+        print("Incompressible solution detected: forcing polar_var='V'.")
+        polar_var = 'V'
 
     if (time < model.time_out.min()) | (time > (model.time_out.max())):
         print("Error, input time outside span of model times. Defaulting to closest time")
@@ -755,7 +758,7 @@ def plot_compressible_with_ts(model, time, save=False, tag='', fighandle=np.nan,
         fig = fighandle
     subfigs = fig.subfigures(1, 2, wspace=0.05, width_ratios=[1, 1])
     
-    # Left subfigure: polar plot of r^2 * P_dyn
+    # Left subfigure: polar plot of selected variable
     ax_polar = subfigs[0].add_subplot(111, projection='polar')
     
     id_t = np.argmin(np.abs(model.time_out - time))
@@ -767,38 +770,41 @@ def plot_compressible_with_ts(model, time, save=False, tag='', fighandle=np.nan,
 
     # Prepare data arrays
     v_sub = model.v_grid.value[id_t, :, :].copy()
-    rho_sub = model.rho_grid.value[id_t, :, :].copy()
-    temp_sub = model.temp_grid.value[id_t, :, :].copy()
-    
-    # Calculate the selected variable for plotting
-    r_sub = model.r.to(u.km).value
-    r_1au = 1.496e8  # 1 AU in km
-    
-    # Create 2D radius array matching sub shape (nr, nlon)
-    if rho_sub.ndim == 2:
-        r_grid_sub = np.tile(r_sub[:, np.newaxis], (1, rho_sub.shape[1]))
+    if is_compressible:
+        rho_sub = model.rho_grid.value[id_t, :, :].copy()
+        temp_sub = model.temp_grid.value[id_t, :, :].copy()
+
+        # Calculate the selected variable for plotting
+        r_sub = model.r.to(u.km).value
+        r_1au = 1.496e8  # 1 AU in km
+
+        # Create 2D radius array matching sub shape (nr, nlon)
+        if rho_sub.ndim == 2:
+            r_grid_sub = np.tile(r_sub[:, np.newaxis], (1, rho_sub.shape[1]))
+        else:
+            r_grid_sub = r_sub
+
+        # Calculate data based on selected variable
+        if polar_var == 'P_DYN':
+            # Compute r^2 * P_dyn = 0.5 * r^2 * rho * v^2
+            # rho in kg/m^3, v in km/s -> convert v to m/s
+            # Result in Pascals, convert to nPa (1e9)
+            # Scale by (r/1AU)^2 to account for spherical expansion
+            plot_data_sub = 0.5 * rho_sub * (v_sub * 1e3)**2 * 1e9 * (r_grid_sub / r_1au)**2
+        elif polar_var == 'V':
+            # Velocity in km/s
+            plot_data_sub = v_sub
+        elif polar_var == 'n':
+            # Number density: convert kg/m^3 to protons/cm^3
+            m_p = 1.6726e-27  # Proton mass in kg
+            plot_data_sub = rho_sub / m_p / 1e6  # Convert to cm^-3
+        elif polar_var == 'T':
+            # Temperature in K
+            plot_data_sub = temp_sub
+        else:
+            raise ValueError(f"polar_var must be 'P_DYN', 'V', 'n', or 'T', got '{polar_var}'")
     else:
-        r_grid_sub = r_sub
-    
-    # Calculate data based on selected variable
-    if polar_var == 'P_DYN':
-        # Compute r^2 * P_dyn = 0.5 * r^2 * rho * v^2
-        # rho in kg/m^3, v in km/s -> convert v to m/s
-        # Result in Pascals, convert to nPa (1e9)
-        # Scale by (r/1AU)^2 to account for spherical expansion
-        plot_data_sub = 0.5 * rho_sub * (v_sub * 1e3)**2 * 1e9 * (r_grid_sub / r_1au)**2
-    elif polar_var == 'V':
-        # Velocity in km/s
         plot_data_sub = v_sub
-    elif polar_var == 'n':
-        # Number density: convert kg/m^3 to protons/cm^3
-        m_p = 1.6726e-27  # Proton mass in kg
-        plot_data_sub = rho_sub / m_p / 1e6  # Convert to cm^-3
-    elif polar_var == 'T':
-        # Temperature in K
-        plot_data_sub = temp_sub
-    else:
-        raise ValueError(f"polar_var must be 'P_DYN', 'V', 'n', or 'T', got '{polar_var}'")
     
     # Insert into full array
     if lon_arr.size != model.lon.size:
@@ -975,8 +981,11 @@ def plot_compressible_with_ts(model, time, save=False, tag='', fighandle=np.nan,
             
     if annotateplot:
         # Add model and time labels to main figure
-        model_label = (f"SURF-{_compressible_solver_label(model)} | "
-                       f"Lat: {model.latitude.to(u.deg).value:3.0f}°")
+        if is_compressible:
+            model_label = (f"SURF-{_compressible_solver_label(model)} | "
+                           f"Lat: {model.latitude.to(u.deg).value:3.0f}°")
+        else:
+            model_label = "SURF-HUXt"
         fig.text(0.02, 0.98, model_label, fontsize=16, fontweight='bold',
                 ha='left', va='top', transform=fig.transFigure)
         
@@ -994,72 +1003,82 @@ def plot_compressible_with_ts(model, time, save=False, tag='', fighandle=np.nan,
         model._cached_earth_timeseries = get_observer_timeseries(model, observer='Earth')
     
     ts = model._cached_earth_timeseries
-    
-    # Compute P_dyn from timeseries: P_dyn = 0.5 * rho * v^2
-    # n is in protons/cm³, convert to kg/m³
-    m_p = 1.6726e-27  # Proton mass in kg
-    rho_ts = ts['n'].values * m_p * 1e6  # Convert to kg/m³
-    v_ts = ts['vsw'].values * 1e3  # Convert km/s to m/s
-    pdyn_ts = 0.5 * rho_ts * v_ts**2 * 1e9  # Convert Pa to nPa
-    
-    # Create 4 horizontal subplots in right subfigure
-    axes_ts = subfigs[1].subplots(4, 1, sharex=True)
-    
-    # Current time for vertical line
     current_time = model.time_init + time
-    
-    # Plot 1: Velocity (left y-axis)
-    axes_ts[0].plot(ts['time'], ts['vsw'], 'k-', linewidth=1.5)
-    axes_ts[0].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2, alpha=0.7)
-    axes_ts[0].yaxis.tick_left()
-    axes_ts[0].yaxis.set_label_position('left')
-    axes_ts[0].grid(True, alpha=0.3)
-    axes_ts[0].set_ylim(200, 1000)
-    axes_ts[0].set_yticks(np.arange(200, 1001, 200))
-    axes_ts[0].text(0.98, 0.90, 'V [km/s]', transform=axes_ts[0].transAxes,
-                   fontsize=11, fontweight='bold', ha='right', va='top',
-                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-    
-    # Plot 2: Number Density (log scale, right y-axis)
-    axes_ts[1].semilogy(ts['time'], ts['n'], 'k-', linewidth=1.5)
-    axes_ts[1].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2, alpha=0.7)
-    axes_ts[1].yaxis.tick_right()
-    axes_ts[1].yaxis.set_label_position('right')
-    axes_ts[1].set_ylim(1e-1, 1e3)
-    axes_ts[1].set_yticks([1e-1, 1e0, 1e1, 1e2, 1e3])
-    axes_ts[1].minorticks_off()
-    axes_ts[1].grid(True, alpha=0.3, which='major')
-    axes_ts[1].text(0.98, 0.90, 'n [cm$^{-3}$]', transform=axes_ts[1].transAxes,
-                   fontsize=11, fontweight='bold', ha='right', va='top',
-                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-    
-    # Plot 3: Temperature (log scale, left y-axis)
-    axes_ts[2].semilogy(ts['time'], ts['T'], 'k-', linewidth=1.5)
-    axes_ts[2].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2, alpha=0.7)
-    axes_ts[2].yaxis.tick_left()
-    axes_ts[2].yaxis.set_label_position('left')
-    axes_ts[2].set_ylim(1e4, 1e7)
-    axes_ts[2].set_yticks([1e4, 1e5, 1e6, 1e7])
-    axes_ts[2].grid(True, alpha=0.3, which='both')
-    axes_ts[2].text(0.98, 0.90, 'T [K]', transform=axes_ts[2].transAxes,
-                   fontsize=11, fontweight='bold', ha='right', va='top',
-                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-    
-    # Plot 4: Dynamic Pressure (log scale, right y-axis)
-    axes_ts[3].semilogy(ts['time'], pdyn_ts, 'k-', linewidth=1.5)
-    axes_ts[3].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2, alpha=0.7)
-    axes_ts[3].yaxis.tick_right()
-    axes_ts[3].yaxis.set_label_position('right')
-    axes_ts[3].set_ylim(1e-2, 1e2)
-    axes_ts[3].set_yticks([1e-2, 1e-1, 1e0, 1e1, 1e2])
-    axes_ts[3].set_xlabel('Time', fontsize=12, fontweight='bold')
-    axes_ts[3].grid(True, alpha=0.3, which='both')
-    axes_ts[3].text(0.98, 0.90, 'P$_{dyn}$ [nPa]', transform=axes_ts[3].transAxes,
-                   fontsize=11, fontweight='bold', ha='right', va='top',
-                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    if is_compressible:
+        # Compute P_dyn from timeseries: P_dyn = 0.5 * rho * v^2
+        # n is in protons/cm³, convert to kg/m³
+        m_p = 1.6726e-27  # Proton mass in kg
+        rho_ts = ts['n'].values * m_p * 1e6  # Convert to kg/m³
+        v_ts = ts['vsw'].values * 1e3  # Convert km/s to m/s
+        pdyn_ts = 0.5 * rho_ts * v_ts**2 * 1e9  # Convert Pa to nPa
+
+        # Create 4 horizontal subplots in right subfigure
+        axes_ts = subfigs[1].subplots(4, 1, sharex=True)
+
+        # Plot 1: Velocity (left y-axis)
+        axes_ts[0].plot(ts['time'], ts['vsw'], 'k-', linewidth=1.5)
+        axes_ts[0].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
+                           alpha=0.7)
+        axes_ts[0].yaxis.tick_left()
+        axes_ts[0].yaxis.set_label_position('left')
+        axes_ts[0].grid(True, alpha=0.3)
+        axes_ts[0].set_ylim(200, 1000)
+        axes_ts[0].set_yticks(np.arange(200, 1001, 200))
+        axes_ts[0].text(0.98, 0.90, 'V [km/s]', transform=axes_ts[0].transAxes,
+                        fontsize=11, fontweight='bold', ha='right', va='top',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        # Plot 2: Number Density (log scale, right y-axis)
+        axes_ts[1].semilogy(ts['time'], ts['n'], 'k-', linewidth=1.5)
+        axes_ts[1].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
+                           alpha=0.7)
+        axes_ts[1].yaxis.tick_right()
+        axes_ts[1].yaxis.set_label_position('right')
+        axes_ts[1].set_ylim(1e-1, 1e3)
+        axes_ts[1].set_yticks([1e-1, 1e0, 1e1, 1e2, 1e3])
+        axes_ts[1].minorticks_off()
+        axes_ts[1].grid(True, alpha=0.3, which='major')
+        axes_ts[1].text(0.98, 0.90, 'n [cm$^{-3}$]', transform=axes_ts[1].transAxes,
+                        fontsize=11, fontweight='bold', ha='right', va='top',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        # Plot 3: Temperature (log scale, left y-axis)
+        axes_ts[2].semilogy(ts['time'], ts['T'], 'k-', linewidth=1.5)
+        axes_ts[2].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
+                           alpha=0.7)
+        axes_ts[2].yaxis.tick_left()
+        axes_ts[2].yaxis.set_label_position('left')
+        axes_ts[2].set_ylim(1e4, 1e7)
+        axes_ts[2].set_yticks([1e4, 1e5, 1e6, 1e7])
+        axes_ts[2].grid(True, alpha=0.3, which='both')
+        axes_ts[2].text(0.98, 0.90, 'T [K]', transform=axes_ts[2].transAxes,
+                        fontsize=11, fontweight='bold', ha='right', va='top',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        # Plot 4: Dynamic Pressure (log scale, right y-axis)
+        axes_ts[3].semilogy(ts['time'], pdyn_ts, 'k-', linewidth=1.5)
+        axes_ts[3].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
+                           alpha=0.7)
+        axes_ts[3].yaxis.tick_right()
+        axes_ts[3].yaxis.set_label_position('right')
+        axes_ts[3].set_ylim(1e-2, 1e2)
+        axes_ts[3].set_yticks([1e-2, 1e-1, 1e0, 1e1, 1e2])
+        axes_ts[3].set_xlabel('Time', fontsize=12, fontweight='bold')
+        axes_ts[3].grid(True, alpha=0.3, which='both')
+        axes_ts[3].text(0.98, 0.90, 'P$_{dyn}$ [nPa]', transform=axes_ts[3].transAxes,
+                        fontsize=11, fontweight='bold', ha='right', va='top',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    else:
+        ax_ts = subfigs[1].subplots(1, 1)
+        ax_ts.plot(ts['time'], ts['vsw'], 'k-', linewidth=1.5)
+        ax_ts.axvline(current_time.datetime, color='r', linestyle='--', linewidth=2, alpha=0.7)
+        ax_ts.set_ylim(200, 1000)
+        ax_ts.set_ylabel('V [km/s]')
+        ax_ts.grid(True, alpha=0.3)
+        axes_ts = np.array([ax_ts])
     
     # Format x-axis
-    import matplotlib.dates as mdates
     
     # Set tight x-limits to model time range
     t_start = ts['time'].iloc[0]
@@ -1072,23 +1091,26 @@ def plot_compressible_with_ts(model, time, save=False, tag='', fighandle=np.nan,
     
     if duration_days <= 7:
         # Daily ticks for short runs
-        axes_ts[3].xaxis.set_major_locator(mdates.DayLocator())
+        axes_ts[-1].xaxis.set_major_locator(mdates.DayLocator())
     else:
         # Auto locator for longer runs
-        axes_ts[3].xaxis.set_major_locator(mdates.AutoDateLocator())
+        axes_ts[-1].xaxis.set_major_locator(mdates.AutoDateLocator())
     
-    axes_ts[3].xaxis.set_major_formatter(mdates.DateFormatter('%d-%m'))
+    axes_ts[-1].xaxis.set_major_formatter(mdates.DateFormatter('%d-%m'))
     subfigs[1].autofmt_xdate(rotation=0, ha='center')
     
     # Add xlabel with year from the data
     year = t_start.year
-    axes_ts[3].set_xlabel(f'DD-MM of {year}', fontsize=12, fontweight='bold')
+    axes_ts[-1].set_xlabel(f'DD-MM of {year}', fontsize=12, fontweight='bold')
     
     # Add title to right subfigure
     subfigs[1].suptitle('Earth', fontsize=14, fontweight='bold', y=0.99)
     
     # Adjust spacing
-    subfigs[1].subplots_adjust(hspace=0.15, top=0.96, bottom=0.08)
+    if is_compressible:
+        subfigs[1].subplots_adjust(hspace=0.15, top=0.96, bottom=0.08)
+    else:
+        subfigs[1].subplots_adjust(top=0.96, bottom=0.12)
 
     if save:
         cr_num = np.int32(model.cr_num.value)
@@ -1101,80 +1123,83 @@ def plot_compressible_with_ts(model, time, save=False, tag='', fighandle=np.nan,
     return fig, subfigs, ax_polar, axes_ts
 
 
-def animate_compressible_with_ts(model, tag='', duration=10, fps=20, outputfilepath='', 
-                                 minimalplot=False, annotateplot=True, plot_rmax=None,
-                                 plotHCS=True, polar_var='P_DYN'):
+def animate_with_ts(model, tag='', duration=10, fps=20, outputfilepath='',
+                    minimalplot=False, annotateplot=True, plot_rmax=None,
+                    plotHCS=True, polar_var='V'):
     """
-    Animate the compressible solar wind solution with timeseries, and save as an MP4.
-    Creates an animation using plot_compressible_with_ts showing the polar plot and Earth
-    timeseries.
-    
+    Animate the solar wind solution with Earth time series, and save as MP4 (or GIF fallback).
+
     Args:
-        model: An instance of the SURF class with a completed compressible solution.
+        model: An instance of the SURF class with a completed solution.
         tag: String to append to the filename of the animation.
-        duration: the movie duration, in seconds
-        fps: frames per second
+        duration: the movie duration, in seconds.
+        fps: frames per second.
         outputfilepath: full path, including filename if output is to be saved anywhere other
-                        than SURF/figures
+                        than SURF/figures.
         minimalplot: Boolean, if True removes colorbar, planets, spacecraft, and labels.
-        annotateplot: Boolean, whether to include text and legends
+        annotateplot: Boolean, whether to include text and legends.
         plot_rmax: float (no units, but in Rs). Limit outer boundary to help with field lines
-                   during CMEs
-        plotHCS: Boolean, if True plots heliospheric current sheet coordinates
+                   during CMEs.
+        plotHCS: Boolean, if True plots heliospheric current sheet coordinates.
         polar_var: String specifying variable to plot in left polar subplot.
-                   Options: 'P_DYN' (default), 'V', 'n', 'T'
+               In incompressible mode only 'V' is supported.
     Returns:
-        None
+        pathlib.Path: Full path to the saved animation file.
     """
-    
-    if not hasattr(model, 'rho_grid') or not hasattr(model, 'temp_grid'):
-        raise ValueError("Model must be run with a compressible solver "
-                         "(solver='hydro' or 'hydro-pcm') to use animate_compressible_with_ts")
-    
-    interval = (1/fps)*1000
-    nframes = int(duration*1000/interval)
-    
-    exp_time = int(nframes*0.2)
+
+    interval = (1 / fps) * 1000
+    nframes = int(duration * 1000 / interval)
+
+    exp_time = int(nframes * 0.2)
     print('Rendering ' + str(nframes) + ' frames. Expected time: ' + str(exp_time) + ' secs')
-    
-    def make_frame(frame):
-        """
-        Produce the frame required for the animation.
-        Args:
-            frame: frame number of the movie
-        Returns:
-            frame: An image array for rendering to movie clip.
-        """
-        plt.clf()  # Clear the previous frame
-        
-        # Get the time index closest to this fraction of movie duration
-        i = np.int32((model.nt_out - 1) * frame / nframes)
-        plot_compressible_with_ts(model, model.time_out[i], save=False, tag=tag,
-                                  fighandle=fig, minimalplot=minimalplot, annotateplot=annotateplot,
-                                  plot_rmax=plot_rmax, plotHCS=plotHCS, polar_var=polar_var)
-        return frame
-    
+
     # Create a new figure with appropriate size for dual-panel layout
     fig = plt.figure(figsize=(18, 8))
-    
+
+    def make_frame(frame):
+        """Produce the frame required for the animation."""
+        plt.clf()  # Clear the previous frame
+
+        # Get the time index closest to this fraction of movie duration
+        i = np.int32((model.nt_out - 1) * frame / nframes)
+        plot_with_ts(model, model.time_out[i], save=False, tag=tag,
+                     fighandle=fig, minimalplot=minimalplot, annotateplot=annotateplot,
+                     plot_rmax=plot_rmax, plotHCS=plotHCS, polar_var=polar_var)
+        return frame
+
     # Create the animation
     ani = FuncAnimation(fig, make_frame, frames=range(nframes), interval=interval)
-    
+
     # Set up the save path
     if outputfilepath:
-        filepath = outputfilepath
+        filepath = Path(outputfilepath)
     else:
         cr_num = np.int32(model.cr_num.value)
         filename = (f"SURF_{_compressible_solver_tag(model)}_ts_CR{cr_num:03d}_"
                     f"{tag}_movie.mp4")
         figure_dir = get_figure_dir()
         filepath = figure_dir.joinpath(filename)
-    
+
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+
+    # Prefer MP4 via ffmpeg; gracefully fall back to GIF when ffmpeg is unavailable.
+    if filepath.suffix.lower() == '.gif':
+        writer = PillowWriter(fps=fps)
+    elif writers.is_available('ffmpeg'):
+        writer = FFMpegWriter(fps=fps)
+    else:
+        fallback_path = filepath.with_suffix('.gif')
+        print('ffmpeg writer unavailable; saving GIF instead at ' + str(fallback_path))
+        filepath = fallback_path
+        writer = PillowWriter(fps=fps)
+
     # Save the animation as a movie file
-    ani.save(filepath, writer='ffmpeg')
-    print('mp4 file written to ' + str(filepath))
-    
-    return
+    ani.save(str(filepath), writer=writer)
+    print('animation file written to ' + str(filepath))
+
+    return filepath
+
 
 
 def plot_radial(model, time, lon, save=False, tag=''):
