@@ -91,7 +91,8 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
     id_t = np.argmin(np.abs(model.time_out - time))
 
     # Get plotting data
-    lon_arr, dlon, nlon = s.longitude_grid()
+    nlon_full = getattr(model, 'nlon_full', s.surf_constants()['nlon'])
+    lon_arr, dlon, nlon = s.longitude_grid(nlon=nlon_full)
     lon, radius = np.meshgrid(lon_arr.value, model.r.value)
 
     orig_cmap = mpl.cm.viridis
@@ -109,7 +110,7 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
         v = np.zeros((model.nr, nlon)) * np.nan
         if model.lon.size != 1:
             for i, lo in enumerate(model.lon):
-                id_match = np.argwhere(lon_arr == lo)[0][0]
+                id_match = np.argmin(np.abs(lon_arr - lo))
                 v[:, id_match] = v_sub[:, i]
         else:
             print('Warning: Trying to contour single radial solution will fail.')
@@ -401,7 +402,8 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
     id_t = np.argmin(np.abs(model.time_out - time))
 
     # Get plotting data
-    lon_arr, dlon, nlon = s.longitude_grid()
+    nlon_full = getattr(model, 'nlon_full', s.surf_constants()['nlon'])
+    lon_arr, dlon, nlon = s.longitude_grid(nlon=nlon_full)
     lon, rad = np.meshgrid(lon_arr.value, model.r.value)
 
     # Prepare data arrays for velocity, density, and temperature
@@ -420,7 +422,7 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
         temp = np.zeros((model.nr, nlon)) * np.nan
         if model.lon.size != 1:
             for i, lo in enumerate(model.lon):
-                id_match = np.argwhere(lon_arr == lo)[0][0]
+                id_match = np.argmin(np.abs(lon_arr - lo))
                 v[:, id_match] = v_sub[:, i]
                 n[:, id_match] = n_sub[:, i]
                 temp[:, id_match] = temp_sub[:, i]
@@ -759,7 +761,8 @@ def plot_compressible_with_ts(model, time, save=False, tag='', fighandle=np.nan,
     id_t = np.argmin(np.abs(model.time_out - time))
 
     # Get plotting data
-    lon_arr, dlon, nlon = s.longitude_grid()
+    nlon_full = getattr(model, 'nlon_full', s.surf_constants()['nlon'])
+    lon_arr, dlon, nlon = s.longitude_grid(nlon=nlon_full)
     lon, rad = np.meshgrid(lon_arr.value, model.r.value)
 
     # Prepare data arrays
@@ -802,7 +805,7 @@ def plot_compressible_with_ts(model, time, save=False, tag='', fighandle=np.nan,
         plot_data = np.zeros((model.nr, nlon)) * np.nan
         if model.lon.size != 1:
             for i, lo in enumerate(model.lon):
-                id_match = np.argwhere(lon_arr == lo)[0][0]
+                id_match = np.argmin(np.abs(lon_arr - lo))
                 plot_data[:, id_match] = plot_data_sub[:, i]
         else:
             print('Warning: Trying to contour single radial solution will fail.')
@@ -2082,7 +2085,8 @@ def plot_bpol(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan
     id_t = np.argmin(np.abs(model.time_out - time))
 
     # Get plotting data
-    lon_arr, dlon, nlon = s.longitude_grid()
+    nlon_full = getattr(model, 'nlon_full', s.surf_constants()['nlon'])
+    lon_arr, dlon, nlon = s.longitude_grid(nlon=nlon_full)
     lon, rad = np.meshgrid(lon_arr.value, model.r.value)
     mymap = mpl.cm.PuOr
     v_sub = model.b_grid[id_t, :, :].copy()
@@ -2096,7 +2100,7 @@ def plot_bpol(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan
         v = np.zeros((model.nr, nlon)) * np.nan
         if model.lon.size != 1:
             for i, lo in enumerate(model.lon):
-                id_match = np.argwhere(lon_arr == lo)[0][0]
+                id_match = np.argmin(np.abs(lon_arr - lo))
                 v[:, id_match] = v_sub[:, i]
         else:
             print('Warning: Trying to contour single radial solution will fail.')

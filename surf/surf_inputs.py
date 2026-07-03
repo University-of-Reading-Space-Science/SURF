@@ -1255,7 +1255,9 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
                                 r_max=1290 * solRad, dt_scale=50, latitude=0 * deg,
                                 frame='sidereal', lon_start=0 * rad, lon_stop=2 * np.pi * rad,
                                 lon_out=np.nan, bgrid_Carr=np.nan, rhogrid_Carr=np.nan,
-                                tempgrid_Carr=np.nan, track_cmes=True, solver='huxt'):
+                                tempgrid_Carr=np.nan, track_cmes=True, solver='huxt',
+                                nlon=128, dr=1.5 * solRad,
+                                v_max=3000 * km_per_s):
     """
     A function to compute an explicitly time dependent inner boundary condition for HUXt,
     rather than due to
@@ -1277,11 +1279,28 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
         bgrid_carr: input magnetic polarity as a function of Carrington longitude and time
         track_cmes: Bool, whether to track CMEs through the simulation.
         solver: String, numerical solver. Valid options are 'huxt', 'hydro', and 'hydro-pcm'.
+        nlon: Number of equally spaced longitudes in the full longitude grid.
+              Must match the longitude dimension of the supplied boundary maps.
+        dr: Radial grid spacing.
+        v_max: Maximum speed used with dr to set the CFL time step.
     returns:
         model: A HUXt instance initialised with the fully time dependent boundary conditions.
     """
-    all_lons, dlon, nlon = s.longitude_grid()
-    assert len(vgrid_Carr[:, 0]) == nlon
+    all_lons, dlon, nlon = s.longitude_grid(nlon=nlon)
+    if np.shape(vgrid_Carr)[0] != nlon:
+        raise ValueError(
+            f"vgrid_Carr has {np.shape(vgrid_Carr)[0]} longitude cells, "
+            f"but nlon={nlon}. Generate the boundary data at the requested "
+            "resolution (for example, generate_vCarr_from_OMNI(..., "
+            f"nlon={nlon})).")
+    for name, boundary in (
+            ('bgrid_Carr', bgrid_Carr),
+            ('rhogrid_Carr', rhogrid_Carr),
+            ('tempgrid_Carr', tempgrid_Carr)):
+        if np.ndim(boundary) > 0 and np.shape(boundary)[0] != nlon:
+            raise ValueError(
+                f"{name} has {np.shape(boundary)[0]} longitude cells, "
+                f"but nlon={nlon}.")
     s.validate_solver_name(solver)
 
     # see if br boundary conditions are supplied
@@ -1311,7 +1330,7 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
                        simtime=simtime, dt_scale=dt_scale,
                        cr_num=cr, cr_lon_init=cr_lon_init,
                        frame='synodic', track_cmes=track_cmes,
-                       solver=solver)
+                       solver=solver, nlon=nlon, dr=dr, v_max=v_max)
     else:
         model = s.SURF(v_boundary=np.ones(nlon) * 400 * km_per_s,
                        lon_start=lon_start, lon_stop=lon_stop,
@@ -1320,7 +1339,7 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
                        simtime=simtime, dt_scale=dt_scale,
                        cr_num=cr, cr_lon_init=cr_lon_init,
                        frame=frame, track_cmes=track_cmes,
-                       solver=solver)
+                       solver=solver, nlon=nlon, dr=dr, v_max=v_max)
 
     # extract the values from the model class
     buffertime = model.buffertime  # standard buffer time seems insufficient
@@ -1423,7 +1442,7 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
 
     # Build kwargs for HUXt model instantiation
     surf_kwargs = {
-        'v_boundary': np.ones(128) * 400 * km_per_s,
+        'v_boundary': np.ones(nlon) * 400 * km_per_s,
         'simtime': simtime,
         'cr_num': cr,
         'cr_lon_init': cr_lon_init,
@@ -1434,7 +1453,10 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
         'input_v_ts': input_ambient_ts,
         'input_t_ts': model_time,
         'track_cmes': track_cmes,
-        'solver': solver
+        'solver': solver,
+        'nlon': nlon,
+        'dr': dr,
+        'v_max': v_max
     }
     
     # Add optional boundary condition time series

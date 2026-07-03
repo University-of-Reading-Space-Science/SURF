@@ -81,7 +81,7 @@ def get_omni(starttime, endtime):
     return omni
 
 
-def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, dt=1 * u.day,
+def generate_vCarr_from_OMNI(runstart, runend, nlon=None, omni_input=None, dt=1 * u.day,
                              ref_r=215 * u.solRad, corot_type='both', compressible=False):
     """
     A function to download OMNI data and generate V_carr and time_grid for use with
@@ -90,7 +90,7 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, 
     Args:
         runstart: Start time as a datetime
         runend: End time as a datetime
-        nlon_grid: Int. If none specified, will be set to the current SURF value (usually 128)
+        nlon: Int. If none specified, will be set to the current SURF value (usually 128)
         omni_input: Optional input for supplying the OMNI data. If left as None, it will be
                     downloaded at runtime.
         dt: time resolution, in days is 1*u.day.
@@ -112,10 +112,10 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, 
     assert corot_type == 'both' or corot_type == 'back' or corot_type == 'forward'
 
     # set the default longitude grid, check specified value
-    all_lons, dlon, nlon = s.longitude_grid()
-    if nlon_grid is None:
-        nlon_grid = nlon
-    if not (nlon_grid == nlon):
+    all_lons, dlon, default_nlon = s.longitude_grid()
+    if nlon is None:
+        nlon = default_nlon
+    if not (nlon == default_nlon):
         print('Warning: vCarr generated for different longitude resolution than current SURF '
               'default')
 
@@ -197,27 +197,27 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon_grid=None, omni_input=None, 
                                       omni_temp['T'])
 
     # compute the longitudinal and time grids
-    dphi_grid = 360 / nlon_grid
+    dphi_grid = 360 / nlon
     lon_grid = np.arange(dphi_grid / 2, 360.1 - dphi_grid / 2, dphi_grid) * np.pi / 180 * u.rad
     dt = dt.to(u.day).value
     time_grid = np.arange(smjd, fmjd + dt / 2, dt)
 
-    vgrid_carr_recon_back = np.ones((nlon_grid, len(time_grid))) * np.nan
-    vgrid_carr_recon_forward = np.ones((nlon_grid, len(time_grid))) * np.nan
-    vgrid_carr_recon_both = np.ones((nlon_grid, len(time_grid))) * np.nan
+    vgrid_carr_recon_back = np.ones((nlon, len(time_grid))) * np.nan
+    vgrid_carr_recon_forward = np.ones((nlon, len(time_grid))) * np.nan
+    vgrid_carr_recon_both = np.ones((nlon, len(time_grid))) * np.nan
 
-    bgrid_carr_recon_back = np.ones((nlon_grid, len(time_grid))) * np.nan
-    bgrid_carr_recon_forward = np.ones((nlon_grid, len(time_grid))) * np.nan
-    bgrid_carr_recon_both = np.ones((nlon_grid, len(time_grid))) * np.nan
+    bgrid_carr_recon_back = np.ones((nlon, len(time_grid))) * np.nan
+    bgrid_carr_recon_forward = np.ones((nlon, len(time_grid))) * np.nan
+    bgrid_carr_recon_both = np.ones((nlon, len(time_grid))) * np.nan
     
     if compressible:
-        rhogrid_carr_recon_back = np.ones((nlon_grid, len(time_grid))) * np.nan
-        rhogrid_carr_recon_forward = np.ones((nlon_grid, len(time_grid))) * np.nan
-        rhogrid_carr_recon_both = np.ones((nlon_grid, len(time_grid))) * np.nan
+        rhogrid_carr_recon_back = np.ones((nlon, len(time_grid))) * np.nan
+        rhogrid_carr_recon_forward = np.ones((nlon, len(time_grid))) * np.nan
+        rhogrid_carr_recon_both = np.ones((nlon, len(time_grid))) * np.nan
         
-        tgrid_carr_recon_back = np.ones((nlon_grid, len(time_grid))) * np.nan
-        tgrid_carr_recon_forward = np.ones((nlon_grid, len(time_grid))) * np.nan
-        tgrid_carr_recon_both = np.ones((nlon_grid, len(time_grid))) * np.nan
+        tgrid_carr_recon_back = np.ones((nlon, len(time_grid))) * np.nan
+        tgrid_carr_recon_forward = np.ones((nlon, len(time_grid))) * np.nan
+        tgrid_carr_recon_both = np.ones((nlon, len(time_grid))) * np.nan
 
     for t in range(0, len(time_grid)):
         # find nearest time and current Carrington longitude
@@ -1014,9 +1014,33 @@ def correct_inner_vlon_cnn_onnx(v_inner_array, data_dir=None):
     return Y_pred.T
 
 
+def _resample_longitude_grid(values, nlon):
+    """Periodically resample longitude-first boundary data to ``nlon`` points."""
+    if np.ndim(values) == 0 or np.shape(values)[0] == nlon:
+        return values
+
+    unit = getattr(values, 'unit', None)
+    data = values.value if unit is not None else np.asarray(values)
+    old_nlon = data.shape[0]
+    old_lons = (np.arange(old_nlon) + 0.5) * 2 * np.pi / old_nlon
+    new_lons = (np.arange(nlon) + 0.5) * 2 * np.pi / nlon
+
+    if data.ndim == 1:
+        result = np.interp(new_lons, old_lons, data, period=2 * np.pi)
+    else:
+        result = np.empty(
+            (nlon,) + data.shape[1:], dtype=np.result_type(data.dtype, float))
+        for index in np.ndindex(data.shape[1:]):
+            result[(slice(None),) + index] = np.interp(
+                new_lons, old_lons, data[(slice(None),) + index],
+                period=2 * np.pi)
+    return result * unit if unit is not None else result
+
+
 def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u.solRad,
                       dt_scale=4, omni_input=None, buffertime=5*u.day, run_2d=False,
-                      solver='huxt'):
+                      solver='huxt', nlon=128, dr=1.5*u.solRad,
+                      v_max=3000*u.km/u.s):
     """
     Create a SURF solar wind forecast initialized from in-situ OMNI observations.
     
@@ -1056,6 +1080,12 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
         - 'huxt' (default): first-order HUXt advection solver
         - 'hydro': second-order compressible HLLC+PLM solver
         - 'hydro-pcm': compressible HLLC+PCM solver
+    nlon : int, optional
+        Number of equally spaced longitudes in the full longitude grid.
+    dr : astropy.units.Quantity, optional
+        Radial grid spacing.
+    v_max : astropy.units.Quantity, optional
+        Maximum speed used with dr to set the CFL time step.
 
     
     Returns
@@ -1154,7 +1184,8 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     
     
     # interp to typical SURF resolution
-    dphi = 2*np.pi/s.surf_constants()['nlong']
+    cnn_nlon = 128
+    dphi = 2*np.pi/cnn_nlon
     longs = np.arange(dphi/2, 2*np.pi, dphi)
     vlon = np.interp(longs, omni_lon['lon_carr'], vcarr_rmin_back)
     blon = np.interp(longs, omni_lon['lon_carr'], bcarr_rmin_back) \
@@ -1162,6 +1193,9 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     
     # apply the CNN to the backmapped data
     vcarr_rmin_back_cnn = correct_inner_vlon_cnn_onnx(vlon.reshape(-1, 1))
+    vcarr_rmin_back_cnn = _resample_longitude_grid(vcarr_rmin_back_cnn, nlon)
+    if blon is not None:
+        blon = _resample_longitude_grid(blon, nlon)
 
     #apply some smoothing to the CNN output
     if _is_compressible_solver(solver):
@@ -1183,22 +1217,25 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
         model = s.SURF(v_boundary=vcarr_rmin_back_cnn.flatten() * u.km/u.s,
                       b_boundary=blon, 
                       cr_num=cr, cr_lon_init=cr_lon_init,
-                      simtime=simtime, r_min=rmin, r_max=rmax, 
-                      dt_scale=dt_scale, latitude=Elat, frame='synodic', 
-                      track_cmes=False, solver=solver)
+                      simtime=simtime, r_min=rmin, r_max=rmax,
+                      dt_scale=dt_scale, latitude=Elat, frame='synodic',
+                      track_cmes=False, solver=solver, nlon=nlon, dr=dr,
+                      v_max=v_max)
     else:
         model = s.SURF(v_boundary=vcarr_rmin_back_cnn.flatten() * u.km/u.s,
                       b_boundary=blon, 
                       cr_num=cr, cr_lon_init=cr_lon_init,
-                      simtime=simtime, r_min=rmin, r_max=rmax, 
-                      dt_scale=dt_scale, latitude=Elat, frame='synodic', 
-                      track_cmes=False, lon_out=0*u.rad, solver=solver)
+                      simtime=simtime, r_min=rmin, r_max=rmax,
+                      dt_scale=dt_scale, latitude=Elat, frame='synodic',
+                      track_cmes=False, lon_out=0*u.rad, solver=solver,
+                      nlon=nlon, dr=dr, v_max=v_max)
     return model
 
 
 def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u.solRad,
                             dt_scale=4, dt=1*u.day, omni_input=None, run_2d=False, solver='huxt',
-                            rho_source='speed', temp_source='speed'):
+                            rho_source='speed', temp_source='speed', nlon=128,
+                            dr=1.5*u.solRad, v_max=3000*u.km/u.s):
     """
     Create a SURF solar wind reconstruction using OMNI observations over a time interval.
     
@@ -1219,6 +1256,12 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     dt_scale : int, optional
         Time step scaling factor for SURF. Higher values = faster but less
         accurate. Default is 4.
+    nlon : int, optional
+        Number of equally spaced longitudes in the full longitude grid.
+    dr : astropy.units.Quantity, optional
+        Radial grid spacing.
+    v_max : astropy.units.Quantity, optional
+        Maximum speed used with dr to set the CFL time step.
     dt : astropy.units.Quantity, optional
         Time resolution for the Carrington map, in days. Default is 1 day.
     omni_input : pandas.DataFrame, optional
@@ -1299,7 +1342,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     if compressible:
         time_grid, vcarr_215, bcarr_215, rhocarr_215, tcarr_215 = generate_vCarr_from_OMNI(
             start_time, end_time, 
-            omni_input=omni_input, 
+            omni_input=omni_input,
             dt=dt,
             corot_type='both',
             compressible=True
@@ -1307,7 +1350,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     else:
         time_grid, vcarr_215, bcarr_215 = generate_vCarr_from_OMNI(
             start_time, end_time, 
-            omni_input=omni_input, 
+            omni_input=omni_input,
             dt=dt,
             corot_type='both',
             compressible=False
@@ -1423,6 +1466,11 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
             tempgrid_carr = tempgrid_carr_rmin * u.K
         else:
             raise ValueError(f"Unknown temp_source: {temp_source}. Use 'speed' or 'omni'.")
+
+    vcarr_rmin_cnn = _resample_longitude_grid(vcarr_rmin_cnn, nlon)
+    bcarr_rmin = _resample_longitude_grid(bcarr_rmin, nlon)
+    rhogrid_carr = _resample_longitude_grid(rhogrid_carr, nlon)
+    tempgrid_carr = _resample_longitude_grid(tempgrid_carr, nlon)
     
     # Calculate simulation time from start to end
     simtime = (Time(end_time).mjd - Time(start_time).mjd) * u.day
@@ -1445,7 +1493,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
             dt_scale=dt_scale,
             latitude=Elat,
             frame='synodic',
-            solver=solver, track_cmes=False
+            solver=solver, track_cmes=False, nlon=nlon, dr=dr, v_max=v_max
         )
     else:
         model = sin.set_time_dependent_boundary(
@@ -1462,14 +1510,15 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
             latitude=Elat,
             frame='synodic',
             lon_out=0*u.rad,
-            solver=solver, track_cmes=False
+            solver=solver, track_cmes=False, nlon=nlon, dr=dr, v_max=v_max
         )
     
     return model
 
 
 def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u.day,
-                     omni_input=None, run_2d=False, solver='hydro'):
+                     omni_input=None, run_2d=False, solver='hydro', nlon=128,
+                     dr=1.5*u.solRad, v_max=3000*u.km/u.s):
     """
     Create a SURF solar wind simulation starting from ~1 AU using OMNI observations.
 
@@ -1487,6 +1536,12 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
         Outer boundary radius. Default is 230 solar radii.
     dt_scale : int, optional
         Time step scaling factor for SURF. Default is 4.
+    nlon : int, optional
+        Number of equally spaced longitudes in the full longitude grid.
+    dr : astropy.units.Quantity, optional
+        Radial grid spacing.
+    v_max : astropy.units.Quantity, optional
+        Maximum speed used with dr to set the CFL time step.
     dt : astropy.units.Quantity, optional
         Time resolution for the Carrington map. Default is 1 day.
     omni_input : pandas.DataFrame, optional
@@ -1524,6 +1579,7 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
     if need_compressible:
         time_grid, vcarr_215, bcarr_215, rhocarr_215, tcarr_215 = generate_vCarr_from_OMNI(
             start_time, end_time,
+            nlon=nlon,
             omni_input=omni_input,
             dt=dt,
             corot_type='both',
@@ -1532,6 +1588,7 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
     else:
         time_grid, vcarr_215, bcarr_215 = generate_vCarr_from_OMNI(
             start_time, end_time,
+            nlon=nlon,
             omni_input=omni_input,
             dt=dt,
             corot_type='both',
@@ -1571,7 +1628,7 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
             dt_scale=dt_scale,
             latitude=Elat,
             frame='synodic',
-            solver=solver, track_cmes=False
+            solver=solver, track_cmes=False, nlon=nlon, dr=dr, v_max=v_max
         )
     else:
         model = sin.set_time_dependent_boundary(
@@ -1588,7 +1645,7 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
             latitude=Elat,
             frame='synodic',
             lon_out=0*u.rad,
-            solver=solver, track_cmes=False
+            solver=solver, track_cmes=False, nlon=nlon, dr=dr, v_max=v_max
         )
 
     return model

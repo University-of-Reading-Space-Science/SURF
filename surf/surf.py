@@ -602,7 +602,8 @@ class SURF:
                  input_v_ts=np.nan * km_per_s, input_b_ts=np.nan,
                  input_rho_ts=np.nan * kg_per_cube, input_temp_ts=np.nan * kelvin,
                  input_iscme_ts=np.nan, input_t_ts=np.nan * seconds,
-                 track_cmes=True, solver='huxt', parallel=False):
+                 track_cmes=True, solver='huxt', parallel=False,
+                 nlon=128, dr=1.5 * solRad, v_max=3000 * km_per_s):
         """
         Initialise the SURF model instance.
 
@@ -625,6 +626,9 @@ class SURF:
             simtime: Duration of the simulation window, in days.
             dt_scale: Integer scaling number to set the model output time step relative to the
                       models CFL time.
+            nlon: Number of equally spaced longitudes in the full longitude grid.
+            dr: Radial grid spacing.
+            v_max: Maximum model speed, used with dr to set the CFL time step.
             frame: string determining the rotation frame for the model
             input_v_ts: Time series of inner boundary V conditions. For initialising SURF with,
                         for example, in-situ observations from L1. If used as keyword input
@@ -703,8 +707,14 @@ class SURF:
         elif frame == 'sidereal':
             self.rotation_period = constants['sidereal_period']
 
-        self.v_max = constants['v_max']
-        self.nlong = constants['nlong']
+        if not isinstance(nlon, (int, np.integer)) or nlon <= 0:
+            raise ValueError("nlon must be a positive integer")
+        if dr <= 0 * solRad:
+            raise ValueError("dr must be positive")
+        if v_max <= 0 * km_per_s:
+            raise ValueError("v_max must be positive")
+        self.v_max = v_max.to(km_per_s)
+        self.nlon_full = int(nlon)
         del constants
 
         # Extract paths of figure and data directories
@@ -715,11 +725,12 @@ class SURF:
         self._ephemeris_file = dirs['ephemeris']
 
         # Setup radial coordinates - in solar radius
-        self.r, self.dr, self.rrel, self.nr = radial_grid(r_min=r_min, r_max=r_max)
+        self.r, self.dr, self.rrel, self.nr = radial_grid(
+            r_min=r_min, r_max=r_max, dr=dr)
 
         # Setup longitude coordinates - in radians.
-        self.lon, self.dlon, self.nlon = longitude_grid(lon_out=lon_out, lon_start=lon_start,
-                                                        lon_stop=lon_stop)
+        self.lon, self.dlon, self.nlon = longitude_grid(
+            lon_out=lon_out, lon_start=lon_start, lon_stop=lon_stop, nlon=self.nlon_full)
 
         if (self.frame == 'sidereal') & (self.nlon == 1):
             print("Warning: SURF configured for a 1-D run in the sidereal frame. "
@@ -732,7 +743,8 @@ class SURF:
         # Setup time coords - in seconds
         self.simtime = simtime.to('s')  # number of days to simulate (in seconds)
         self.dt_scale = dt_scale * u.dimensionless_unscaled
-        time_grid_dict = time_grid(self.simtime, self.dt_scale)
+        time_grid_dict = time_grid(
+            self.simtime, self.dt_scale, dr=self.dr, v_max=self.v_max)
         self.dtdr = time_grid_dict['dtdr']
         self.Nt = time_grid_dict['Nt']
         self.dt = time_grid_dict['dt']
@@ -745,8 +757,8 @@ class SURF:
         # Establish the Carrington (time stationary) speed boundary condition 
         if np.all(np.isnan(v_boundary)):
             print("Warning: No V boundary conditions supplied. Using default")
-            self.v_boundary = 400 * np.ones(self.nlong) * self.kms
-            lon_boundary, dlon, nlon = longitude_grid()
+            self.v_boundary = 400 * np.ones(self.nlon_full) * self.kms
+            lon_boundary, dlon, nlon = longitude_grid(nlon=self.nlon_full)
             self.v_boundary_lons = lon_boundary * rad
         elif not np.all(np.isnan(v_boundary)):
             # check that the implicit time step from vlong is not comparable to the SURF timestep
@@ -950,7 +962,7 @@ class SURF:
         if not np.all(np.isnan(input_v_ts)):
 
             # find the required longitudes
-            full_lon_grid, dlon, nlon = longitude_grid()
+            full_lon_grid, dlon, nlon = longitude_grid(nlon=self.nlon_full)
             xy, x_ind, y_ind = np.intersect1d(self.lon.value, full_lon_grid.value,
                                               return_indices=True)
 
@@ -1642,8 +1654,7 @@ class SURF:
 
         # check CME speeds aren't so fast they will butt up agains the CFL condition.
         if len(self.cmes) > 0:
-            constants = surf_constants()
-            v_max = constants['v_max']
+            v_max = self.v_max
             for cme in self.cmes:
                 if cme.v >= v_max:
                     raise ValueError(f'CME speed {cme.v} is larger than allowed for CFL limit'
@@ -1971,7 +1982,8 @@ class SURF:
                             out_file.flush()
 
         # Loop over the attributes of model instance and save select keys/attributes.
-        keys = ['cr_num', 'cr_lon_init', 'simtime', 'dt', 'v_max', 'r_accel', 'alpha',
+        keys = ['cr_num', 'cr_lon_init', 'simtime', 'dt', 'v_max', 'nlon_full',
+                'r_accel', 'alpha',
                 'dt_scale', 'time_out', 'dt_out', 'r', 'dr', 'lon', 'dlon', 'r_grid', 'lon_grid',
                 'v_grid', 'latitude', 'v_boundary', '_v_boundary_init_', 'cme_particles_r',
                 'cme_particles_v', 'streak_particles_r', 'streak_lon_r0', 'hcs_particles_r',
@@ -1999,6 +2011,9 @@ class SURF:
                 elif isinstance(v, bool):
                     dset = out_file.create_dataset(k, data=int(v))
                     dset.attrs['unit'] = "bool"
+                elif np.isscalar(v):
+                    dset = out_file.create_dataset(k, data=v)
+                    dset.attrs['unit'] = u.dimensionless_unscaled.to_string()
 
                 # Add on the dimensions of the spatial grids
                 if k in ['r_grid', 'lon_grid']:
@@ -2087,7 +2102,9 @@ class SURF3d:
                  v_map_long=np.nan * rad, cr_num=np.nan, cr_lon_init=360.0 * deg,
                  latitude_max=30 * deg, latitude_min=-30 * deg, r_min=30 * solRad,
                  r_max=240 * solRad, lon_out=np.nan * rad, lon_start=np.nan * rad,
-                 lon_stop=np.nan * rad, simtime=5.0 * day, dt_scale=1.0):
+                 lon_stop=np.nan * rad, simtime=5.0 * day, dt_scale=1.0,
+                 nlon=128, nlat=45, dr=1.5 * solRad,
+                 v_max=3000 * km_per_s):
         """
         Initialise the SURF3D instance.
 
@@ -2113,6 +2130,10 @@ class SURF3d:
             simtime: Duration of the simulation window, in days.
             dt_scale: Integer scaling number to set the model output time step relative to the
                       models CFL time.
+            nlon: Number of equally spaced longitudes in the full longitude grid.
+            nlat: Number of latitude bins in the full sine-latitude grid.
+            dr: Radial grid spacing.
+            v_max: Maximum model speed, used with dr to set the CFL time step.
             cme_expansion: Boolean, whether CMEs have a declining velocity profile at the inner
                            boundary
         """
@@ -2120,13 +2141,15 @@ class SURF3d:
         # Define latitude grid
         self.latitude_min = latitude_min.to(rad)
         self.latitude_max = latitude_max.to(rad)
-        self.lat, self.nlat = latitude_grid(self.latitude_min, self.latitude_max)
+        self.lat, self.nlat = latitude_grid(
+            self.latitude_min, self.latitude_max, nlat=nlat)
 
         assert len(v_map_lat) == len(v_map[:, 1])
         assert len(v_map_long) == len(v_map[1, :])
 
         # Get the SURF longitudinal grid
-        longs, dlon, nlon = longitude_grid(lon_start=0.0 * rad, lon_stop=2 * np.pi * rad)
+        longs, dlon, nlon = longitude_grid(
+            lon_start=0.0 * rad, lon_stop=2 * np.pi * rad, nlon=nlon)
 
         # Extract the vr value at the given latitudes
         self.v_in = []
@@ -2146,7 +2169,8 @@ class SURF3d:
                                      cr_num=cr_num, cr_lon_init=cr_lon_init,
                                      r_min=r_min, r_max=r_max,
                                      lon_out=lon_out, lon_start=lon_start, lon_stop=lon_stop,
-                                     simtime=simtime, dt_scale=dt_scale))
+                                     simtime=simtime, dt_scale=dt_scale,
+                                     nlon=nlon, dr=dr, v_max=v_max))
         return
 
     def solve(self, cme_list):
@@ -2169,7 +2193,7 @@ def surf_constants():
     Returns:
         constants: A dictionary of constants that configure SURF
     """
-    nlong = 128  # Number of longitude bins for a full longitude grid [128]
+    nlon = 128  # Number of equally spaced longitudes in the full grid [128]
     dr = 1.5 * solRad  # Radial grid step. With v_max, this sets the model time step [1.5 Rs]
     nlat = 45  # Number of latitude bins for a full latitude grid [45]
     v_max = 3000 * km_per_s  # Maximum expected solar wind speed. Sets timestep [3000 km/s]
@@ -2196,7 +2220,7 @@ def surf_constants():
                  'gamma': gamma,
                  'r_accel': r_accel, 'synodic_period': synodic_period,
                  'sidereal_period': sidereal_period, 'v_max': v_max,
-                 'dr': dr, 'nlong': nlong, 'nlat': nlat,
+                 'dr': dr, 'nlon': nlon, 'nlong': nlon, 'nlat': nlat,
                  'v_sw_1au': v_sw_1au, 'n_sw_1au': n_sw_1au, 'T_sw_1au': T_sw_1au,
                  'empirical_n_adjust_amp': empirical_n_adjust_amp,
                  'empirical_T_adjust_amp': empirical_T_adjust_amp}
@@ -2252,7 +2276,8 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * rad
     n_chunks = int(np.ceil((total_simtime / chunk_simtime).decompose().value))
     if n_chunks > 1:
         last_chunk_len = total_simtime - (n_chunks - 1) * chunk_simtime
-        tg_last = time_grid(last_chunk_len, model.dt_scale)
+        tg_last = time_grid(
+            last_chunk_len, model.dt_scale, dr=model.dr, v_max=model.v_max)
         if tg_last['nt_out'] == 0:
             n_chunks -= 1
     # Add 1 for a dedicated spin-up chunk (simtime=0, buffer only)
@@ -2361,7 +2386,8 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * rad
         else:
             # HUXt-family: recompute from time_grid (matches solve_radial's
             # internal iter_count-based output timing)
-            tg = time_grid(model.simtime, model.dt_scale)
+            tg = time_grid(
+                model.simtime, model.dt_scale, dr=model.dr, v_max=model.v_max)
             model.nt_out = tg['nt_out']
             model.dt_out = tg['dt_out']
             model.time_out = tg['time_out']
@@ -2796,13 +2822,14 @@ def get_density_temperature_from_velocity(v_value, r_target, gamma=1.5, cache_id
     return n_interp, T_interp
 
 
-def radial_grid(r_min=30.0 * solRad, r_max=240. * solRad):
+def radial_grid(r_min=30.0 * solRad, r_max=240. * solRad, dr=None):
     """
     Define the radial grid of the SURF model. Step size is fixed, but inner and outer boundary may
     be specified.
     Args:
         r_min: The heliocentric distance of the inner radial boundary.
         r_max: The heliocentric distance of the outer radial boundary.
+        dr: Radial grid spacing. Uses the legacy SURF default if omitted.
     Returns:
         r: An array of radial coordinates, relative to Sun center, in solar radii.
         dr: The radial grid step value, in solar radii.
@@ -2810,20 +2837,19 @@ def radial_grid(r_min=30.0 * solRad, r_max=240. * solRad):
         nr: The number of radial grid steps.
     """
     if r_min >= r_max:
-        print("Warning, r_min cannot be less than r_max. Defaulting to r_min=30rs and r_max=240rs")
-        r_min = 30 * solRad
+        print("Warning, r_min cannot be less than r_max. Defaulting to r_min=21.5rs and r_max=240rs")
+        r_min = 21.5 * solRad
         r_max = 240 * solRad
 
     if r_min < 2.0 * solRad:
         print("Warning, r_min should not be less than 5.0rs. Defaulting to 5.0rs")
         r_min = 5.0 * solRad
 
-    if r_max > 10000 * solRad:
-        print("Warning, r_max should not be more than 400rs. Defaulting to 400rs")
-        r_max = 400 * solRad
-
-    constants = surf_constants()
-    dr = constants['dr']
+    if dr is None:
+        dr = surf_constants()['dr']
+    if dr <= 0 * solRad:
+        raise ValueError("dr must be positive")
+    dr = dr.to(solRad)
     r = np.arange(r_min.value, r_max.value + dr.value, dr.value)
     r = r * dr.unit
     nr = r.size
@@ -2832,13 +2858,15 @@ def radial_grid(r_min=30.0 * solRad, r_max=240. * solRad):
     return r, dr, rrel, nr
 
 
-def longitude_grid(lon_out=np.nan * rad, lon_start=np.nan * rad, lon_stop=np.nan * rad):
+def longitude_grid(lon_out=np.nan * rad, lon_start=np.nan * rad,
+                   lon_stop=np.nan * rad, nlon=None):
     """
     Define the longitude grid of the SURF model.
     Args:
         lon_out: A single output longitude.
         lon_start: The first longitude (in a clockwise sense) of a longitude range, in radians.
         lon_stop: The last longitude (in a clockwise sense) of a longitude range, in radians.
+        nlon: Number of equally spaced longitudes. Uses the legacy default if omitted.
     Returns:
         lon: An array of longitude values, or single longitude value, in radians.
         dlon: Spacing of the (regular) longitude grid.
@@ -2868,7 +2896,11 @@ def longitude_grid(lon_out=np.nan * rad, lon_start=np.nan * rad, lon_stop=np.nan
         longitude_range = True
 
     # Form the full longitude grid.
-    nlon = surf_constants()['nlong']
+    if nlon is None:
+        nlon = surf_constants()['nlon']
+    if not isinstance(nlon, (int, np.integer)) or nlon <= 0:
+        raise ValueError("nlon must be a positive integer")
+    nlon = int(nlon)
     dlon = twopi / nlon
     lon_min_full = dlon / 2.0
     lon_max_full = twopi - (dlon / 2.0)
@@ -2897,12 +2929,13 @@ def longitude_grid(lon_out=np.nan * rad, lon_start=np.nan * rad, lon_stop=np.nan
     return lon, dlon, nlon
 
 
-def latitude_grid(latitude_min=np.nan, latitude_max=np.nan):
+def latitude_grid(latitude_min=np.nan, latitude_max=np.nan, nlat=None):
     """
     Define the latitude grid of the SURF model. This is constant in sine latitude
     Args:
         latitude_min: The maximum latitude above the equator, in radians
         latitude_max: The minimum latitude below the equator, in radians
+        nlat: Number of bins in the full sine-latitude grid. Uses the legacy default if omitted.
     Returns:
         lat: Array of latitude positions between given limits, in radians
         nlat: Number of latitude positions between given limits
@@ -2913,7 +2946,11 @@ def latitude_grid(latitude_min=np.nan, latitude_max=np.nan):
     assert np.absolute(latitude_min) <= (np.pi / 2) * rad
 
     # Form the full longitude grid.
-    nlat = surf_constants()['nlat']
+    if nlat is None:
+        nlat = surf_constants()['nlat']
+    if not isinstance(nlat, (int, np.integer)) or nlat <= 1:
+        raise ValueError("nlat must be an integer greater than one")
+    nlat = int(nlat)
 
     dsinlat = 2 / nlat
     sinlat_min_full = - 1 + dsinlat / 2.0
@@ -2929,19 +2966,27 @@ def latitude_grid(latitude_min=np.nan, latitude_max=np.nan):
     return lat, nlat
 
 
-def time_grid(simtime, dt_scale):
+def time_grid(simtime, dt_scale, dr=None, v_max=None):
     """
     Define the model timestep and time grid based on CFL condition and specified simulation time.
     Args:
         simtime: The length of the simulation
         dt_scale: An integer specifying how frequently model timesteps should be saved to output.
+        dr: Radial grid spacing. Uses the legacy SURF default if omitted.
+        v_max: Maximum speed for the CFL condition. Uses the legacy default if omitted.
     Returns:
         time_grid_dict: A dictionary containing arrays of the models intrinsic time steps and the
                         requsted output timesteps.
     """
     constants = surf_constants()
-    v_max = constants['v_max']
-    dr = constants['dr']
+    if v_max is None:
+        v_max = constants['v_max']
+    if dr is None:
+        dr = constants['dr']
+    if v_max <= 0 * km_per_s:
+        raise ValueError("v_max must be positive")
+    if dr <= 0 * solRad:
+        raise ValueError("dr must be positive")
     dr = dr.to('km')
     dt = (dr / v_max).to('s')
     dtdr = dt / dr
@@ -3771,9 +3816,17 @@ def load_SURF_run(filepath):
         dt_scale = data['dt_scale'][()]
         v_boundary = data['_v_boundary_init_'][()] * u.Unit(data['_v_boundary_init_'].attrs['unit'])
         r = data['r'][()] * u.Unit(data['r'].attrs['unit'])
+        dr = data['dr'][()] * u.Unit(data['dr'].attrs['unit'])
+        v_max = data['v_max'][()] * u.Unit(data['v_max'].attrs['unit'])
         lon = data['lon'][()] * u.Unit(data['lon'].attrs['unit'])
         lat = data['latitude'][()] * u.Unit(data['latitude'].attrs['unit'])
         nlon = lon.size
+        if 'nlon_full' in data:
+            nlon_full = int(data['nlon_full'][()])
+        elif 'nlong' in data:
+            nlon_full = int(data['nlong'][()])
+        else:
+            nlon_full = len(v_boundary)
         frame = data['frame'][()].decode("utf-8")
         track_cmes = bool(data['track_cmes'][()])
         track_b = bool(data['track_b'][()])
@@ -3827,7 +3880,10 @@ def load_SURF_run(filepath):
             'latitude': lat,
             'frame': frame,
             'track_cmes': track_cmes,
-            'solver': solver
+            'solver': solver,
+            'nlon': nlon_full,
+            'dr': dr,
+            'v_max': v_max
         }
         
         if track_b:
