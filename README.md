@@ -33,6 +33,11 @@ If you are developing features in SURF, it can be easier to work with an editabl
 
 Installation through either method produces two command line tools. The first, `surf-open-examples` starts JupyterLab and opens our examples notebook in a browser. The second `huxt-make-ephemeris` runs a script that updates the HUXt ephemeris file using JPL Horizons. This is intermittently necessary to update the ephemeris data for the STEREO-A and ACE spacecraft, as JPL Horizons only provides ephemeris data for these missions a few months into the future. 
 
+The desktop GUI is maintained in the separate
+[`SURFs_UP`](https://github.com/University-of-Reading-Space-Science/SURFs_UP)
+project. This keeps Qt out of the core SURF installation while allowing the
+interface to use SURF as a normal dependency.
+
 
 ### Testing
 For testing with a development installation, a small test suite is included in ['test_huxt.py'](tests/test_huxt.py), which compares a local version of HUXt against a simple analytical solution and some reference simulation data included in this repository. The test suite uses `pytest`, which is included in the `huxt` environment. Using the anaconda prompt from the root directory of `HUXt`, these tests can be performed by calling pytest from within the HUXt root directory:

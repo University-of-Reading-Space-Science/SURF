@@ -27,7 +27,6 @@ dependencies = [
   "numpy>=2.2.6",
   "onnxruntime>=1.15.0",
   "pandas>=2.3.2",
-  "PyQt6>=6.7.1",
   "pytest>=8.4.2",
   "requests>=2.32.5",
   "scipy>=1.16.1",
@@ -44,9 +43,11 @@ dependencies = [
 [project.scripts]
 surf-make-ephemeris = "surf.scripts.make_ephemeris:main"
 surf-open-examples = "surf.scripts.open_examples_notebook:main"
-surf-gui = "surf.scripts.surf_gui:main"
 
 [project.urls]
 Homepage = "https://github.com/University-of-Reading-Space-Science/SURF"
 Repository = "https://github.com/University-of-Reading-Space-Science/SURF.git"
 Issues = "https://github.com/University-of-Reading-Space-Science/SURF/issues"
+
+[tool.setuptools.packages.find]
+include = ["surf*"]
