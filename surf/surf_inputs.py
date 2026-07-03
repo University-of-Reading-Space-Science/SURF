@@ -10,10 +10,11 @@ import json
 import os
 from pathlib import Path
 import pickle
+import re
 import ssl
 import sys
-
 import urllib
+import urllib.parse
 from urllib.request import urlopen
 # Suppress SSL warnings for unverified HTTPS requests
 import urllib3
@@ -762,6 +763,140 @@ def get_WSA_maps(filepath):
     vr_map = vr_map * km_per_s
 
     return vr_map, vr_longs, vr_lats, br_map, br_longs, br_lats, cr_num
+
+
+_ISWA_WSA_BASE_URL = 'https://iswa.ccmc.gsfc.nasa.gov/iswa_data_tree/model/solar'
+_ISWA_WSA_VERSIONS = ('WSA6', 'WSA5.4', 'WSA5.X')
+_ISWA_WSA_MAX_AGE = datetime.timedelta(days=1)
+
+
+def _iswa_directory_links(url, timeout):
+    """Return link targets from an ISWA Apache directory listing."""
+    response = requests.get(url, timeout=timeout)
+    if response.status_code == 404:
+        return []
+    response.raise_for_status()
+    return re.findall(r'href=["\']([^"\']+)["\']', response.text)
+
+
+def _find_previous_iswa_wsa_map(timestamp, version, timeout):
+    """Find the latest GONG_Z WSA map URL at or before ``timestamp``."""
+    root_url = (
+        f'{_ISWA_WSA_BASE_URL}/{version}/R21.5/WSA_VEL/GONG_Z/')
+
+    year_pattern = re.compile(r'^(\d{4})/$')
+    years = []
+    for link in _iswa_directory_links(root_url, timeout):
+        match = year_pattern.match(link)
+        if match and int(match.group(1)) <= timestamp.year:
+            years.append(int(match.group(1)))
+
+    month_pattern = re.compile(r'^(\d{2})/$')
+    filename_pattern = re.compile(
+        r'^vel_(\d{12})R\d+_gongz\.fits$', re.IGNORECASE)
+
+    for year in sorted(years, reverse=True):
+        year_url = f'{root_url}{year:04d}/'
+        months = []
+        for link in _iswa_directory_links(year_url, timeout):
+            match = month_pattern.match(link)
+            if match:
+                month = int(match.group(1))
+                if year < timestamp.year or month <= timestamp.month:
+                    months.append(month)
+
+        for month in sorted(months, reverse=True):
+            month_url = f'{year_url}{month:02d}/'
+            candidates = []
+            for link in _iswa_directory_links(month_url, timeout):
+                filename = urllib.parse.unquote(Path(link).name)
+                match = filename_pattern.match(filename)
+                if match:
+                    file_time = datetime.datetime.strptime(
+                        match.group(1), '%Y%m%d%H%M')
+                    if file_time <= timestamp:
+                        candidates.append((file_time, filename))
+
+            if candidates:
+                file_time, filename = max(candidates)
+                return urllib.parse.urljoin(month_url, filename), file_time
+
+    return None
+
+
+def get_WSA_from_ISWA(timestamp, datadir=None, timeout=30):
+    """
+    Download the newest available GONG_Z WSA velocity map at or before a given time.
+
+    Newer WSA model versions are preferred over older versions. The archive is
+    currently searched in this order: WSA6, WSA5.4, then WSA5.X. Within the
+    first version containing a sufficiently recent map, the map with the latest
+    timestamp not later than ``timestamp`` is selected. Maps more than one day
+    older than the requested time are ignored.
+
+    Args:
+        timestamp: Requested time as a datetime, date, astropy Time, or
+                   datetime-compatible string. Timezone-aware values are
+                   converted to UTC. A date without a time means the end of
+                   that day.
+        datadir: Directory in which to store the downloaded map. Defaults to
+                 the SURF boundary-condition data directory. Files are placed
+                 in a version-specific subdirectory.
+        timeout: HTTP request timeout in seconds.
+
+    Returns:
+        pathlib.Path: Path to the downloaded FITS file.
+
+    Raises:
+        FileNotFoundError: If no supported WSA version has a map within one day
+                           before the requested time.
+        requests.RequestException: If an archive request fails.
+    """
+    if isinstance(timestamp, datetime.date) and not isinstance(
+            timestamp, datetime.datetime):
+        timestamp = datetime.datetime.combine(timestamp, datetime.time.max)
+    elif isinstance(timestamp, Time):
+        timestamp = timestamp.to_datetime(
+            timezone=datetime.timezone.utc).replace(tzinfo=None)
+    else:
+        timestamp = pd.Timestamp(timestamp).to_pydatetime()
+
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.astimezone(
+            datetime.timezone.utc).replace(tzinfo=None)
+
+    selected = None
+    selected_version = None
+    for version in _ISWA_WSA_VERSIONS:
+        version_result = _find_previous_iswa_wsa_map(
+            timestamp, version, timeout)
+        if (version_result is not None and
+                timestamp - version_result[1] <= _ISWA_WSA_MAX_AGE):
+            selected = version_result
+            selected_version = version
+            break
+
+    if selected is None:
+        raise FileNotFoundError(
+            f'No GONG_Z WSA map is available within one day before '
+            f'{timestamp:%Y-%m-%d %H:%M}.')
+
+    url, _ = selected
+    output_root = get_data_dir() if datadir is None else Path(datadir)
+    output_dir = output_root / selected_version
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / Path(urllib.parse.urlparse(url).path).name
+
+    if output_path.exists():
+        return output_path
+
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    temporary_path = output_path.with_suffix(output_path.suffix + '.part')
+    temporary_path.write_bytes(response.content)
+    temporary_path.replace(output_path)
+
+    return output_path
 
 
 def get_WSA_long_profile(filepath, lat=0.0 * deg):
