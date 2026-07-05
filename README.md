@@ -29,6 +29,19 @@ If you are developing features in SURF, it can be easier to work with an editabl
 >>> pip install --no-deps -e .
 ```
 
+### Numba cache mode
+
+SURF disables Numba's on-disk compilation cache by default, which is useful
+while developing. To enable it for production runs, change the following line
+near the top of `surf/surf.py`:
+
+```python
+NUMBA_CACHE = True
+```
+
+Set it back to `False` for development. The setting is read when SURF is first
+imported, so restart Python after changing it.
+
 
 
 Installation through either method produces two command line tools. The first, `surf-open-examples` starts JupyterLab and opens our examples notebook in a browser. The second `huxt-make-ephemeris` runs a script that updates the HUXt ephemeris file using JPL Horizons. This is intermittently necessary to update the ephemeris data for the STEREO-A and ACE spacecraft, as JPL Horizons only provides ephemeris data for these missions a few months into the future. 

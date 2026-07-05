@@ -42,6 +42,8 @@ Example Usage:
 import numpy as np
 from numba import njit
 
+from surf.surf import NUMBA_CACHE
+
 __all__ = [
     'CompressibleSolver',
     'create_solver',
@@ -63,7 +65,7 @@ SMALL_P = 1e-30
 # Particle Advection
 # =============================================================================
 
-@njit
+@njit(cache=NUMBA_CACHE)
 def _advect_particle_rk2(r_p, v_grid, r_grid, dt, behavior):
     """
     Advect a single particle using RK2 integration.
@@ -132,13 +134,13 @@ def _advect_particle_rk2(r_p, v_grid, r_grid, dt, behavior):
 # Equation of State
 # =============================================================================
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def _get_rhoe(p, gamma):
     """Internal energy density from pressure: rho*e = p / (gamma - 1)"""
     return p / (gamma - 1.0)
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def _prim_to_cons(q, gamma):
     """
     Convert primitive [rho, v, p] to conserved [rho, rho*v, E] variables.
@@ -154,7 +156,7 @@ def _prim_to_cons(q, gamma):
 # HLLC Riemann Solver
 # =============================================================================
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def _riemann_hllc(U_l, U_r, gamma):
     """
     HLLC Riemann solver for the Euler equations.
@@ -250,7 +252,7 @@ def _riemann_hllc(U_l, U_r, gamma):
 # Slope Limiter
 # =============================================================================
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def _mc_limiter(a, b):
     """MC (Monotonized Central) slope limiter."""
     c = 0.5 * (a + b)
@@ -264,7 +266,7 @@ def _mc_limiter(a, b):
 # Flux Computation (JIT-compiled)
 # =============================================================================
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def _compute_fluxes_pcm(U, nr, gamma):
     """
     Compute interface fluxes using PCM (1st order, Godunov).
@@ -287,7 +289,7 @@ def _compute_fluxes_pcm(U, nr, gamma):
     return fluxes
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def _compute_fluxes_plm(U, nr, gamma):
     """
     Compute interface fluxes using PLM (2nd order) reconstruction.
@@ -389,7 +391,7 @@ def _compute_fluxes_plm(U, nr, gamma):
 # Time Stepping (JIT-compiled)
 # =============================================================================
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def _get_dt(U, nr, min_dx, gamma, cfl):
     """Compute CFL-limited timestep."""
     max_speed = 0.0
@@ -409,7 +411,7 @@ def _get_dt(U, nr, min_dx, gamma, cfl):
     return cfl * min_dx / max_speed
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def _extract_snapshot(U, nr, gamma, M_P_val, K_B_val):
     """
     Extract primitive variables (v, rho, T) from conserved state.
@@ -428,7 +430,7 @@ def _extract_snapshot(U, nr, gamma, M_P_val, K_B_val):
     return v_out, rho_out, T_out
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def _step_euler(U, U_bc, nr, A, V, dt, gamma, use_plm):
     """
     Forward Euler time step with area-weighted fluxes and geometric source.
@@ -467,7 +469,7 @@ def _step_euler(U, U_bc, nr, A, V, dt, gamma, use_plm):
     return U_new
 
 
-@njit(cache=True)
+@njit(cache=NUMBA_CACHE)
 def _step_rk2(U, U_bc, nr, A, V, dt, gamma, use_plm):
     """
     RK2 (Heun's method) time step.

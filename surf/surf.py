@@ -16,6 +16,9 @@ from numba import jit
 from pathlib import Path
 from sunpy.coordinates import sun
 
+# False for development; True for production runs.
+NUMBA_CACHE = True
+
 from surf.surf_solvers import create_solver as create_compressible_solver
 
 
@@ -2565,7 +2568,7 @@ def clear_density_temperature_cache(cache_id=None):
 # ==============================================================================
 
 # JIT-compiled core computation function (defined at module level for caching)
-@jit(nopython=True, cache=True)
+@jit(nopython=True, cache=NUMBA_CACHE)
 def _compute_parker_mapping(v_from_kms, T_from, n_from, r_from_km, r_to_km, gamma, max_iter=50,
                             tol=1e-12):
     """
@@ -3046,7 +3049,7 @@ def _setup_dirs_():
     return dirs
 
 
-@jit(nopython=True)
+@jit(nopython=True, cache=NUMBA_CACHE)
 def zerototwopi(angles):
     """
     Function to constrain angles to the 0 - 2pi domain.
@@ -3297,7 +3300,7 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
     return v_out_kms, rho_out_kgm3, temp_out, particle_data
 
 
-@jit(nopython=True, nogil=True)
+@jit(nopython=True, nogil=True, cache=NUMBA_CACHE)
 def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
                  n_cme, n_hcs_max, streak_times, rhoinput=None, tempinput=None,
                  v_init=None):
@@ -3568,7 +3571,7 @@ def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
             temp_grid)
 
 
-@jit(nopython=True)
+@jit(nopython=True, cache=NUMBA_CACHE)
 def add_cmes_to_input_series(vinput, model_time, lon, r_boundary, cme_params, latitude,
                              rhoinput=None, tempinput=None, rho_ambient=None, temp_ambient=None,
                              compressible=False):
@@ -3692,7 +3695,7 @@ def add_cmes_to_input_series(vinput, model_time, lon, r_boundary, cme_params, la
 
 
 
-@jit(nopython=True)
+@jit(nopython=True, cache=NUMBA_CACHE)
 def _upwind_step_(v_up, v_dn, dtdr, alpha, r_accel, rrel):
     """
     Compute the next step in the upwind scheme of Burgers equation with added acceleration of the
@@ -3724,7 +3727,7 @@ def _upwind_step_(v_up, v_dn, dtdr, alpha, r_accel, rrel):
     return v_up_next
 
 
-@jit(nopython=True)
+@jit(nopython=True, cache=NUMBA_CACHE)
 def _is_in_cme_boundary_(r_boundary, lon, lat, time, cme_params):
     """
     Check whether a given lat, lon point on the inner boundary is within a given CME.
@@ -4013,7 +4016,7 @@ def load_SURF_run(filepath):
     return model, cme_list
 
 
-@jit(nopython=True)
+@jit(nopython=True, cache=NUMBA_CACHE)
 def bgrid_from_hcs(hcs_particles_r, input_b_ts, model_time, time_out, r_grid, lons):
     """
     Create the b polarity grid from the tracked HCS positions

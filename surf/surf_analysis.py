@@ -2266,7 +2266,7 @@ def plot_bpol(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan
     return fig, ax
 
 
-@jit(nopython=True)
+@jit(nopython=True, cache=s.NUMBA_CACHE)
 def trace_field_line_out(v_trl_kms, longrid_rad, rgrid_km, tgrid_s, start_lon, time_start_s,
                          time_stop_s, rot_period_s):
     """
@@ -2335,7 +2335,7 @@ def trace_field_line_out(v_trl_kms, longrid_rad, rgrid_km, tgrid_s, start_lon, t
     return r_streak_km[id_t_stop, :]
         
 
-@jit(nopython=True)
+@jit(nopython=True, cache=s.NUMBA_CACHE)
 def min_distance_streakline_point(streak_lon_rad, streak_r_km, point_lon_rad, point_r_km, d=5000):
     """
     Return the minimum distance between a given field line and a fixed point (e.g. Earth)
@@ -2395,7 +2395,7 @@ def min_distance_streakline_point(streak_lon_rad, streak_r_km, point_lon_rad, po
     return distances[i], r, theta
 
 
-@jit(nopython=True)
+@jit(nopython=True, cache=s.NUMBA_CACHE)
 def respinup_model(v_trl_kms, tgrid_s, rgrid_km, longrid_rad, rot_period_s, buffer_time_s):
     """
     recreate steady-state solar wind conditions during the spin-up period 
@@ -2438,7 +2438,7 @@ def respinup_model(v_trl_kms, tgrid_s, rgrid_km, longrid_rad, rot_period_s, buff
     return new_v_trl_kms, new_tgrid_s
 
 
-@jit(nopython=True)
+@jit(nopython=True, cache=s.NUMBA_CACHE)
 def _return_distance_for_given_t_(t, start_lon, v_trl_kms=np.nan, longrid_rad=np.nan,
                                   rgrid_km=np.nan, tgrid_s=np.nan, time_stop_s=np.nan,
                                   Earth_lon_rad=np.nan, Earth_r_km=np.nan, rot_period_s=np.nan):
@@ -2466,7 +2466,7 @@ def _return_distance_for_given_t_(t, start_lon, v_trl_kms=np.nan, longrid_rad=np
     return dist
 
 
-@jit(nopython=True)
+@jit(nopython=True, cache=s.NUMBA_CACHE)
 def _return_distance_for_given_lon_(start_lon, t, v_trl_kms=np.nan, longrid_rad=np.nan,
                                     rgrid_km=np.nan, tgrid_s=np.nan, time_stop_s=np.nan,
                                     Earth_lon_rad=np.nan, Earth_r_km=np.nan, rot_period_s=np.nan):
