@@ -1040,7 +1040,8 @@ def _resample_longitude_grid(values, nlon):
 def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u.solRad,
                       dt_scale=4, omni_input=None, buffertime=5*u.day, run_2d=False,
                       solver='huxt', nlon=128, dr=1.5*u.solRad,
-                      v_max=3000*u.km/u.s):
+                      v_max=3000*u.km/u.s, lon_start=0*u.rad,
+                      lon_stop=2*np.pi*u.rad):
     """
     Create a SURF solar wind forecast initialized from in-situ OMNI observations.
     
@@ -1074,7 +1075,15 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
         to propagate through the domain. Default is 5 days.
     run_2d : bool, optional
         If False (default), runs a 1D radial simulation at Earth's longitude
-        (lon_out=0). If True, runs a full 2D simulation across all longitudes.
+        (lon_out=0). If True, runs a 2D simulation over the range specified by
+        ``lon_start`` and ``lon_stop``.
+    lon_start : astropy.units.Quantity, optional
+        First longitude (clockwise) of the 2D domain. Default is 0 radians.
+        Ignored when ``run_2d`` is False.
+    lon_stop : astropy.units.Quantity, optional
+        Last longitude (clockwise) of the 2D domain. Default is 2*pi radians.
+        A range with ``lon_start > lon_stop`` wraps through 0 radians. Ignored
+        when ``run_2d`` is False.
     solver : str, optional
         Solver type. Valid options are:
         - 'huxt' (default): first-order HUXt advection solver
@@ -1113,6 +1122,9 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     >>> ftime = datetime.datetime(2022, 5, 1)
     >>> model = omniSURF_forecast(ftime, simtime=27*u.day)
     >>> model.solve([])
+    >>> # Run only the wraparound sector from 300 to 60 degrees
+    >>> model = omniSURF_forecast(ftime, run_2d=True,
+    ...                           lon_start=300*u.deg, lon_stop=60*u.deg)
     >>> # For compressible solver
     >>> model = omniSURF_forecast(ftime, solver='hydro', 
     ...                           rho_source='speed', temp_source='speed')
@@ -1219,7 +1231,8 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       cr_num=cr, cr_lon_init=cr_lon_init,
                       simtime=simtime, r_min=rmin, r_max=rmax,
                       dt_scale=dt_scale, latitude=Elat, frame='synodic',
-                      track_cmes=False, solver=solver, nlon=nlon, dr=dr,
+                      track_cmes=False, solver=solver, nlon=nlon,
+                      lon_start=lon_start, lon_stop=lon_stop, dr=dr,
                       v_max=v_max)
     else:
         model = s.SURF(v_boundary=vcarr_rmin_back_cnn.flatten() * u.km/u.s,
@@ -1235,7 +1248,8 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
 def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u.solRad,
                             dt_scale=4, dt=1*u.day, omni_input=None, run_2d=False, solver='huxt',
                             rho_source='speed', temp_source='speed', nlon=128,
-                            dr=1.5*u.solRad, v_max=3000*u.km/u.s):
+                            dr=1.5*u.solRad, v_max=3000*u.km/u.s,
+                            lon_start=0*u.rad, lon_stop=2*np.pi*u.rad):
     """
     Create a SURF solar wind reconstruction using OMNI observations over a time interval.
     
@@ -1270,7 +1284,15 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
         columns 'datetime', 'mjd', 'V', 'BX_GSE', 'N', 'T'.
     run_2d : bool, optional
         If False (default), runs a 1D radial simulation at Earth's longitude.
-        If True, runs a full 2D simulation across all longitudes.
+        If True, runs a 2D simulation over the range specified by
+        ``lon_start`` and ``lon_stop``.
+    lon_start : astropy.units.Quantity, optional
+        First longitude (clockwise) of the 2D domain. Default is 0 radians.
+        Ignored when ``run_2d`` is False.
+    lon_stop : astropy.units.Quantity, optional
+        Last longitude (clockwise) of the 2D domain. Default is 2*pi radians.
+        A range with ``lon_start > lon_stop`` wraps through 0 radians. Ignored
+        when ``run_2d`` is False.
     solver : str, optional
         Solver type. Valid options are:
         - 'huxt' (default): first-order HUXt advection solver
@@ -1317,6 +1339,9 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     >>> end = datetime.datetime(2022, 5, 28)
     >>> model = omniSURF_reconstruction(start, end)
     >>> model.solve([])
+    >>> # Reconstruct only longitudes from 30 to 120 degrees
+    >>> model = omniSURF_reconstruction(start, end, run_2d=True,
+    ...                                 lon_start=30*u.deg, lon_stop=120*u.deg)
     >>> # For compressible solver
     >>> model = omniSURF_reconstruction(start, end, solver='hydro', 
     ...                                 rho_source='omni', temp_source='omni')
@@ -1361,7 +1386,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     
     # Backmap from 215 Rsun to rmin for each time step
     # Use different acceleration profile for compressible solvers (same as omniSURF_forecast)
-    nlon, nt = vcarr_215.shape
+    _, nt = vcarr_215.shape
     vcarr_rmin = np.zeros_like(vcarr_215.value)
     bcarr_rmin = np.zeros_like(bcarr_215)
     
@@ -1493,6 +1518,8 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
             dt_scale=dt_scale,
             latitude=Elat,
             frame='synodic',
+            lon_start=lon_start,
+            lon_stop=lon_stop,
             solver=solver, track_cmes=False, nlon=nlon, dr=dr, v_max=v_max
         )
     else:
@@ -1518,7 +1545,8 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
 
 def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u.day,
                      omni_input=None, run_2d=False, solver='hydro', nlon=128,
-                     dr=1.5*u.solRad, v_max=3000*u.km/u.s):
+                     dr=1.5*u.solRad, v_max=3000*u.km/u.s,
+                     lon_start=0*u.rad, lon_stop=2*np.pi*u.rad):
     """
     Create a SURF solar wind simulation starting from ~1 AU using OMNI observations.
 
@@ -1549,7 +1577,15 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
         downloaded and ICMEs removed automatically.
     run_2d : bool, optional
         If False (default), runs a 1D radial simulation at Earth's longitude.
-        If True, runs a full 2D simulation across all longitudes.
+        If True, runs a 2D simulation over the range specified by
+        ``lon_start`` and ``lon_stop``.
+    lon_start : astropy.units.Quantity, optional
+        First longitude (clockwise) of the 2D domain. Default is 0 radians.
+        Ignored when ``run_2d`` is False.
+    lon_stop : astropy.units.Quantity, optional
+        Last longitude (clockwise) of the 2D domain. Default is 2*pi radians.
+        A range with ``lon_start > lon_stop`` wraps through 0 radians. Ignored
+        when ``run_2d`` is False.
     solver : str, optional
         Solver type. Default is 'hydro'. Valid options:
         - 'huxt': first-order HUXt advection solver
@@ -1628,6 +1664,8 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
             dt_scale=dt_scale,
             latitude=Elat,
             frame='synodic',
+            lon_start=lon_start,
+            lon_stop=lon_stop,
             solver=solver, track_cmes=False, nlon=nlon, dr=dr, v_max=v_max
         )
     else:
