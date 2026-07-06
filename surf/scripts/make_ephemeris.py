@@ -10,11 +10,6 @@ import numpy as np
 import requests
 import sunpy.coordinates as coords
 
-# Units needed
-km = u.km
-deg = u.deg
-
-
 def get_naif_body_codes_dict():
     """ Return a dictionary with the names and naif codes of bodies that can be looked up in
     Horizons for use in generating an offline ephemeris for SURF."""
@@ -131,17 +126,17 @@ def main():
                 this_coord = body_coords.transform_to(acoords.HeliocentricMeanEcliptic())
 
             if coord_sys == 'HAE':
-                rad = coord_group.create_dataset('radius', data=this_coord.distance.to(km).value)
+                rad = coord_group.create_dataset('radius', data=this_coord.distance.to(u.km).value)
             else:
-                rad = coord_group.create_dataset('radius', data=this_coord.radius.to(km).value)
+                rad = coord_group.create_dataset('radius', data=this_coord.radius.to(u.km).value)
 
-            rad.attrs['unit'] = km.to_string()
+            rad.attrs['unit'] = u.km.to_string()
             lon_degs = np.rad2deg(zerototwopi(this_coord.lon.radian))
             lon = coord_group.create_dataset('longitude', data=lon_degs)
-            lon.attrs['unit'] = deg.to_string()
+            lon.attrs['unit'] = u.deg.to_string()
             lat_degs = np.rad2deg(this_coord.lat.radian)
             lat = coord_group.create_dataset('latitude', data=lat_degs)
-            lat.attrs['unit'] = deg.to_string()
+            lat.attrs['unit'] = u.deg.to_string()
 
             ephem.flush()
 

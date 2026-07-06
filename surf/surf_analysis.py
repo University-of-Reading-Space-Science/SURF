@@ -1,6 +1,4 @@
-"""
-This module contains functions for plotting and analysing the SURF simulations.
-"""
+"""Plot and analyse SURF simulations."""
 import datetime
 from pathlib import Path
 
@@ -22,18 +20,6 @@ from surf import surf as s
 from surf import surf_inputs as sin
 from surf import surf_insitu as sinsit
 
-# Units needed
-day = u.day
-km = u.km
-seconds = u.s
-km_per_s = km / seconds
-rad = u.rad
-deg = u.deg
-solRad = u.solRad
-kelvin = u.K
-per_cm_cube = u.cm**-3
-kg_per_cube = u.kg / u.m**3
-
 mpl.rc("axes", labelsize=16)
 mpl.rc("ytick", labelsize=16)
 mpl.rc("xtick", labelsize=16)
@@ -51,7 +37,7 @@ def _compressible_solver_label(model):
 
 
 def get_figure_dir():
-    """Get path to output directory for figures and animations"""
+    """Return the output directory for figures and animations."""
     figure_dir = Path(user_data_dir("surf", "")) / "figures"
     figure_dir.mkdir(parents=True, exist_ok=True)
     return figure_dir
@@ -62,8 +48,8 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
     """
     Make a contour plot on a polar axis of the solar wind solution at a specific time.
     Args:
-        model: An instance of the HUXt class with a completed solution.
-        time: Time to look up closet model time to (with an astropy.unit of time).
+        model: A SURF model with a completed solution.
+        time: Time for which to find the closest model output.
         save: Boolean to determine if the figure is saved.
         tag: String to append to the filename if saving the figure.
         fighandle: Figure handle for placing a plot in an existing figure.
@@ -140,7 +126,7 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
         for j, cme in enumerate(model.cmes):
             cid = np.mod(j, len(cme_colors))
             cme_lons = cme.coords[id_t]['lon']
-            cme_r = cme.coords[id_t]['r'].to(solRad)
+            cme_r = cme.coords[id_t]['r'].to(u.solRad)
             if np.any(np.isfinite(cme_r)):
                 # Pad out to close the profile.
                 cme_lons = np.append(cme_lons, cme_lons[0])
@@ -165,7 +151,7 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
         styles = observer_styles()
         for body in observers_list:
             obs = model.get_observer(body)
-            deltalon = 0.0 * rad
+            deltalon = 0.0 * u.rad
             if model.frame == 'sidereal':
                 earth_pos = model.get_observer('EARTH')
                 deltalon = earth_pos.lon_hae[id_t] - earth_pos.lon_hae[0]
@@ -199,12 +185,12 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
 
         if annotateplot:
             # Add label
-            label = f"{model.time_out[id_t].to(day).value:3.2f} days"
+            label = f"{model.time_out[id_t].to(u.day).value:3.2f} days"
             label = label + '\n ' + (model.time_init + time).strftime('%Y-%m-%d %H:%M')
             ax.text(0.98, -0.01, label, fontsize=15, transform=ax.transAxes,
                     horizontalalignment='right')
 
-            label = f"HUXt2D \nLat: {model.latitude.to(deg).value:3.0f} deg"
+            label = f"HUXt2D \nLat: {model.latitude.to(u.deg).value:3.0f} deg"
             ax.text(0.02, -0.01, label, fontsize=15, transform=ax.transAxes)
 
         # plot any tracked streaklines
@@ -219,7 +205,7 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
                     streak_lon = streak_lon + model.lon.value.tolist()
                     streak_r = streak_r + (
                             model.streak_particles_r[id_t, istreak, irot, :] *
-                            km.to(solRad)).value.tolist()
+                            u.km.to(u.solRad)).value.tolist()
 
                 # get the real values for plotting
                 mask = np.isfinite(streak_r)
@@ -227,26 +213,26 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
                 plotr = np.array(streak_r)[mask]
                 if len(plotr) > 0:
                     # for plotting only, fix the innermost point on the inner bounday.
-                    r_min = model.r[0].to(solRad).value
+                    r_min = model.r[0].to(u.solRad).value
                     dr = plotr[-1] - r_min
                     # compute the long of the footpoint assuming a constant solar wind speed
-                    dt = (dr * solRad / (350 * km_per_s)).to(seconds)
+                    dt = (dr * u.solRad / (350 * (u.km / u.s))).to(u.s)
                     dlon_streak = (2 * np.pi) * (dt / model.rotation_period).value
                     inner_lon = zerototwopi(plotlon[-1] + dlon_streak)
                     # check that this new longitude was actually simulated
-                    if np.nanmin(abs(model.lon - inner_lon * rad)) < dlon:
+                    if np.nanmin(abs(model.lon - inner_lon * u.rad)) < dlon:
                         plotr = np.append(plotr, r_min)
                         plotlon = np.append(plotlon, inner_lon)
 
                     # for plotting only, fix the outermost point on the outer boundary
-                    r_max = model.r[-1].to(solRad).value
+                    r_max = model.r[-1].to(u.solRad).value
                     dr = r_max - plotr[0]
                     # compute the long of the outer footpoint assuming a constant solar wind speed
-                    dt = (dr * solRad / (450 * km_per_s)).to(seconds)
+                    dt = (dr * u.solRad / (450 * (u.km / u.s))).to(u.s)
                     dlon_streak = (2 * np.pi) * (dt / model.rotation_period).value
                     outer_lon = zerototwopi(plotlon[0] - dlon_streak)
                     # check that this new longitude was actually simulated
-                    if np.nanmin(abs(model.lon - outer_lon * rad)) < dlon:
+                    if np.nanmin(abs(model.lon - outer_lon * u.rad)) < dlon:
                         plotr = np.append(r_max, plotr)
                         plotlon = np.append(outer_lon, plotlon)
 
@@ -256,7 +242,7 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
         # plot any HCS that have been traced
         if plotHCS and hasattr(model, 'b_grid'):
             for i in range(0, len(model.hcs_particles_r[:, 0, 0, 0])):
-                r = model.hcs_particles_r[i, id_t, 0, :] * km.to(solRad)
+                r = model.hcs_particles_r[i, id_t, 0, :] * u.km.to(u.solRad)
                 lons = model.lon
                 ax.plot(lons, r, 'w.')
 
@@ -1858,7 +1844,7 @@ def plot3d_radial_lat_slice(model3d, time, lon=np.nan * u.deg, save=False, tag='
     a fixed time and longitude.
     Args:
         model3d: An instance of the SURF3d class with a completed solution.
-        time: Time to look up closet model time to (with an astropy.unit of time).
+        time: Time for which to find the closest model output.
         lon: The longitude along which to render the radial-latitude plane.
         save: Boolean to determine if the figure is saved.
         tag: String to append to the filename if saving the figure.
@@ -2092,7 +2078,7 @@ def plot_bpol(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan
     Make a contour plot on polar axis of the solar wind solution at a specific time.
     Args:
         model: An instance of the SURF class with a completed solution.
-        time: Time to look up closet model time to (with an astropy.unit of time).
+        time: Time for which to find the closest model output.
         save: Boolean to determine if the figure is saved.
         tag: String to append to the filename if saving the figure.
         fighandle: Figure handle for placing plot in a figure that already exists.
@@ -2266,15 +2252,15 @@ def plot_bpol(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan
     return fig, ax
 
 
-@jit(nopython=True, cache=s.NUMBA_CACHE)
+@jit(nopython=True, cache=s.surf_constants()['numba_cache'])
 def trace_field_line_out(v_trl_kms, longrid_rad, rgrid_km, tgrid_s, start_lon, time_start_s,
                          time_stop_s, rot_period_s):
     """
-    Trace a field line through an exixisting model run. 
+    Trace a field line through an existing model run.
     model must output with dt_scale = 1
     
     Args:
-        v_trl_kms: model.v_grid.value - the speed as a funciton of time, radius and longitude
+        v_trl_kms: Speed as a function of time, radius, and longitude.
         longrid_rad: model.lon.to(u.rad).value - the longitude grid in radians
         rgrid_km: model.r.to(u.km).value - the radial grid in km
         tgrid_s: model.time_out.to(u.s).value - the time grid in seconds
@@ -2335,7 +2321,7 @@ def trace_field_line_out(v_trl_kms, longrid_rad, rgrid_km, tgrid_s, start_lon, t
     return r_streak_km[id_t_stop, :]
         
 
-@jit(nopython=True, cache=s.NUMBA_CACHE)
+@jit(nopython=True, cache=s.surf_constants()['numba_cache'])
 def min_distance_streakline_point(streak_lon_rad, streak_r_km, point_lon_rad, point_r_km, d=5000):
     """
     Return the minimum distance between a given field line and a fixed point (e.g. Earth)
@@ -2395,7 +2381,7 @@ def min_distance_streakline_point(streak_lon_rad, streak_r_km, point_lon_rad, po
     return distances[i], r, theta
 
 
-@jit(nopython=True, cache=s.NUMBA_CACHE)
+@jit(nopython=True, cache=s.surf_constants()['numba_cache'])
 def respinup_model(v_trl_kms, tgrid_s, rgrid_km, longrid_rad, rot_period_s, buffer_time_s):
     """
     recreate steady-state solar wind conditions during the spin-up period 
@@ -2410,7 +2396,7 @@ def respinup_model(v_trl_kms, tgrid_s, rgrid_km, longrid_rad, rot_period_s, buff
         buffer_time_s: How back to take the model before the start time, in seconds
 
     Returns:
-        new_v_trl_kms: the speed as a funciton of time, radius and longitude, 
+        new_v_trl_kms: Speed as a function of time, radius, and longitude.
                     for both the spint-up and model run period
         new_tgrid_s: the new time grid. spin-up period has negative times.
     """
@@ -2438,7 +2424,7 @@ def respinup_model(v_trl_kms, tgrid_s, rgrid_km, longrid_rad, rot_period_s, buff
     return new_v_trl_kms, new_tgrid_s
 
 
-@jit(nopython=True, cache=s.NUMBA_CACHE)
+@jit(nopython=True, cache=s.surf_constants()['numba_cache'])
 def _return_distance_for_given_t_(t, start_lon, v_trl_kms=np.nan, longrid_rad=np.nan,
                                   rgrid_km=np.nan, tgrid_s=np.nan, time_stop_s=np.nan,
                                   Earth_lon_rad=np.nan, Earth_r_km=np.nan, rot_period_s=np.nan):
@@ -2466,7 +2452,7 @@ def _return_distance_for_given_t_(t, start_lon, v_trl_kms=np.nan, longrid_rad=np
     return dist
 
 
-@jit(nopython=True, cache=s.NUMBA_CACHE)
+@jit(nopython=True, cache=s.surf_constants()['numba_cache'])
 def _return_distance_for_given_lon_(start_lon, t, v_trl_kms=np.nan, longrid_rad=np.nan,
                                     rgrid_km=np.nan, tgrid_s=np.nan, time_stop_s=np.nan,
                                     Earth_lon_rad=np.nan, Earth_r_km=np.nan, rot_period_s=np.nan):

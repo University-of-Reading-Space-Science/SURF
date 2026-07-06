@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "surf"
 version = "1.0.0"
-description = "Space-weather Utilities for Research adn Forecasting (SURF)"
+description = "Space-weather Utilities for Research and Forecasting (SURF)"
 readme = "README.md"
 authors = [
   {name = "Luke Barnard", email = "l.a.barnard@reading.ac.uk" },

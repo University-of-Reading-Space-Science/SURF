@@ -68,7 +68,7 @@ def get_omni(starttime, endtime):
     id_bad = omni['T'] == 9999999.0
     omni.loc[id_bad, 'T'] = np.nan
 
-    # create a BX_GSE field that is expected by some SURF fucntions
+    # Create the BX_GSE field expected by some SURF functions.
     omni['BX_GSE'] = -omni['BR']
 
     # create a datetime column
@@ -108,7 +108,7 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon=None, omni_input=None, dt=1 
                and time
     """
 
-    # check the coro_type is one of the accepted values
+    # Check that corot_type is one of the accepted values.
     assert corot_type == 'both' or corot_type == 'back' or corot_type == 'forward'
 
     # set the default longitude grid, check specified value
@@ -163,7 +163,7 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon=None, omni_input=None, dt=1 
     # get the Earth radial distance info.
     dirs = s._setup_dirs_()
     ephem = h5py.File(dirs['ephemeris'], 'r')
-    # convert ephemeric to mjd and interpolate to required times
+    # Convert the ephemeris times to MJD and interpolate to the requested times.
     all_time = Time(ephem['EARTH']['HEEQ']['time'], format='jd').value - 2400000.5
     omni_int['R'] = np.interp(omni_int['mjd'], all_time, ephem['EARTH']['HEEQ']['radius'][:])
 
@@ -725,7 +725,7 @@ def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.
     url_head = "https://kauai.ccmc.gsfc.nasa.gov/DONKI/WS/get/IPS?startDate="
     url = url_head + startdate_str + '&endDate=' + stopdate_str
 
-    # read teh json file
+    # Read the JSON response.
     response = urlopen(url)
 
     if response.status == 200:
@@ -748,7 +748,7 @@ def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.
         # add a guess at the ICME end time
         icmes['ICME_end'] = icmes['Shock_time'] + datetime.timedelta(days=ICME_duration.value)
     else:
-        print("No repsonse for " + url)
+        print("No response for " + url)
         icmes = None
 
     return icmes

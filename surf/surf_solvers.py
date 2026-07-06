@@ -42,7 +42,7 @@ Example Usage:
 import numpy as np
 from numba import njit
 
-from surf.surf import NUMBA_CACHE
+from surf.surf import surf_constants
 
 __all__ = [
     'CompressibleSolver',
@@ -52,13 +52,13 @@ __all__ = [
     'K_B_SI', 'M_P_SI',
 ]
 
-# Physical constants (SI units)
-K_B_SI = 1.380649e-23       # J/K (Boltzmann constant)
-M_P_SI = 1.67262192e-27     # kg (proton mass)
-
-# Numerical floor values
-SMALL_RHO = 1e-30
-SMALL_P = 1e-30
+_CONSTANTS = surf_constants()
+K_B_SI = _CONSTANTS['boltzmann_constant']
+M_P_SI = _CONSTANTS['proton_mass']
+SMALL_RHO = _CONSTANTS['min_density']
+SMALL_P = _CONSTANTS['min_pressure']
+NUMBA_CACHE = _CONSTANTS['numba_cache']
+del _CONSTANTS
 
 
 # =============================================================================
