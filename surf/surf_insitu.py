@@ -1037,11 +1037,32 @@ def _resample_longitude_grid(values, nlon):
     return result * unit if unit is not None else result
 
 
+def _periodic_running_mean(values, width):
+    """Centered running mean for a periodic 1D longitude series."""
+    width = int(width)
+    data = np.asarray(values).flatten()
+
+    if width < 1:
+        raise ValueError("cnn_smoothing_width must be at least 1.")
+    if width % 2 == 0:
+        raise ValueError("cnn_smoothing_width must be odd for centered smoothing.")
+    if width > data.size:
+        raise ValueError("cnn_smoothing_width cannot exceed the longitude grid size.")
+    if width == 1:
+        return data.copy()
+
+    half_width = width // 2
+    smoothed = np.zeros_like(data, dtype=np.result_type(data.dtype, float))
+    for offset in range(-half_width, half_width + 1):
+        smoothed += np.roll(data, offset)
+    return smoothed / width
+
+
 def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u.solRad,
                       dt_scale=4, omni_input=None, buffertime=5*u.day, run_2d=False,
                       solver='huxt', nlon=128, dr=1.5*u.solRad,
                       v_max=3000*u.km/u.s, lon_start=0*u.rad,
-                      lon_stop=2*np.pi*u.rad):
+                      lon_stop=2*np.pi*u.rad, cnn_smoothing_width=9):
     """
     Create a SURF solar wind forecast initialized from in-situ OMNI observations.
     
@@ -1095,6 +1116,9 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
         Radial grid spacing.
     v_max : astropy.units.Quantity, optional
         Maximum speed used with dr to set the CFL time step.
+    cnn_smoothing_width : int, optional
+        Odd-width periodic running mean applied to CNN-corrected velocity for
+        compressible solvers. Use 1 to disable smoothing. Default is 5.
 
     
     Returns
@@ -1186,13 +1210,15 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
         vcarr_rmin_back, bcarr_rmin_back = sin.map_v_boundary_inwards(
                                                 omni_lon['V'].to_numpy()*u.km/u.s,
                                                 Earth_R_km.to(u.solRad), rmin,
+                                                acc_profile='huxt',
                                                 b_orig=-omni_lon['BX_GSE'].to_numpy())
     else:
         vcarr_rmin_back, bcarr_rmin_back = sin.map_v_boundary_inwards(
                                                 omni_lon['V'].to_numpy()*u.km/u.s,
                                                 Earth_R_km.to(u.solRad), rmin,
+                                                acc_profile='parker',
                                                 b_orig=-omni_lon['BX_GSE'].to_numpy(),
-                                                acc_profile='huxt', gamma=1.5)
+                                                 gamma=1.5)
     
     
     # interp to typical SURF resolution
@@ -1213,7 +1239,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     if _is_compressible_solver(solver):
         #vcarr_rmin_back_cnn = vcarr_rmin_back_cnn * 1.0
         #smooth the series, periodic at the edges
-        vcarr_rmin_back_cnn = np.convolve(vcarr_rmin_back_cnn.flatten(), np.ones(5)/5, mode='same')
+        vcarr_rmin_back_cnn = _periodic_running_mean(vcarr_rmin_back_cnn, cnn_smoothing_width)
         
         #ensure no speeds below 250
         vcarr_rmin_back_cnn[vcarr_rmin_back_cnn <250] = 250
@@ -1249,7 +1275,8 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                             dt_scale=4, dt=1*u.day, omni_input=None, run_2d=False, solver='huxt',
                             rho_source='speed', temp_source='speed', nlon=128,
                             dr=1.5*u.solRad, v_max=3000*u.km/u.s,
-                            lon_start=0*u.rad, lon_stop=2*np.pi*u.rad):
+                            lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
+                            cnn_smoothing_width=9):
     """
     Create a SURF solar wind reconstruction using OMNI observations over a time interval.
     
@@ -1306,6 +1333,9 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
         Source for temperature when solver is 'hydro' or 'hydro-pcm'. Options:
         - 'speed': Derive from speed using SURF input functions (default)
         - 'omni': Use OMNI data with Parker-like radial scaling
+    cnn_smoothing_width : int, optional
+        Odd-width periodic running mean applied to CNN-corrected velocity for
+        compressible solvers. Use 1 to disable smoothing. Default is 5.
     
     Returns
     -------
@@ -1424,9 +1454,8 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     # For compressible solvers, apply post-processing (same as omniSURF_forecast)
     if _is_compressible_solver(solver):
         for t in range(vcarr_rmin_cnn.shape[1]):
-            col = vcarr_rmin_cnn[:, t]
             # smooth the series, periodic at the edges
-            col = np.convolve(col.flatten(), np.ones(5)/5, mode='same')
+            col = _periodic_running_mean(vcarr_rmin_cnn[:, t], cnn_smoothing_width)
             # ensure no speeds below 250
             col[col < 250] = 250
             vcarr_rmin_cnn[:, t] = col

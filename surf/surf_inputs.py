@@ -566,7 +566,8 @@ def map_v_boundary_inwards(v_orig, r_orig, r_new, b_orig=np.nan, acc_profile='hu
     if acc_profile == 'huxt':
         v0, phis_new = map_v_inwards(v_orig, r_orig, lon, r_new)
     elif acc_profile == 'parker':
-         v0, phis_new = map_v_inwards_parker(v_orig, r_orig, lon, r_new, gamma=gamma)[0:2]
+         mapped = map_v_inwards_parker(v_orig, r_orig, lon, r_new, gamma=gamma)
+         v0, phis_new = mapped[0], mapped[3]
 
     # Interpolate the mapped speeds back onto the regular Carr long grid,
     # making boundaries periodic
