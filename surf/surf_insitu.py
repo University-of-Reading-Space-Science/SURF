@@ -1062,7 +1062,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       dt_scale=4, omni_input=None, buffertime=5*u.day, run_2d=False,
                       solver='huxt', nlon=128, dr=1.5*u.solRad,
                       v_max=3000*u.km/u.s, lon_start=0*u.rad,
-                      lon_stop=2*np.pi*u.rad, cnn_smoothing_width=7):
+                      lon_stop=2*np.pi*u.rad, cnn_smoothing_width=7, track_cmes=False):
     """
     Create a SURF solar wind forecast initialized from in-situ OMNI observations.
     
@@ -1257,17 +1257,17 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       cr_num=cr, cr_lon_init=cr_lon_init,
                       simtime=simtime, r_min=rmin, r_max=rmax,
                       dt_scale=dt_scale, latitude=Elat, frame='synodic',
-                      track_cmes=False, solver=solver, nlon=nlon,
+                      solver=solver, nlon=nlon,
                       lon_start=lon_start, lon_stop=lon_stop, dr=dr,
-                      v_max=v_max)
+                      v_max=v_max, track_cmes=track_cmes)
     else:
         model = s.SURF(v_boundary=vcarr_rmin_back_cnn.flatten() * u.km/u.s,
                       b_boundary=blon, 
                       cr_num=cr, cr_lon_init=cr_lon_init,
                       simtime=simtime, r_min=rmin, r_max=rmax,
                       dt_scale=dt_scale, latitude=Elat, frame='synodic',
-                      track_cmes=False, lon_out=0*u.rad, solver=solver,
-                      nlon=nlon, dr=dr, v_max=v_max)
+                      lon_out=0*u.rad, solver=solver,
+                      nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes)
     return model
 
 
@@ -1276,7 +1276,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                             rho_source='speed', temp_source='speed', nlon=128,
                             dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                             lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
-                            cnn_smoothing_width=7):
+                            cnn_smoothing_width=7, track_cmes=False):
     """
     Create a SURF solar wind reconstruction using OMNI observations over a time interval.
     
@@ -1549,7 +1549,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
             frame='synodic',
             lon_start=lon_start,
             lon_stop=lon_stop,
-            solver=solver, track_cmes=False, nlon=nlon, dr=dr, v_max=v_max
+            solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes
         )
     else:
         model = sin.set_time_dependent_boundary(
@@ -1566,7 +1566,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
             latitude=Elat,
             frame='synodic',
             lon_out=0*u.rad,
-            solver=solver, track_cmes=False, nlon=nlon, dr=dr, v_max=v_max
+            solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes
         )
     
     return model
@@ -1575,7 +1575,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
 def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u.day,
                      omni_input=None, run_2d=False, solver='hydro', nlon=128,
                      dr=1.5*u.solRad, v_max=3000*u.km/u.s,
-                     lon_start=0*u.rad, lon_stop=2*np.pi*u.rad):
+                     lon_start=0*u.rad, lon_stop=2*np.pi*u.rad, track_cmes=False):
     """
     Create a SURF solar wind simulation starting from ~1 AU using OMNI observations.
 
@@ -1695,7 +1695,7 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
             frame='synodic',
             lon_start=lon_start,
             lon_stop=lon_stop,
-            solver=solver, track_cmes=False, nlon=nlon, dr=dr, v_max=v_max
+            solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes
         )
     else:
         model = sin.set_time_dependent_boundary(
@@ -1712,7 +1712,7 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
             latitude=Elat,
             frame='synodic',
             lon_out=0*u.rad,
-            solver=solver, track_cmes=False, nlon=nlon, dr=dr, v_max=v_max
+            solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes
         )
 
     return model

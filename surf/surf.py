@@ -2160,7 +2160,7 @@ def surf_constants():
     Returns:
         constants: A dictionary of constants that configure SURF
     """
-    numba_cache = True
+    numba_cache = True # Whether to cache numba-compiled functions to disk. Set True for faster subsequent runs, False for development
     
     nlon = 128  # Number of equally spaced longitudes in the full grid [128]
     dr = 1.5 * u.solRad  # Radial grid step. With v_max, this sets the model time step [1.5 Rs]
