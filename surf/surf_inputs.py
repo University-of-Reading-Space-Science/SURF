@@ -580,7 +580,7 @@ def map_v_boundary_inwards(v_orig, r_orig, r_new, b_orig=np.nan, acc_profile='hu
         return v_new
 
 
-def map_vmap_inwards(v_map, v_map_lat, v_map_long, r_orig, r_new, b_map=np.nan):
+def map_vmap_inwards(v_map, v_map_lat, v_map_long, r_orig, r_new, b_map=np.nan, acc_profile='huxt', gamma=1.5):
     """
     Function to map a V Carrington map from r_orig (in rs) to r_new (in rs), accounting for
     acceleration, but ignoring stream interaction. Produces the required longitude shift and
@@ -596,6 +596,8 @@ def map_vmap_inwards(v_map, v_map_lat, v_map_long, r_orig, r_new, b_map=np.nan):
         r_new: Radial distance at new radial boundary. np.array with units of km.
         b_map: b_r to be optionally mapped using the same time/long delay as v. assumed to be on
                same grid
+        acc_profile: Acceleration profile to use. Default is 'huxt'. Option is 'parker'
+        gamma: Polytropic index. Default is 1.5.
 
     Returns:
         v_map_new: Solar wind speed map at r_inner. np.array with units of km/s.
@@ -610,7 +612,10 @@ def map_vmap_inwards(v_map, v_map_lat, v_map_long, r_orig, r_new, b_map=np.nan):
     b_map_new = np.ones((len(v_map_lat), len(v_map_long)))
     for ilat in range(0, len(v_map_lat)):
         # Map each point in to a new speed and longitude
-        v0, phis_new = map_v_inwards(v_map[ilat, :], r_orig, v_map_long, r_new)
+        if acc_profile == 'huxt':
+            v0, phis_new = map_v_inwards(v_map[ilat, :], r_orig, v_map_long, r_new)
+        elif acc_profile == 'parker':
+            v0, _, _, phis_new = map_v_inwards_parker(v_map[ilat, :], r_orig, v_map_long, r_new, gamma=gamma)
 
         # Interpolate the mapped speeds back onto the regular Carr long grid,
         # making boundaries periodic

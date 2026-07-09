@@ -1062,7 +1062,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       dt_scale=4, omni_input=None, buffertime=5*u.day, run_2d=False,
                       solver='huxt', nlon=128, dr=1.5*u.solRad,
                       v_max=3000*u.km/u.s, lon_start=0*u.rad,
-                      lon_stop=2*np.pi*u.rad, cnn_smoothing_width=9):
+                      lon_stop=2*np.pi*u.rad, cnn_smoothing_width=7):
     """
     Create a SURF solar wind forecast initialized from in-situ OMNI observations.
     
@@ -1276,7 +1276,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                             rho_source='speed', temp_source='speed', nlon=128,
                             dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                             lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
-                            cnn_smoothing_width=9):
+                            cnn_smoothing_width=7):
     """
     Create a SURF solar wind reconstruction using OMNI observations over a time interval.
     
