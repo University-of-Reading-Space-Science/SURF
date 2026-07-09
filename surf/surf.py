@@ -904,7 +904,7 @@ class SURF:
             self.T_sw_inner = self.T_sw_inner * u.K
             # Convert number density to mass density
             m_p = 1.67262192e-27  # proton mass in kg
-            self.rho_sw_inner = self.n_sw_inner * m_p * 1e6 * (u.kg / u.m ** 3)
+            self.rho_sw_inner = self.n_sw_inner.to(u.cm ** -3).value * m_p * 1e6 * (u.kg / u.m ** 3)
             
 
 

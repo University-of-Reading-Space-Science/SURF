@@ -277,6 +277,16 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon=None, omni_input=None, dt=1 
 
     # cut out the requested time
     mask = ((time_grid >= Time(runstart).mjd) & (time_grid <= Time(runend).mjd))
+    if not np.any(mask):
+        available_start = Time(time_grid[0], format='mjd').to_datetime()
+        available_end = Time(time_grid[-1], format='mjd').to_datetime()
+        raise ValueError(
+            "No OMNI Carrington-map samples overlap the requested reconstruction "
+            f"interval {runstart} to {runend}. Available OMNI-derived samples span "
+            f"{available_start} to {available_end}. Use a reconstruction interval "
+            "covered by OMNI data, or use omniSURF_forecast/omniSURF_1au_out for "
+            "forward runs from the latest available observations."
+        )
 
     if compressible:
         # Convert number density (cm⁻³) to mass density (kg/m³) and add units
@@ -1525,6 +1535,10 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     bcarr_rmin = _resample_longitude_grid(bcarr_rmin, nlon)
     rhogrid_carr = _resample_longitude_grid(rhogrid_carr, nlon)
     tempgrid_carr = _resample_longitude_grid(tempgrid_carr, nlon)
+    if need_compressible and rho_source == 'omni':
+        rhogrid_carr = u.Quantity(rhogrid_carr, copy=False).to(u.kg / u.m**3)
+    if need_compressible and temp_source == 'omni':
+        tempgrid_carr = u.Quantity(tempgrid_carr, copy=False).to(u.K)
     
     # Calculate simulation time from start to end
     simtime = (Time(end_time).mjd - Time(start_time).mjd) * u.day

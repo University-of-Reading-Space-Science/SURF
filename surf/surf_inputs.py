@@ -1536,9 +1536,10 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
         
         if do_rho:
             rho_boundary = rhogrid_Carr[:, t_input]
-            # Handle units if present
+            # Normalise density inputs at the boundary-ingestion point. Internally,
+            # time-dependent density is always carried as mass density in kg/m^3.
             if hasattr(rho_boundary, 'unit'):
-                rho_boundary = rho_boundary.value
+                rho_boundary = rho_boundary.to(u.kg / u.m ** 3).value
             rho_b_shifted = rho_boundary[id_sort]
             # interpolate back to the original grid
             rho_boundary = np.interp(all_lons.value, lon_shifted, rho_b_shifted, period=2 * np.pi)
@@ -1546,9 +1547,9 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
         
         if do_temp:
             temp_boundary = tempgrid_Carr[:, t_input]
-            # Handle units if present
+            # Normalise temperature inputs at the boundary-ingestion point.
             if hasattr(temp_boundary, 'unit'):
-                temp_boundary = temp_boundary.value
+                temp_boundary = temp_boundary.to(u.K).value
             temp_b_shifted = temp_boundary[id_sort]
             # interpolate back to the original grid
             temp_boundary = np.interp(all_lons.value, lon_shifted, temp_b_shifted, period=2 * np.pi)
