@@ -123,7 +123,7 @@ def main():
             elif coord_sys == 'HEEQ':
                 this_coord = body_coords.transform_to(coords.HeliographicStonyhurst())
             elif coord_sys == 'HAE':
-                this_coord = body_coords.transform_to(acoords.HeliocentricMeanEcliptic())
+                this_coord = body_coords.transform_to(acoords.HeliocentricMeanEcliptic(equinox='J2000'))
 
             if coord_sys == 'HAE':
                 rad = coord_group.create_dataset('radius', data=this_coord.distance.to(u.km).value)
