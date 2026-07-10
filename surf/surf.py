@@ -4,14 +4,16 @@ import os
 import copy
 import errno
 from appdirs import user_data_dir
-import astropy.units as u
+import astropy.coordinates as acoords
 from astropy.time import Time, TimeDelta
+import astropy.units as u
 import h5py
 from joblib import Parallel, delayed
 import numpy as np
 from numba import jit
 from pathlib import Path
-from sunpy.coordinates import sun
+import sunpy.coordinates as coords
+
 
 class Observer:
     """
@@ -25,7 +27,8 @@ class Observer:
     JPL Horizons for each mission. JPL Horizons only provides ACE and STEREO-A data for short
     windows into the future (~70 and ~100 days, respectively). And so the ephemeris file may need
     to be periodically updated. The ephemeris data can be updated using the
-    SURF/scripts/make_ephemeris.py script.
+    SURF/scripts/make_ephemeris.py script. For a synthetic observer, the HEEQ positions of the
+    synthetic observer as a function of time must be provided.
 
     Attributes:
         body: String name of the planet or spacecraft.
@@ -41,12 +44,12 @@ class Observer:
         time: Array of Astropy Times
     """
 
-    def __init__(self, body, times):
+    def __init__(self, body, times, synth_heeq_pos=None):
         """
-            body: String indicating which body to look up the positions of .
+            body: String indicating which body to look up the positions of.
             times: A list/array of Astropy Times to interpolate the coordinate of the selected body.
         """
-        craft = ["ACE", "STA", "STB", "PSP", "SOLO", "ULYSSES"]
+        craft = ["ACE", "STA", "STB", "PSP", "SOLO", "ULYSSES", "SYNTHETIC"]
         planets = ["MERCURY", "VENUS", "EARTH", "MARS", "JUPITER", "SATURN"]
         bodies = planets + craft
         if body.upper() in bodies:
@@ -57,86 +60,208 @@ class Observer:
             print("Defaulting to Earth")
             self.body = "EARTH"
 
-        # Get path to ephemeris file and open
-        dirs = _setup_dirs_()
-        ephem = h5py.File(dirs['ephemeris'], 'r')
+        # Handle real observers first.
+        if self.body != "SYNTHETIC":
+            # Get path to ephemeris file and open
+            dirs = _setup_dirs_()
+            ephem = h5py.File(dirs['ephemeris'], 'r')
 
-        # Now get observers coordinates
-        all_time = Time(ephem[self.body]['HEEQ']['time'], format='jd')
+            # Now get observers coordinates
+            all_time = Time(ephem[self.body]['HEEQ']['time'], format='jd')
 
-        # STEREO-A and ACE have shorter lengths of ephemeris data. Check requested times
-        if np.any(times > all_time[-1]):
-            raise ValueError(f"{body} ephemeris extends to {all_time[-1].isot}."
-                             f" Requested times are outside this limit."
-                             f" Updating the SURF ephemeris file may resolve this issue.")
+            # STEREO-A and ACE have shorter lengths of ephemeris data. Check requested times
+            if np.any(times > all_time[-1]):
+                raise ValueError(f"{body} ephemeris extends to {all_time[-1].isot}."
+                                 f" Requested times are outside this limit."
+                                 f" Updating the SURF ephemeris file may resolve this issue.")
 
-        # Pad out the window to account for single values being passed.
-        if self.body in craft:
-            dt = TimeDelta(2 * 60 * 60, format='sec')  # craft ephem is 4 hourly, so dt=2
-        elif self.body in planets:
-            dt = TimeDelta(6 * 60 * 60, format='sec')  # planet ephem is 12 hourly, so dt=6
+            # Pad out the window to account for single values being passed.
+            if self.body in craft:
+                dt = TimeDelta(2 * 60 * 60, format='sec')  # craft ephem is 4 hourly, so dt=2
+            elif self.body in planets:
+                dt = TimeDelta(6 * 60 * 60, format='sec')  # planet ephem is 12 hourly, so dt=6
 
-        id_epoch = (all_time >= (times.min() - dt)) & (all_time <= (times.max() + dt))
-        epoch_time = all_time[id_epoch]
+            id_epoch = (all_time >= (times.min() - dt)) & (all_time <= (times.max() + dt))
+            epoch_time = all_time[id_epoch]
 
-        self.time = times
-        if len(epoch_time.jd) == 0:
-            self.r = np.ones(len(self.time)) * np.nan
-            self.lon = np.ones(len(self.time)) * np.nan
-            self.lat = np.ones(len(self.time)) * np.nan
+            self.time = times
+            if len(epoch_time.jd) == 0:
+                self.r = np.ones(len(self.time)) * np.nan
+                self.lon = np.ones(len(self.time)) * np.nan
+                self.lat = np.ones(len(self.time)) * np.nan
 
-            self.r_hae = np.ones(len(self.time)) * np.nan
-            self.lon_hae = np.ones(len(self.time)) * np.nan
-            self.lat_hae = np.ones(len(self.time)) * np.nan
+                self.r_hae = np.ones(len(self.time)) * np.nan
+                self.lon_hae = np.ones(len(self.time)) * np.nan
+                self.lat_hae = np.ones(len(self.time)) * np.nan
 
-            self.r_c = np.ones(len(self.time)) * np.nan
-            self.lon_c = np.ones(len(self.time)) * np.nan
-            self.lat_c = np.ones(len(self.time)) * np.nan
+                self.r_c = np.ones(len(self.time)) * np.nan
+                self.lon_c = np.ones(len(self.time)) * np.nan
+                self.lat_c = np.ones(len(self.time)) * np.nan
 
+            else:
+                r = ephem[self.body]['HEEQ']['radius'][id_epoch]
+                self.r = np.interp(times.jd, epoch_time.jd, r)
+                self.r = (self.r * u.km).to(u.solRad)
+
+                lon = np.deg2rad(ephem[self.body]['HEEQ']['longitude'][id_epoch])
+                lon = np.unwrap(lon)
+                self.lon = np.interp(times.jd, epoch_time.jd, lon)
+                self.lon = zerototwopi(self.lon)
+                self.lon = self.lon * u.rad
+
+                lat = np.deg2rad(ephem[self.body]['HEEQ']['latitude'][id_epoch])
+                self.lat = np.interp(times.jd, epoch_time.jd, lat)
+                self.lat = self.lat * u.rad
+
+                r = ephem[self.body]['HAE']['radius'][id_epoch]
+                self.r_hae = np.interp(times.jd, epoch_time.jd, r)
+                self.r_hae = (self.r_hae * u.km).to(u.solRad)
+
+                lon = np.deg2rad(ephem[self.body]['HAE']['longitude'][id_epoch])
+                lon = np.unwrap(lon)
+                self.lon_hae = np.interp(times.jd, epoch_time.jd, lon)
+                self.lon_hae = zerototwopi(self.lon_hae)
+                self.lon_hae = self.lon_hae * u.rad
+
+                lat = np.deg2rad(ephem[self.body]['HAE']['latitude'][id_epoch])
+                self.lat_hae = np.interp(times.jd, epoch_time.jd, lat)
+                self.lat_hae = self.lat_hae * u.rad
+
+                r = ephem[self.body]['CARR']['radius'][id_epoch]
+                self.r_c = np.interp(times.jd, epoch_time.jd, r)
+                self.r_c = (self.r_c * u.km).to(u.solRad)
+
+                lon = np.deg2rad(ephem[self.body]['CARR']['longitude'][id_epoch])
+                lon = np.unwrap(lon)
+                self.lon_c = np.interp(times.jd, epoch_time.jd, lon)
+                self.lon_c = zerototwopi(self.lon_c)
+                self.lon_c = self.lon_c * u.rad
+
+                lat = np.deg2rad(ephem[self.body]['CARR']['latitude'][id_epoch])
+                self.lat_c = np.interp(times.jd, epoch_time.jd, lat)
+                self.lat_c = self.lat_c * u.rad
+
+            ephem.close()
         else:
-            r = ephem[self.body]['HEEQ']['radius'][id_epoch]
-            self.r = np.interp(times.jd, epoch_time.jd, r)
-            self.r = (self.r * u.km).to(u.solRad)
 
-            lon = np.deg2rad(ephem[self.body]['HEEQ']['longitude'][id_epoch])
-            lon = np.unwrap(lon)
-            self.lon = np.interp(times.jd, epoch_time.jd, lon)
-            self.lon = zerototwopi(self.lon)
-            self.lon = self.lon * u.rad
+            # Validate synth_heeq_pos structure and types for a SYNTHETIC observer
+            if not isinstance(synth_heeq_pos, dict):
+                raise TypeError(
+                    "synth_heeq_pos must be a dictionary with keys 'time', 'r', 'lon', and 'lat'."
+                )
 
-            lat = np.deg2rad(ephem[self.body]['HEEQ']['latitude'][id_epoch])
-            self.lat = np.interp(times.jd, epoch_time.jd, lat)
+            required_keys = {'time', 'r', 'lon', 'lat'}
+            missing_keys = required_keys - set(synth_heeq_pos.keys())
+            if missing_keys:
+                raise KeyError(
+                    f"synth_heeq_pos is missing required keys: {sorted(missing_keys)}."
+                    f" Expected keys are 'time', 'r', 'lon', and 'lat'."
+                )
+
+            # 'time' must be an astropy Time object
+            if not isinstance(synth_heeq_pos['time'], Time):
+                raise TypeError(
+                    "synth_heeq_pos['time'] must be an astropy Time object,"
+                    f" not {type(synth_heeq_pos['time']).__name__}."
+                )
+
+            # 'r' must be an astropy Quantity with length units (distance)
+            if not isinstance(synth_heeq_pos['r'], u.Quantity):
+                raise TypeError(
+                    "synth_heeq_pos['r'] must be an astropy Quantity with length units,"
+                    f" not {type(synth_heeq_pos['r']).__name__}."
+                )
+            if not synth_heeq_pos['r'].unit.is_equivalent(u.km):
+                raise u.UnitsError(
+                    "synth_heeq_pos['r'] must have length units (e.g. km, solRad, au),"
+                    f" got units of '{synth_heeq_pos['r'].unit}'."
+                )
+
+            # 'lon' and 'lat' must be astropy Quantities with angular units
+            for angle_key in ('lon', 'lat'):
+                if not isinstance(synth_heeq_pos[angle_key], u.Quantity):
+                    raise TypeError(
+                        f"synth_heeq_pos['{angle_key}'] must be an astropy Quantity with"
+                        f" angular units, not {type(synth_heeq_pos[angle_key]).__name__}."
+                    )
+                if not synth_heeq_pos[angle_key].unit.is_equivalent(u.rad):
+                    raise u.UnitsError(
+                        f"synth_heeq_pos['{angle_key}'] must have angular units"
+                        f" (e.g. rad, deg), got units of '{synth_heeq_pos[angle_key].unit}'."
+                    )
+
+            # All four arrays must be the same length, otherwise the coordinate
+            # construction and interpolation will fail or silently misalign.
+            n_time = np.size(synth_heeq_pos['time'])
+            for key in ('r', 'lon', 'lat'):
+                if np.size(synth_heeq_pos[key]) != n_time:
+                    raise ValueError(
+                        f"synth_heeq_pos['{key}'] has length {np.size(synth_heeq_pos[key])},"
+                        f" but synth_heeq_pos['time'] has length {n_time}."
+                        " All entries must be the same length."
+                    )
+            if n_time < 2:
+                raise ValueError(
+                    "synth_heeq_pos must contain at least two samples so that the"
+                    " coordinates can be interpolated onto the requested times."
+                )
+
+            self.time = times
+
+            # Ensure model times are within the span of the synth_heeq_pos times, as otherwise
+            # interpolation will give incorrect results.
+            time_check = (self.time.jd[0] >= synth_heeq_pos['time'].jd[0]) & (
+                        self.time.jd[-1] <=
+                        synth_heeq_pos['time'].jd[-1])
+
+            if not time_check:
+                raise ValueError(
+                    "The model times are not within the span of the synth_heeq_pos times."
+                    "A reliable Observer instance cannot be created for the specified synthetic "
+                    "observer.")
+
+            # Helper: interpolate an angle (radians) onto self.time, unwrapping first
+            # so that wrap-arounds at 0/2pi don't create spurious jumps, then folding
+            # the result back into [0, 2pi). This mirrors the real-observer branch.
+            def _interp_angle(src_jd, angle_rad):
+                unwrapped = np.unwrap(angle_rad)
+                out = np.interp(self.time.jd, src_jd, unwrapped)
+                return zerototwopi(out) * u.rad
+
+            # Do coordinate transforms on uninterpolated data as more robust/accurate.
+            heeq = coords.HeliographicStonyhurst(synth_heeq_pos['lon'],
+                                                 synth_heeq_pos['lat'],
+                                                 synth_heeq_pos['r'],
+                                                 obstime=synth_heeq_pos['time'])
+
+            self.r = np.interp(self.time.jd, heeq.obstime.jd, heeq.radius.to(u.solRad).value)
+            self.r = self.r * u.solRad
+
+            self.lon = _interp_angle(heeq.obstime.jd, heeq.lon.to(u.rad).value)
+
+            # Latitude is bounded to [-pi/2, pi/2] and never wraps, so interpolate directly.
+            self.lat = np.interp(self.time.jd, heeq.obstime.jd, heeq.lat.to(u.rad).value)
             self.lat = self.lat * u.rad
 
-            r = ephem[self.body]['HAE']['radius'][id_epoch]
-            self.r_hae = np.interp(times.jd, epoch_time.jd, r)
-            self.r_hae = (self.r_hae * u.km).to(u.solRad)
+            carr = heeq.transform_to(coords.HeliographicCarrington(observer="self"))
+            self.r_c = np.interp(self.time.jd, carr.obstime.jd, carr.radius.to(u.solRad).value)
+            self.r_c = self.r_c * u.solRad
 
-            lon = np.deg2rad(ephem[self.body]['HAE']['longitude'][id_epoch])
-            lon = np.unwrap(lon)
-            self.lon_hae = np.interp(times.jd, epoch_time.jd, lon)
-            self.lon_hae = zerototwopi(self.lon_hae)
-            self.lon_hae = self.lon_hae * u.rad
+            self.lon_c = _interp_angle(carr.obstime.jd, carr.lon.to(u.rad).value)
 
-            lat = np.deg2rad(ephem[self.body]['HAE']['latitude'][id_epoch])
-            self.lat_hae = np.interp(times.jd, epoch_time.jd, lat)
-            self.lat_hae = self.lat_hae * u.rad
-
-            r = ephem[self.body]['CARR']['radius'][id_epoch]
-            self.r_c = np.interp(times.jd, epoch_time.jd, r)
-            self.r_c = (self.r_c * u.km).to(u.solRad)
-
-            lon = np.deg2rad(ephem[self.body]['CARR']['longitude'][id_epoch])
-            lon = np.unwrap(lon)
-            self.lon_c = np.interp(times.jd, epoch_time.jd, lon)
-            self.lon_c = zerototwopi(self.lon_c)
-            self.lon_c = self.lon_c * u.rad
-
-            lat = np.deg2rad(ephem[self.body]['CARR']['latitude'][id_epoch])
-            self.lat_c = np.interp(times.jd, epoch_time.jd, lat)
+            self.lat_c = np.interp(self.time.jd, carr.obstime.jd, carr.lat.to(u.rad).value)
             self.lat_c = self.lat_c * u.rad
 
-        ephem.close()
+            hae = heeq.transform_to(acoords.HeliocentricMeanEcliptic(equinox='J2000',
+                                                                     obstime=heeq.obstime))
+            self.r_hae = np.interp(self.time.jd, heeq.obstime.jd, hae.distance.to(u.solRad).value)
+            self.r_hae = self.r_hae * u.solRad
+
+            self.lon_hae = _interp_angle(heeq.obstime.jd, hae.lon.to(u.rad).value)
+
+            self.lat_hae = np.interp(self.time.jd, heeq.obstime.jd, hae.lat.to(u.rad).value)
+            self.lat_hae = self.lat_hae * u.rad
+
         return
 
 
@@ -827,7 +952,7 @@ class SURF:
 
             # Compute model UTC initalisation time
         cr_frac = self.cr_num.value + ((self.twopi - self.cr_lon_init.value) / self.twopi)
-        self.time_init = sun.carrington_rotation_time(cr_frac)
+        self.time_init = coords.sun.carrington_rotation_time(cr_frac)
 
         # Rotate the boundary condition as required by cr_lon_init.
         lon_shifted = zerototwopi((self.v_boundary_lons - self.cr_lon_init).value)
