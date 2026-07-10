@@ -1072,7 +1072,8 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       dt_scale=4, omni_input=None, buffertime=5*u.day, run_2d=False,
                       solver='huxt', nlon=128, dr=1.5*u.solRad,
                       v_max=3000*u.km/u.s, lon_start=0*u.rad,
-                      lon_stop=2*np.pi*u.rad, cnn_smoothing_width=7, track_cmes=False):
+                      lon_stop=2*np.pi*u.rad, cnn_smoothing_width=7, track_cmes=False,
+                      gamma=1.5):
     """
     Create a SURF solar wind forecast initialized from in-situ OMNI observations.
     
@@ -1129,6 +1130,8 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     cnn_smoothing_width : int, optional
         Odd-width periodic running mean applied to CNN-corrected velocity for
         compressible solvers. Use 1 to disable smoothing. Default is 5.
+    gamma : float, optional
+        Effective adiabatic index used for Parker mapping and by SURF. Default is 1.5.
 
     
     Returns
@@ -1228,7 +1231,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                                                 Earth_R_km.to(u.solRad), rmin,
                                                 acc_profile='parker',
                                                 b_orig=-omni_lon['BX_GSE'].to_numpy(),
-                                                 gamma=1.5)
+                                                gamma=gamma)
     
     
     # interp to typical SURF resolution
@@ -1269,7 +1272,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       dt_scale=dt_scale, latitude=Elat, frame='synodic',
                       solver=solver, nlon=nlon,
                       lon_start=lon_start, lon_stop=lon_stop, dr=dr,
-                      v_max=v_max, track_cmes=track_cmes)
+                      v_max=v_max, track_cmes=track_cmes, gamma=gamma)
     else:
         model = s.SURF(v_boundary=vcarr_rmin_back_cnn.flatten() * u.km/u.s,
                       b_boundary=blon, 
@@ -1277,7 +1280,8 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       simtime=simtime, r_min=rmin, r_max=rmax,
                       dt_scale=dt_scale, latitude=Elat, frame='synodic',
                       lon_out=0*u.rad, solver=solver,
-                      nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes)
+                      nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes,
+                      gamma=gamma)
     return model
 
 
@@ -1286,7 +1290,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                             rho_source='speed', temp_source='speed', nlon=128,
                             dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                             lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
-                            cnn_smoothing_width=7, track_cmes=False):
+                            cnn_smoothing_width=7, track_cmes=False, gamma=1.5):
     """
     Create a SURF solar wind reconstruction using OMNI observations over a time interval.
     
@@ -1346,6 +1350,8 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     cnn_smoothing_width : int, optional
         Odd-width periodic running mean applied to CNN-corrected velocity for
         compressible solvers. Use 1 to disable smoothing. Default is 5.
+    gamma : float, optional
+        Effective adiabatic index used for Parker mapping and by SURF. Default is 1.5.
     
     Returns
     -------
@@ -1450,7 +1456,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                 ref_r,
                 rmin,
                 b_orig=bcarr_215[:, t],
-                acc_profile='huxt', gamma=1.5
+                acc_profile='huxt', gamma=gamma
             )
             if isinstance(mapped, tuple):
                 vcarr_rmin[:, t], bcarr_rmin[:, t] = mapped
@@ -1493,12 +1499,12 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                 n_col = (rho_col.value / m_p / 1e6) * u.cm**-3
                 # Get temperature at ref_r from empirical relation
                 _, T_col = s.get_density_temperature_from_velocity(
-                    v_col.to(u.km/u.s).value, ref_r.to(u.solRad).value, gamma=1.5
+                    v_col.to(u.km/u.s).value, ref_r.to(u.solRad).value, gamma=gamma
                 )
                 # Map all properties from ref_r to rmin using Parker nozzle
                 _, n_new, _ = s.map_properties_parker(
                     v_col, ref_r, rmin,
-                    n_col, T_col * u.K, gamma=1.5
+                    n_col, T_col * u.K, gamma=gamma
                 )
                 # Convert number density back to mass density (kg/m^3)
                 rhogrid_carr_rmin[:, t] = (n_new.value * m_p * 1e6)
@@ -1519,12 +1525,12 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                 T_col = tcarr_215[:, t]  # K
                 # Get density at ref_r from empirical relation
                 n_col, _ = s.get_density_temperature_from_velocity(
-                    v_col.to(u.km/u.s).value, ref_r.to(u.solRad).value, gamma=1.5
+                    v_col.to(u.km/u.s).value, ref_r.to(u.solRad).value, gamma=gamma
                 )
                 # Map all properties from ref_r to rmin using Parker nozzle
                 _, _, T_new = s.map_properties_parker(
                     v_col, ref_r, rmin,
-                    n_col * u.cm**-3, T_col, gamma=1.5
+                    n_col * u.cm**-3, T_col, gamma=gamma
                 )
                 tempgrid_carr_rmin[:, t] = T_new.value
             tempgrid_carr = tempgrid_carr_rmin * u.K
@@ -1563,7 +1569,8 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
             frame='synodic',
             lon_start=lon_start,
             lon_stop=lon_stop,
-            solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes
+            solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes,
+            gamma=gamma
         )
     else:
         model = sin.set_time_dependent_boundary(
@@ -1580,7 +1587,8 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
             latitude=Elat,
             frame='synodic',
             lon_out=0*u.rad,
-            solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes
+            solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes,
+            gamma=gamma
         )
     
     return model
@@ -1589,7 +1597,8 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
 def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u.day,
                      omni_input=None, run_2d=False, solver='hydro', nlon=128,
                      dr=1.5*u.solRad, v_max=3000*u.km/u.s,
-                     lon_start=0*u.rad, lon_stop=2*np.pi*u.rad, track_cmes=False):
+                     lon_start=0*u.rad, lon_stop=2*np.pi*u.rad, track_cmes=False,
+                     gamma=1.5):
     """
     Create a SURF solar wind simulation starting from ~1 AU using OMNI observations.
 
@@ -1634,6 +1643,8 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
         - 'huxt': first-order HUXt advection solver
         - 'hydro': second-order compressible HLLC+PLM solver
         - 'hydro-pcm': compressible HLLC+PCM solver
+    gamma : float, optional
+        Effective adiabatic index used by SURF. Default is 1.5.
 
     Returns
     -------
@@ -1709,7 +1720,8 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
             frame='synodic',
             lon_start=lon_start,
             lon_stop=lon_stop,
-            solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes
+            solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes,
+            gamma=gamma
         )
     else:
         model = sin.set_time_dependent_boundary(
@@ -1726,7 +1738,8 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
             latitude=Elat,
             frame='synodic',
             lon_out=0*u.rad,
-            solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes
+            solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes,
+            gamma=gamma
         )
 
     return model

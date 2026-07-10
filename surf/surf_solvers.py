@@ -502,7 +502,7 @@ class CompressibleSolver:
     r_grid : ndarray
         Radial grid cell centers in m (SI units)
     gamma : float, optional
-        Adiabatic index (default 5/3)
+        Adiabatic index (default 1.5)
     cfl : float, optional
         CFL number (default 0.4 for PLM, 0.8 for PCM)
     reconstruction : str, optional
@@ -518,7 +518,7 @@ class CompressibleSolver:
     >>> results = solver.solve(t_grid, v_bc_func, rho_bc_func, T_bc_func)
     """
     
-    def __init__(self, r_grid, gamma=5.0/3.0, cfl=None, 
+    def __init__(self, r_grid, gamma=1.5, cfl=None,
                  riemann='hllc', reconstruction='plm', time_integration='euler',
                  verbose=False):
         self.r = r_grid.copy()
@@ -812,7 +812,7 @@ class CompressibleSolver:
 # Factory Function
 # =============================================================================
 
-def create_solver(r_grid, gamma=5.0/3.0, method='hllc-plm', cfl=None, verbose=False):
+def create_solver(r_grid, gamma=1.5, method='hllc-plm', cfl=None, verbose=False):
     """
     Create a compressible solver with specified method.
     
@@ -821,7 +821,7 @@ def create_solver(r_grid, gamma=5.0/3.0, method='hllc-plm', cfl=None, verbose=Fa
     r_grid : ndarray
         Radial grid in m (SI units)
     gamma : float, optional
-        Adiabatic index (default 5/3)
+        Adiabatic index (default 1.5)
     method : str, optional
         Solver configuration: 'hllc-{pcm|plm}[-{euler|rk2}]'
         Examples: 'hllc-plm', 'hllc-pcm', 'hllc-plm-rk2'
@@ -851,7 +851,7 @@ def create_solver(r_grid, gamma=5.0/3.0, method='hllc-plm', cfl=None, verbose=Fa
 # Benchmark and Utility Functions
 # =============================================================================
 
-def benchmark_solvers(r_grid, t_end, v_bc, rho_bc, T_bc, gamma=5.0/3.0,
+def benchmark_solvers(r_grid, t_end, v_bc, rho_bc, T_bc, gamma=1.5,
                       methods=None, reference='hllc-plm-rk2'):
     """
     Compare different solver configurations on the same problem.
@@ -865,7 +865,7 @@ def benchmark_solvers(r_grid, t_end, v_bc, rho_bc, T_bc, gamma=5.0/3.0,
     v_bc, rho_bc, T_bc : float
         Boundary condition values (constant)
     gamma : float, optional
-        Adiabatic index
+        Adiabatic index (default 1.5)
     methods : list, optional
         List of method strings to compare
     reference : str, optional

@@ -1385,7 +1385,7 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
                                 lon_out=np.nan, bgrid_Carr=np.nan, rhogrid_Carr=np.nan,
                                 tempgrid_Carr=np.nan, track_cmes=True, solver='huxt',
                                 nlon=128, dr=1.5 * u.solRad,
-                                v_max=3000 * (u.km / u.s)):
+                                v_max=3000 * (u.km / u.s), gamma=1.5):
     """
     Compute an explicitly time-dependent inner boundary condition for SURF rather than deriving
     one from the synodic or sidereal rotation of static coronal structure.
@@ -1410,6 +1410,7 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
               Must match the longitude dimension of the supplied boundary maps.
         dr: Radial grid spacing.
         v_max: Maximum speed used with dr to set the CFL time step.
+        gamma: Effective adiabatic index used by the SURF model. Defaults to 1.5.
     returns:
         model: A HUXt instance initialised with the fully time dependent boundary conditions.
     """
@@ -1457,7 +1458,7 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
                        simtime=simtime, dt_scale=dt_scale,
                        cr_num=cr, cr_lon_init=cr_lon_init,
                        frame='synodic', track_cmes=track_cmes,
-                       solver=solver, nlon=nlon, dr=dr, v_max=v_max)
+                       solver=solver, nlon=nlon, dr=dr, v_max=v_max, gamma=gamma)
     else:
         model = s.SURF(v_boundary=np.ones(nlon) * 400 * (u.km / u.s),
                        lon_start=lon_start, lon_stop=lon_stop,
@@ -1466,7 +1467,7 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
                        simtime=simtime, dt_scale=dt_scale,
                        cr_num=cr, cr_lon_init=cr_lon_init,
                        frame=frame, track_cmes=track_cmes,
-                       solver=solver, nlon=nlon, dr=dr, v_max=v_max)
+                       solver=solver, nlon=nlon, dr=dr, v_max=v_max, gamma=gamma)
 
     # extract the values from the model class
     buffertime = model.buffertime  # standard buffer time seems insufficient
@@ -1584,7 +1585,8 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
         'solver': solver,
         'nlon': nlon,
         'dr': dr,
-        'v_max': v_max
+        'v_max': v_max,
+        'gamma': gamma
     }
     
     # Add optional boundary condition time series

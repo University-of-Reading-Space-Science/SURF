@@ -570,7 +570,8 @@ class SURF:
                  input_rho_ts=np.nan * (u.kg / u.m ** 3), input_temp_ts=np.nan * u.K,
                  input_iscme_ts=np.nan, input_t_ts=np.nan * u.s,
                  track_cmes=True, solver='huxt', parallel=False,
-                 nlon=128, dr=1.5 * u.solRad, v_max=3000 * (u.km / u.s)):
+                 nlon=128, dr=1.5 * u.solRad, v_max=3000 * (u.km / u.s),
+                 gamma=1.5):
         """
         Initialise the SURF model instance.
 
@@ -633,6 +634,7 @@ class SURF:
                            Only used if compressible=True. If not provided, defaults to realistic
                            solar wind temperature scaled from 1 AU (10⁵ K) using r⁻⁰·⁶⁷ scaling to
                            r_min.
+            gamma: Effective adiabatic index used by the compressible solver. Defaults to 1.5.
         """
 
         # some constants and units
@@ -642,7 +644,7 @@ class SURF:
         self.kms = constants['kms']
         self.alpha = constants['alpha']  # Scale parameter for SW accel. (incompressible)
         self.r_accel = constants['r_accel']  # Spatial scale param for SW accel. (incompressible)
-        self.gamma = constants['gamma']  # Adiabatic index for compressible solver
+        self.gamma = gamma  # Adiabatic index for compressible solver
         # Use a per-instance cache namespace so changes in constants are picked up
         # when a new SURF instance is created, while still reusing lookups within
         # the same instance.
@@ -1440,7 +1442,7 @@ class SURF:
         """
         self.gamma = new_gamma
         
-        # Update gamma in model_params (index 10)
+        # Update gamma in model_params (index 9)
         if hasattr(self, 'model_params'):
             self.model_params[9] = new_gamma
         
@@ -1451,7 +1453,7 @@ class SURF:
                 v_kms = self.v_boundary.to((u.km / u.s)).value
                 r_inner = self.r[0].to(u.solRad).value
                 _, temp_from_velocity = get_density_temperature_from_velocity(
-                    v_kms, r_inner, gamma=new_gamma,
+                    v_kms, r_inner, gamma=self.gamma,
                     cache_id=self._density_temp_cache_id
                 )
                 self.temp_boundary = temp_from_velocity * u.K
@@ -1950,7 +1952,7 @@ class SURF:
 
         # Loop over the attributes of model instance and save select keys/attributes.
         keys = ['cr_num', 'cr_lon_init', 'simtime', 'dt', 'v_max', 'nlon_full',
-                'r_accel', 'alpha',
+                'r_accel', 'alpha', 'gamma',
                 'dt_scale', 'time_out', 'dt_out', 'r', 'dr', 'lon', 'dlon', 'r_grid', 'lon_grid',
                 'v_grid', 'latitude', 'v_boundary', '_v_boundary_init_', 'cme_particles_r',
                 'cme_particles_v', 'streak_particles_r', 'streak_lon_r0', 'hcs_particles_r',
@@ -2071,7 +2073,7 @@ class SURF3d:
                  r_max=240 * u.solRad, lon_out=np.nan * u.rad, lon_start=np.nan * u.rad,
                  lon_stop=np.nan * u.rad, simtime=5.0 * u.day, dt_scale=1.0,
                  nlon=128, nlat=45, dr=1.5 * u.solRad,
-                 v_max=3000 * (u.km / u.s)):
+                 v_max=3000 * (u.km / u.s), gamma=1.5):
         """
         Initialise the SURF3D instance.
 
@@ -2101,6 +2103,7 @@ class SURF3d:
             nlat: Number of latitude bins in the full sine-latitude grid.
             dr: Radial grid spacing.
             v_max: Maximum model speed, used with dr to set the CFL time step.
+            gamma: Effective adiabatic index passed to each SURF model. Defaults to 1.5.
             cme_expansion: Boolean, whether CMEs have a declining velocity profile at the inner
                            boundary
         """
@@ -2137,7 +2140,7 @@ class SURF3d:
                                      r_min=r_min, r_max=r_max,
                                      lon_out=lon_out, lon_start=lon_start, lon_stop=lon_stop,
                                      simtime=simtime, dt_scale=dt_scale,
-                                     nlon=nlon, dr=dr, v_max=v_max))
+                                     nlon=nlon, dr=dr, v_max=v_max, gamma=gamma))
         return
 
     def solve(self, cme_list):
@@ -2174,7 +2177,6 @@ def surf_constants():
     alpha = 0.15 * u.dimensionless_unscaled  # Scale parameter for residual SW acceleration
                                              # (for incompressible only)
     r_accel = 50 * u.solRad  # Spatial scale parameter for residual SW acceleration
-    gamma = 1.5  # Effective adiabatic index used for the solar wind.
     synodic_period = 27.2753 * daysec  # Solar Synodic rotation period from Earth.
     sidereal_period = 25.38 * daysec  # Solar sidereal rotation period
     
@@ -2192,7 +2194,6 @@ def surf_constants():
     min_pressure = 1e-30
 
     constants = {'twopi': twopi, 'daysec': daysec, 'kms': kms, 'alpha': alpha,
-                 'gamma': gamma,
                  'r_accel': r_accel, 'synodic_period': synodic_period,
                  'sidereal_period': sidereal_period, 'v_max': v_max,
                  'dr': dr, 'nlon': nlon, 'nlong': nlon, 'nlat': nlat,
@@ -3061,8 +3062,8 @@ def zerototwopi(angles):
 
 
 
-def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_out, 
-                              r_grid, gamma, nt_out, nr, riemann='hllc-plm-rk2', verbose=False,
+def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_out,
+                              r_grid, nt_out, nr, gamma=1.5, riemann='hllc-plm-rk2', verbose=False,
                               num_particles=0, particle_injection_rate=None,
                               particle_release_rate=None, solver_instance=None,
                               v_init_kms=None, rho_init_kgm3=None, T_init_K=None):
@@ -3086,12 +3087,12 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
         Output time grid (seconds), shape (nt_out,)
     r_grid : array_like
         Radial grid positions (km), shape (nr,)
-    gamma : float
-        Adiabatic index
     nt_out : int
         Number of output time steps
     nr : int
         Number of radial grid points
+    gamma : float, optional
+        Adiabatic index (default 1.5)
     riemann : str, optional
         Compressible method string, e.g. 'hllc-plm-rk2' or 'hllc-pcm'.
         Default is 'hllc-plm-rk2'.
@@ -3838,6 +3839,7 @@ def load_SURF_run(filepath):
             'cgf': 'hydro',
         }
         solver = legacy_solver_map.get(loaded_solver, loaded_solver)
+        gamma = float(data['gamma'][()]) if 'gamma' in data else 1.5
 
         if track_b:
             b_boundary = data['_b_boundary_init_'][()]
@@ -3874,6 +3876,7 @@ def load_SURF_run(filepath):
             'frame': frame,
             'track_cmes': track_cmes,
             'solver': solver,
+            'gamma': gamma,
             'nlon': nlon_full,
             'dr': dr,
             'v_max': v_max
