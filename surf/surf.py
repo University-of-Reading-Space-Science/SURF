@@ -361,17 +361,26 @@ class ConeCME:
         Returns:
             None
         """
-        if model.compressible == True:
-            # Check if CME density was provided (not NaN)
-            if np.isnan(self.cme_density.value):
-                # If CME density not provided, set to density fraction of ambient solar wind density
-                # at initial height
-                self.cme_density = self.density_fraction * model.rho_sw_inner
-            # Check if CME temperature was provided (not NaN)
-            if np.isnan(self.cme_temperature.value):
-                # If CME temperature not provided, set to temperature fraction of ambient solar wind
-                # temperature at initial height
-                self.cme_temperature = self.cme_temperature_fraction * model.T_sw_inner
+        cme_density = self.cme_density
+        cme_temperature = self.cme_temperature
+        if model.compressible and (np.isnan(cme_density.value) or
+                                   np.isnan(cme_temperature.value)):
+            constants = surf_constants()
+            r_ref = 21.5 * u.solRad
+            # Establish a reference velocity at 21.5 Rs, then Parker-map the
+            # prescribed ambient density and temperature to the model boundary.
+            v_ref, _, _ = map_properties_parker(
+                constants['v_sw_1au'], 215 * u.solRad, r_ref,
+                constants['n_sw_1au'], constants['T_sw_1au'], gamma=model.gamma)
+            _, n_ambient, T_ambient = map_properties_parker(
+                v_ref, r_ref, model.r[0], constants['n_sw_21p5'],
+                constants['T_sw_21p5'], gamma=model.gamma)
+
+            if np.isnan(cme_density.value):
+                cme_density = (self.density_fraction * n_ambient.to(u.m ** -3) *
+                               constants['proton_mass'] * u.kg)
+            if np.isnan(cme_temperature.value):
+                cme_temperature = self.cme_temperature_fraction * T_ambient
 
         # Convert profile_type to numeric flag: 0 = square, 1 = sinusoidal
         profile_flag = 1.0 if self.profile_type == 'sinusoidal' else 0.0
@@ -388,8 +397,8 @@ class ConeCME:
                           self.cme_expansion,
                           self.cme_fixed_duration,
                           self.fixed_duration.to('s').value,
-                          self.cme_density.value,
-                          self.cme_temperature.value,
+                          cme_density.to(u.kg / u.m ** 3).value,
+                          cme_temperature.to(u.K).value,
                           profile_flag]
         return cme_parameters
 
@@ -1758,15 +1767,6 @@ class SURF:
                           f'Simulation may be unstable')
 
         # ======================================================================
-        # Create ambient (pre-CME) density and temperature time series
-        # ======================================================================
-        # Store copies of the ambient conditions before CMEs are added
-        # This ensures CME perturbations are multiples of ambient values
-        if self.compressible:
-            self.ambient_rho_ts = self.input_rho_ts.copy()
-            self.ambient_temp_ts = self.input_temp_ts.copy()
-        
-        # ======================================================================
         # Add CMEs
         # ======================================================================
         # See if the cmes-flag input time series has been prescribed
@@ -1805,8 +1805,6 @@ class SURF:
                             self.latitude.value,
                             rhoinput=self.input_rho_ts[:, i].value,
                             tempinput=self.input_temp_ts[:, i].value,
-                            rho_ambient=self.ambient_rho_ts[:, i].value,
-                            temp_ambient=self.ambient_temp_ts[:, i].value,
                             compressible=True)
                         self.input_v_ts[:, i] = v * (u.km / u.s)
                         self.input_rho_ts[:, i] = rho * (u.kg / u.m ** 3)
@@ -1819,8 +1817,6 @@ class SURF:
                             self.latitude.value,
                             rhoinput=None,
                             tempinput=None,
-                            rho_ambient=None,
-                            temp_ambient=None,
                             compressible=False)
                         self.input_v_ts[:, i] = v * (u.km / u.s)
                     self.input_iscme_ts[:, i] = isincme
@@ -2309,6 +2305,8 @@ def surf_constants():
     v_sw_1au = 400 * (u.km / u.s)  # Typical solar wind speed at 1 AU
     n_sw_1au = 5 * (u.cm ** -3)  # Typical solar wind density at 1 AU (~5 protons/cm³)
     T_sw_1au = 1e5 * u.K  # Typical solar wind temperature at 1 AU (~100,000 K)
+    n_sw_21p5 = 600 * (u.cm ** -3)  # Reference ambient proton density at 21.5 Rs
+    T_sw_21p5 = 1e6 * u.K  # Reference ambient temperature at 21.5 Rs
     empirical_n_adjust_amp = 0.2  # Max fractional density remap amplitude applied at 0.1 AU
     empirical_T_adjust_amp = 0.1  # Max fractional temperature remap amplitude applied at 0.1 AU
     valid_solvers = ("huxt", "hydro", "hydro-pcm")
@@ -2323,6 +2321,7 @@ def surf_constants():
                  'sidereal_period': sidereal_period, 'v_max': v_max,
                  'dr': dr, 'nlon': nlon, 'nlong': nlon, 'nlat': nlat,
                  'v_sw_1au': v_sw_1au, 'n_sw_1au': n_sw_1au, 'T_sw_1au': T_sw_1au,
+                 'n_sw_21p5': n_sw_21p5, 'T_sw_21p5': T_sw_21p5,
                  'empirical_n_adjust_amp': empirical_n_adjust_amp,
                  'empirical_T_adjust_amp': empirical_T_adjust_amp,
                  'valid_solvers': valid_solvers, 'numba_cache': numba_cache,
@@ -3689,8 +3688,7 @@ def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
 
 @jit(nopython=True, cache=surf_constants()['numba_cache'])
 def add_cmes_to_input_series(vinput, model_time, lon, r_boundary, cme_params, latitude,
-                             rhoinput=None, tempinput=None, rho_ambient=None, temp_ambient=None,
-                             compressible=False):
+                             rhoinput=None, tempinput=None, compressible=False):
     """
     Add CMEs to the model input time series
     Args:
@@ -3703,8 +3701,6 @@ def add_cmes_to_input_series(vinput, model_time, lon, r_boundary, cme_params, la
         latitude: Latitude (from the equator) of the SURF plane
         rhoinput: Timeseries of inner boundary density (optional, for compressible solver)
         tempinput: Timeseries of inner boundary temperature (optional, for compressible solver)
-        rho_ambient: Timeseries of ambient (pre-CME) density (optional, for compressible solver)
-        temp_ambient: Timeseries of ambient (pre-CME) temperature (optional, for compressible solver)
         compressible: Boolean flag indicating if compressible solver is being used
     Returns: 
         v: vinput with CME speeds added
@@ -3745,23 +3741,15 @@ def add_cmes_to_input_series(vinput, model_time, lon, r_boundary, cme_params, la
                 # Check if this point is within the cone CME
                 iscme, dist_from_nose = _is_in_cme_boundary_(r_boundary, lon, latitude, time, cme)
                 if iscme:
-                    # Get ambient values at this time
-                    # (use ambient arrays if provided, else use input arrays)
+                    # Get the unmodified boundary values at this time.
                     v_ambient = vinput[t]
                     rho_ambient_val = 0.0
                     temp_ambient_val = 0.0
                     
                     if compressible:
-                        # Use ambient arrays (pre-CME) if provided,
-                        # otherwise fall back to input arrays
-                        if rho_ambient is not None:
-                            rho_ambient_val = rho_ambient[t]
-                        elif rhoinput is not None:
+                        if rhoinput is not None:
                             rho_ambient_val = rhoinput[t]
-                            
-                        if temp_ambient is not None:
-                            temp_ambient_val = temp_ambient[t]
-                        elif tempinput is not None:
+                        if tempinput is not None:
                             temp_ambient_val = tempinput[t]
                     
                     # Compute modulation factor based on profile type
