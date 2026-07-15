@@ -369,11 +369,8 @@ class ConeCME:
             r_ref = 21.5 * u.solRad
             # Establish a reference velocity at 21.5 Rs, then Parker-map the
             # prescribed ambient density and temperature to the model boundary.
-            v_ref, _, _ = map_properties_parker(
-                constants['v_sw_1au'], 215 * u.solRad, r_ref,
-                constants['n_sw_1au'], constants['T_sw_1au'], gamma=model.gamma)
             _, n_ambient, T_ambient = map_properties_parker(
-                v_ref, r_ref, model.r[0], constants['n_sw_21p5'],
+                constants['v_sw_1au'], r_ref, model.r[0], constants['n_sw_21p5'],
                 constants['T_sw_21p5'], gamma=model.gamma)
 
             if np.isnan(cme_density.value):
@@ -2307,8 +2304,6 @@ def surf_constants():
     T_sw_1au = 1e5 * u.K  # Typical solar wind temperature at 1 AU (~100,000 K)
     n_sw_21p5 = 600 * (u.cm ** -3)  # Reference ambient proton density at 21.5 Rs
     T_sw_21p5 = 1e6 * u.K  # Reference ambient temperature at 21.5 Rs
-    empirical_n_adjust_amp = 0.2  # Max fractional density remap amplitude applied at 0.1 AU
-    empirical_T_adjust_amp = 0.1  # Max fractional temperature remap amplitude applied at 0.1 AU
     valid_solvers = ("huxt", "hydro", "hydro-pcm")
     
     boltzmann_constant = 1.380649e-23  # J/K
@@ -2322,8 +2317,6 @@ def surf_constants():
                  'dr': dr, 'nlon': nlon, 'nlong': nlon, 'nlat': nlat,
                  'v_sw_1au': v_sw_1au, 'n_sw_1au': n_sw_1au, 'T_sw_1au': T_sw_1au,
                  'n_sw_21p5': n_sw_21p5, 'T_sw_21p5': T_sw_21p5,
-                 'empirical_n_adjust_amp': empirical_n_adjust_amp,
-                 'empirical_T_adjust_amp': empirical_T_adjust_amp,
                  'valid_solvers': valid_solvers, 'numba_cache': numba_cache,
                  'boltzmann_constant': boltzmann_constant,
                  'proton_mass': proton_mass, 'min_density': min_density,
