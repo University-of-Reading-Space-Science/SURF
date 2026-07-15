@@ -1073,7 +1073,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       solver='huxt', nlon=128, dr=1.5*u.solRad,
                       v_max=3000*u.km/u.s, lon_start=0*u.rad,
                       lon_stop=2*np.pi*u.rad, cnn_smoothing_width=7, track_cmes=False,
-                      gamma=1.5):
+                      gamma=1.5, include_b_boundary=True):
     """
     Create a SURF solar wind forecast initialized from in-situ OMNI observations.
     
@@ -1132,6 +1132,9 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
         compressible solvers. Use 1 to disable smoothing. Default is 5.
     gamma : float, optional
         Effective adiabatic index used for Parker mapping and by SURF. Default is 1.5.
+    include_b_boundary : bool, optional
+        Whether to supply the OMNI-derived magnetic field boundary to SURF.
+        Default is True.
 
     
     Returns
@@ -1247,6 +1250,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     vcarr_rmin_back_cnn = _resample_longitude_grid(vcarr_rmin_back_cnn, nlon)
     if blon is not None:
         blon = _resample_longitude_grid(blon, nlon)
+    b_boundary = blon if include_b_boundary else np.nan
 
     #apply some smoothing to the CNN output
     if _is_compressible_solver(solver):
@@ -1266,7 +1270,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     
     if run_2d:
         model = s.SURF(v_boundary=vcarr_rmin_back_cnn.flatten() * u.km/u.s,
-                      b_boundary=blon, 
+                      b_boundary=b_boundary,
                       cr_num=cr, cr_lon_init=cr_lon_init,
                       simtime=simtime, r_min=rmin, r_max=rmax,
                       dt_scale=dt_scale, latitude=Elat, frame='synodic',
@@ -1275,7 +1279,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       v_max=v_max, track_cmes=track_cmes, gamma=gamma)
     else:
         model = s.SURF(v_boundary=vcarr_rmin_back_cnn.flatten() * u.km/u.s,
-                      b_boundary=blon, 
+                      b_boundary=b_boundary,
                       cr_num=cr, cr_lon_init=cr_lon_init,
                       simtime=simtime, r_min=rmin, r_max=rmax,
                       dt_scale=dt_scale, latitude=Elat, frame='synodic',
@@ -1290,7 +1294,8 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                             rho_source='speed', temp_source='speed', nlon=128,
                             dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                             lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
-                            cnn_smoothing_width=7, track_cmes=False, gamma=1.5):
+                            cnn_smoothing_width=7, track_cmes=False, gamma=1.5,
+                            include_b_boundary=True):
     """
     Create a SURF solar wind reconstruction using OMNI observations over a time interval.
     
@@ -1352,6 +1357,9 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
         compressible solvers. Use 1 to disable smoothing. Default is 5.
     gamma : float, optional
         Effective adiabatic index used for Parker mapping and by SURF. Default is 1.5.
+    include_b_boundary : bool, optional
+        Whether to supply the OMNI-derived magnetic field boundary to SURF.
+        Default is True.
     
     Returns
     -------
@@ -1539,6 +1547,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
 
     vcarr_rmin_cnn = _resample_longitude_grid(vcarr_rmin_cnn, nlon)
     bcarr_rmin = _resample_longitude_grid(bcarr_rmin, nlon)
+    bgrid_carr = bcarr_rmin if include_b_boundary else np.nan
     rhogrid_carr = _resample_longitude_grid(rhogrid_carr, nlon)
     tempgrid_carr = _resample_longitude_grid(tempgrid_carr, nlon)
     if need_compressible and rho_source == 'omni':
@@ -1559,7 +1568,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
             time_grid=time_grid,
             starttime=start_time,
             simtime=simtime,
-            bgrid_Carr=bcarr_rmin,
+            bgrid_Carr=bgrid_carr,
             rhogrid_Carr=rhogrid_carr,
             tempgrid_Carr=tempgrid_carr,
             r_min=rmin,
@@ -1578,7 +1587,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
             time_grid=time_grid,
             starttime=start_time,
             simtime=simtime,
-            bgrid_Carr=bcarr_rmin,
+            bgrid_Carr=bgrid_carr,
             rhogrid_Carr=rhogrid_carr,
             tempgrid_Carr=tempgrid_carr,
             r_min=rmin,
@@ -1598,7 +1607,7 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
                      omni_input=None, run_2d=False, solver='hydro', nlon=128,
                      dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                      lon_start=0*u.rad, lon_stop=2*np.pi*u.rad, track_cmes=False,
-                     gamma=1.5):
+                     gamma=1.5, include_b_boundary=True):
     """
     Create a SURF solar wind simulation starting from ~1 AU using OMNI observations.
 
@@ -1645,6 +1654,9 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
         - 'hydro-pcm': compressible HLLC+PCM solver
     gamma : float, optional
         Effective adiabatic index used by SURF. Default is 1.5.
+    include_b_boundary : bool, optional
+        Whether to supply the OMNI-derived magnetic field boundary to SURF.
+        Default is True.
 
     Returns
     -------
@@ -1697,6 +1709,8 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
         rhogrid_carr = rhocarr_215
         tempgrid_carr = tcarr_215
 
+    bgrid_carr = bcarr_215 if include_b_boundary else np.nan
+
     # Calculate simulation time from start to end
     simtime = (Time(end_time).mjd - Time(start_time).mjd) * u.day
 
@@ -1710,7 +1724,7 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
             time_grid=time_grid,
             starttime=start_time,
             simtime=simtime,
-            bgrid_Carr=bcarr_215,
+            bgrid_Carr=bgrid_carr,
             rhogrid_Carr=rhogrid_carr,
             tempgrid_Carr=tempgrid_carr,
             r_min=rmin,
@@ -1729,7 +1743,7 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
             time_grid=time_grid,
             starttime=start_time,
             simtime=simtime,
-            bgrid_Carr=bcarr_215,
+            bgrid_Carr=bgrid_carr,
             rhogrid_Carr=rhogrid_carr,
             tempgrid_Carr=tempgrid_carr,
             r_min=rmin,
