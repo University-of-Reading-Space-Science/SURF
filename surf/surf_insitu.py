@@ -1073,7 +1073,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       solver='huxt', nlon=128, dr=1.5*u.solRad,
                       v_max=3000*u.km/u.s, lon_start=0*u.rad,
                       lon_stop=2*np.pi*u.rad, cnn_smoothing_width=7, track_cmes=False,
-                      gamma=1.5, include_b_boundary=True):
+                      gamma=1.5, include_b_boundary=True, icme_list='CaneRichardson'):
     """
     Create a SURF solar wind forecast initialized from in-situ OMNI observations.
     
@@ -1102,6 +1102,9 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
         Pre-loaded OMNI data with ICMEs already removed. If None, the function
         will download OMNI data and remove ICMEs automatically. Should contain
         columns 'datetime', 'mjd', 'V', 'BX_GSE', and optionally 'N', 'T'.
+    icme_list : {'CaneRichardson', 'DONKI', None}, optional
+        ICME catalog used when downloading OMNI data. Set to None (or 'None')
+        to skip ICME removal. Default is 'CaneRichardson'.
     buffertime : astropy.units.Quantity, optional
         Buffer time before ftime to start the simulation, allowing transients
         to propagate through the domain. Default is 5 days.
@@ -1181,7 +1184,10 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     
         omni = get_omni(dl_starttime, dl_endtime)
         
-        omni_input = removeICMEs(omni)
+        if icme_list is None or icme_list == 'None':
+            omni_input = omni
+        else:
+            omni_input = removeICMEs(omni, icme_list=icme_list)
     
     # cut out the precise bit of the OMNI data that is required
     mask = (omni_input['datetime'] <= ftime) 
@@ -1295,7 +1301,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                             dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                             lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
                             cnn_smoothing_width=7, track_cmes=False, gamma=1.5,
-                            include_b_boundary=True):
+                            include_b_boundary=True, icme_list='CaneRichardson'):
     """
     Create a SURF solar wind reconstruction using OMNI observations over a time interval.
     
@@ -1326,8 +1332,11 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
         Time resolution for the Carrington map, in days. Default is 1 day.
     omni_input : pandas.DataFrame, optional
         Pre-loaded OMNI data. If None, the function will download OMNI data
-        and remove ICMEs (Cane & Richardson list) automatically. Should contain
+        and optionally remove ICMEs. Should contain
         columns 'datetime', 'mjd', 'V', 'BX_GSE', 'N', 'T'.
+    icme_list : {'CaneRichardson', 'DONKI', None}, optional
+        ICME catalog used when downloading OMNI data. Set to None (or 'None')
+        to skip ICME removal. Default is 'CaneRichardson'.
     run_2d : bool, optional
         If False (default), runs a 1D radial simulation at Earth's longitude.
         If True, runs a 2D simulation over the range specified by
@@ -1371,7 +1380,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     -----
     The function:
     1. Downloads OMNI data from start_time-28 days to end_time+28 days
-    2. Removes ICMEs using the Richardson & Cane catalog
+    2. Optionally removes ICMEs using the selected catalog
     3. Calls generate_vCarr_from_OMNI with corot_type='both'
     4. Backmaps velocity from reference radius (215 Rsun) to rmin
     5. Applies CNN correction to account for stream interactions during backmapping
@@ -1411,7 +1420,10 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
         dl_endtime = end_time + datetime.timedelta(days=28)
         
         omni = get_omni(dl_starttime, dl_endtime)
-        omni_input = removeICMEs(omni, icme_list='CaneRichardson')
+        if icme_list is None or icme_list == 'None':
+            omni_input = omni
+        else:
+            omni_input = removeICMEs(omni, icme_list=icme_list)
     
     # Determine if we need density and temperature from OMNI
     need_compressible = _is_compressible_solver(solver)
@@ -1607,7 +1619,7 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
                      omni_input=None, run_2d=False, solver='hydro', nlon=128,
                      dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                      lon_start=0*u.rad, lon_stop=2*np.pi*u.rad, track_cmes=False,
-                     gamma=1.5, include_b_boundary=True):
+                     gamma=1.5, include_b_boundary=True, icme_list='CaneRichardson'):
     """
     Create a SURF solar wind simulation starting from ~1 AU using OMNI observations.
 
@@ -1636,6 +1648,9 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
     omni_input : pandas.DataFrame, optional
         Pre-loaded OMNI data with ICMEs removed. If None, OMNI data will be
         downloaded and ICMEs removed automatically.
+    icme_list : {'CaneRichardson', 'DONKI', None}, optional
+        ICME catalog used when downloading OMNI data. Set to None (or 'None')
+        to skip ICME removal. Default is 'CaneRichardson'.
     run_2d : bool, optional
         If False (default), runs a 1D radial simulation at Earth's longitude.
         If True, runs a 2D simulation over the range specified by
@@ -1674,7 +1689,10 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
         dl_endtime = end_time + datetime.timedelta(days=28)
 
         omni = get_omni(dl_starttime, dl_endtime)
-        omni_input = removeICMEs(omni, icme_list='CaneRichardson')
+        if icme_list is None or icme_list == 'None':
+            omni_input = omni
+        else:
+            omni_input = removeICMEs(omni, icme_list=icme_list)
 
     # Generate Carrington map with density and temperature from OMNI
     need_compressible = _is_compressible_solver(solver)
