@@ -7,6 +7,7 @@ time-dependent boundary conditions for SURF simulations.
 """
 
 import datetime
+from io import StringIO
 import numpy as np
 import pandas as pd
 import astropy.units as u
@@ -79,6 +80,150 @@ def get_omni(starttime, endtime):
     omni = omni.reset_index()
 
     return omni
+
+
+def _read_ace_realtime_file(url, columns, timeout=30):
+    """Read one whitespace-delimited NOAA ACE real-time archive file."""
+    with urlopen(url, timeout=timeout) as response:
+        text = response.read().decode('ascii', errors='replace')
+
+    # NOAA headers have changed over time, but data records always start with
+    # a four-digit year. Filtering them explicitly keeps the parser compatible
+    # with both comment-style and ``:Data_list:`` headers.
+    records = [line for line in text.splitlines()
+               if re.match(r'^\s*\d{4}\s', line)]
+    if not records:
+        raise ValueError(f'No ACE data records found in {url}')
+
+    return pd.read_csv(StringIO('\n'.join(records)), sep=r'\s+', header=None,
+                       names=columns)
+
+
+def _read_ace_realtime_json(url, timeout=30):
+    """Read one NOAA ACE JSON product into a DataFrame."""
+    with urlopen(url, timeout=timeout) as response:
+        records = json.loads(response.read().decode('utf-8'))
+    return pd.DataFrame.from_records(records)
+
+
+def get_ace_realtime(starttime, endtime,
+                     base_url='https://services.swpc.noaa.gov/json/ace',
+                     timeout=30):
+    """
+    Download hourly real-time ACE solar-wind data from NOAA SWPC.
+
+    Plasma and magnetometer files are downloaded for every calendar month
+    intersecting the requested interval and merged on their UTC timestamps.
+    The returned columns follow the conventions used by :func:`get_omni`.
+
+    Parameters
+    ----------
+    starttime, endtime : datetime-like
+        Inclusive bounds of the requested UTC interval.
+    base_url : str, optional
+        NOAA ACE data location. The supported SWPC JSON service is used by
+        default, with automatic fallback to NASA's HTTPS daily archive when
+        the requested interval predates the rolling JSON coverage. A monthly archive URL such as
+        ``ftp://ftp.swpc.noaa.gov/pub/lists/ace2`` may also be supplied.
+    timeout : float, optional
+        Per-file download timeout in seconds. Default is 30.
+
+    Returns
+    -------
+    ace : pandas.DataFrame
+        Time-ordered data with ``datetime``, ``mjd``, ``V`` (km/s), ``N``
+        (protons/cm3), ``T`` (K), and ``BX_GSE`` (nT). ``BY_GSM``, ``BZ_GSM``,
+        ``B``, and the source quality flags are also retained.
+
+    Notes
+    -----
+    NOAA status values other than zero and documented fill values are mapped
+    to NaN. Magnetic data are supplied in GSM coordinates; GSM and GSE share
+    the same x-axis, so the archive's Bx is returned as ``BX_GSE``.
+    """
+    start = pd.Timestamp(starttime)
+    end = pd.Timestamp(endtime)
+    if start.tzinfo is not None:
+        start = start.tz_convert('UTC').tz_localize(None)
+    if end.tzinfo is not None:
+        end = end.tz_convert('UTC').tz_localize(None)
+    if end < start:
+        raise ValueError('endtime must be on or after starttime')
+
+    swepam_columns = ['year', 'month', 'day', 'hhmm', 'mjd_file',
+                      'seconds_of_day', 'S_SWEPAM', 'N', 'V', 'T']
+    mag_columns = ['year', 'month', 'day', 'hhmm', 'mjd_file',
+                   'seconds_of_day', 'S_MAG', 'BX_GSE', 'BY_GSM', 'BZ_GSM',
+                   'B', 'B_lat', 'B_lon']
+
+    base_url = base_url.rstrip('/')
+    if '/json/ace' in base_url:
+        swepam = _read_ace_realtime_json(
+            f'{base_url}/swepam/ace_swepam_1h.json', timeout).rename(columns={
+                'time_tag': 'datetime', 'dsflag': 'S_SWEPAM',
+                'dens': 'N', 'speed': 'V', 'temperature': 'T'})
+        mag = _read_ace_realtime_json(
+            f'{base_url}/mag/ace_mag_1h.json', timeout).rename(columns={
+                'time_tag': 'datetime', 'dsflag': 'S_MAG',
+                'gse_bx': 'BX_GSE', 'gsm_by': 'BY_GSM',
+                'gsm_bz': 'BZ_GSM', 'bt': 'B',
+                'gsm_lat': 'B_lat', 'gsm_lon': 'B_lon'})
+        swepam['datetime'] = pd.to_datetime(swepam['datetime'])
+        mag['datetime'] = pd.to_datetime(mag['datetime'])
+        json_start = min(swepam['datetime'].min(), mag['datetime'].min())
+        if start < json_start:
+            return get_ace_realtime(
+                start, end,
+                base_url='https://soho.nascom.nasa.gov/sdb/ace/daily',
+                timeout=timeout)
+    else:
+        swepam_frames = []
+        mag_frames = []
+        if '/sdb/ace/daily' in base_url:
+            stamps = (day.strftime('%Y%m%d') for day in
+                      pd.date_range(start.normalize(), end.normalize(), freq='D'))
+            for stamp in stamps:
+                swepam_frames.append(_read_ace_realtime_file(
+                    f'{base_url}/{stamp}_ace_swepam_1m.txt', swepam_columns, timeout))
+                mag_frames.append(_read_ace_realtime_file(
+                    f'{base_url}/{stamp}_ace_mag_1m.txt', mag_columns, timeout))
+        else:
+            months = pd.period_range(start=start, end=end, freq='M')
+            for month in months:
+                stamp = month.strftime('%Y%m')
+                swepam_frames.append(_read_ace_realtime_file(
+                    f'{base_url}/{stamp}_ace_swepam_1h.txt', swepam_columns, timeout))
+                mag_frames.append(_read_ace_realtime_file(
+                    f'{base_url}/{stamp}_ace_mag_1h.txt', mag_columns, timeout))
+
+        def add_datetime(frame):
+            hhmm = frame['hhmm'].astype(int)
+            frame['datetime'] = (pd.to_datetime({
+                'year': frame['year'], 'month': frame['month'], 'day': frame['day']
+            }) + pd.to_timedelta(hhmm // 100, unit='h')
+               + pd.to_timedelta(hhmm % 100, unit='m'))
+            return frame
+
+        swepam = add_datetime(pd.concat(swepam_frames, ignore_index=True))
+        mag = add_datetime(pd.concat(mag_frames, ignore_index=True))
+
+    swepam_bad = ((swepam['S_SWEPAM'] != 0) | (swepam['N'] <= -9999)
+                  | (swepam['V'] <= -9999) | (swepam['T'] <= -1e5))
+    swepam.loc[swepam_bad, ['N', 'V', 'T']] = np.nan
+    mag_bad = ((mag['S_MAG'] != 0)
+               | (mag[['BX_GSE', 'BY_GSM', 'BZ_GSM', 'B']] <= -999).any(axis=1))
+    mag.loc[mag_bad, ['BX_GSE', 'BY_GSM', 'BZ_GSM', 'B', 'B_lat', 'B_lon']] = np.nan
+
+    swepam = swepam[['datetime', 'N', 'V', 'T', 'S_SWEPAM']]
+    mag = mag[['datetime', 'BX_GSE', 'BY_GSM', 'BZ_GSM', 'B',
+               'B_lat', 'B_lon', 'S_MAG']]
+    ace = pd.merge(swepam, mag, on='datetime', how='outer', sort=True)
+    ace = ace.loc[(ace['datetime'] >= start) & (ace['datetime'] <= end)].copy()
+    if ace.empty:
+        raise ValueError(
+            f'No ACE data are available from {start} through {end} at {base_url}')
+    ace['mjd'] = Time(ace['datetime'].to_numpy()).mjd
+    return ace.reset_index(drop=True)
 
 
 def generate_vCarr_from_OMNI(runstart, runend, nlon=None, omni_input=None, dt=1 * u.day,
