@@ -82,6 +82,41 @@ def get_omni(starttime, endtime):
     return omni
 
 
+def get_stereo_a(starttime, endtime):
+    """Download hourly merged STEREO-A plasma and magnetic-field data via Fido.
+
+    The returned columns follow the same convention as :func:`get_omni`, so
+    they can be passed through the SURF in-situ reconstruction machinery.
+    """
+    trange = attrs.Time(starttime, endtime)
+    dataset = attrs.cdaweb.Dataset('STA_COHO1HR_MERGED_MAG_PLASMA')
+    result = Fido.search(trange, dataset)
+    downloaded_files = Fido.fetch(result)
+    data = TimeSeries(downloaded_files, concatenate=True).to_dataframe()
+
+    sta = pd.DataFrame(index=data.index)
+    sta['V'] = data['plasmaSpeed']
+    sta['N'] = data['plasmaDensity']
+    sta['T'] = data['plasmaTemp']
+    # generate_vCarr_from_OMNI expects BX_GSE and changes its sign to recover Br.
+    sta['BX_GSE'] = -data['BR']
+    sta['BR'] = data['BR']
+    sta['B'] = data['B']
+    sta['datetime'] = sta.index
+    sta = sta.loc[(sta['datetime'] >= pd.Timestamp(starttime)) &
+                  (sta['datetime'] <= pd.Timestamp(endtime))].copy()
+
+    # CDAWeb fill values are sometimes retained by CDF readers. Convert all
+    # implausibly large magnitudes to missing data before interpolation.
+    sta.loc[(sta['V'] <= 0) | (sta['V'] >= 9999), 'V'] = np.nan
+    sta.loc[(sta['N'] < 0) | (sta['N'] >= 999), 'N'] = np.nan
+    sta.loc[(sta['T'] < 0) | (sta['T'] >= 9999999), 'T'] = np.nan
+    for column in ('BX_GSE', 'BR', 'B'):
+        sta.loc[np.abs(sta[column]) >= 9999, column] = np.nan
+    sta['mjd'] = Time(sta['datetime']).mjd
+    return sta.reset_index(drop=True)
+
+
 def _read_ace_realtime_file(url, columns, timeout=30):
     """Read one whitespace-delimited NOAA ACE real-time archive file."""
     with urlopen(url, timeout=timeout) as response:
@@ -227,7 +262,8 @@ def get_ace_realtime(starttime, endtime,
 
 
 def generate_vCarr_from_OMNI(runstart, runend, nlon=None, omni_input=None, dt=1 * u.day,
-                             ref_r=215 * u.solRad, corot_type='both', compressible=False):
+                             ref_r=215 * u.solRad, corot_type='both', compressible=False,
+                             observer='Earth'):
     """
     A function to download OMNI data and generate V_carr and time_grid for use with
     set_time_dependent_boundary
@@ -294,23 +330,32 @@ def generate_vCarr_from_OMNI(runstart, runend, nlon=None, omni_input=None, dt=1 
     synodic_period = 27.2753 * daysec  # Solar Synodic rotation period from Earth.
     omega_synodic = 2 * np.pi * u.rad / synodic_period
 
-    # compute carrington longitudes
-    cr = np.ones(len(omni_int))
-    cr_lon_init = np.ones(len(omni_int)) * u.rad
-    for i in range(0, len(omni_int)):
-        cr[i], cr_lon_init[i] = sin.datetime2surfinputs(omni_int['datetime'][i])
+    # Compute the observing spacecraft's Carrington longitude and radius.
+    # Earth retains the legacy calculation; other observers use SURF ephemerides.
+    if observer.upper() == 'EARTH':
+        cr_lon_init = np.ones(len(omni_int)) * u.rad
+        for i in range(0, len(omni_int)):
+            _, cr_lon_init[i] = sin.datetime2surfinputs(omni_int['datetime'][i])
+        observer_r = None
+    else:
+        observer_pos = s.Observer(observer, Time(omni_int['datetime'].to_numpy()))
+        cr_lon_init = observer_pos.lon_c
+        observer_r = observer_pos.r.to_value(u.km)
 
     omni_int['Carr_lon'] = cr_lon_init.value  # remove unit as this confuses pd.DataFrame.copy()
     omni_int['Carr_lon_unwrap'] = np.unwrap(omni_int['Carr_lon'].to_numpy())
 
     omni_int['mjd'] = [t.mjd for t in omni_int['Time'].array]
 
-    # get the Earth radial distance info.
-    dirs = s._setup_dirs_()
-    ephem = h5py.File(dirs['ephemeris'], 'r')
-    # Convert the ephemeris times to MJD and interpolate to the requested times.
-    all_time = Time(ephem['EARTH']['HEEQ']['time'], format='jd').value - 2400000.5
-    omni_int['R'] = np.interp(omni_int['mjd'], all_time, ephem['EARTH']['HEEQ']['radius'][:])
+    if observer_r is None:
+        dirs = s._setup_dirs_()
+        ephem = h5py.File(dirs['ephemeris'], 'r')
+        all_time = Time(ephem['EARTH']['HEEQ']['time'], format='jd').value - 2400000.5
+        omni_int['R'] = np.interp(
+            omni_int['mjd'], all_time, ephem['EARTH']['HEEQ']['radius'][:])
+        ephem.close()
+    else:
+        omni_int['R'] = observer_r
 
     # map each point back/forward to the reference radial distance
     omni_int['mjd_ref'] = omni_int['mjd']
@@ -997,6 +1042,76 @@ def ICMElist(filepath=None):
     return icmes
 
 
+def get_STEREO_ICMEs(
+        spacecraft='A', timeout=30,
+        url=('https://stereo-ssc.nascom.nasa.gov/pub/ins_data/impact/'
+             'level3/LanJian_STEREO_ICME_List.txt')):
+    """Update and parse the Jian et al. STEREO ICME event catalogue.
+
+    Parameters
+    ----------
+    spacecraft : {'A', 'B'}, optional
+        Return events observed by STEREO-A or STEREO-B. Default is A.
+    timeout : float, optional
+        Download timeout in seconds.
+    url : str, optional
+        Machine-readable SPASE HPEvent list URL.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Event rows with ``Shock_time``, ``ICME_start``, ``ICME_end``, and
+        ``STEREO`` columns. ``Shock_time`` is the catalogue's ICME leading-edge
+        time, matching the field expected by :func:`removeICMEs`.
+
+    Notes
+    -----
+    A successful, parseable download updates the copy bundled in
+    ``surf/data/insitu``. If the download fails or contains no events, that
+    local copy is used instead so the catalogue remains available offline.
+    """
+    spacecraft = spacecraft.upper()
+    if spacecraft not in ('A', 'B'):
+        raise ValueError("spacecraft must be 'A' or 'B'")
+
+    isot = r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z'
+    event_pattern = re.compile(
+        rf'({isot})\s+({isot})\s+({isot})\s+(-?1)\s+[01]\s+-?\d+'
+    )
+    catalogue_path = os.path.join(
+        s._setup_dirs_()['insitu'], 'LanJian_STEREO_ICME_List.txt'
+    )
+
+    try:
+        with urlopen(url, timeout=timeout) as response:
+            catalogue_text = response.read().decode('utf-8', errors='replace')
+        rows = event_pattern.findall(catalogue_text)
+        if not rows:
+            raise ValueError(f'No STEREO ICME events could be parsed from {url}')
+        with open(catalogue_path, 'w', encoding='utf-8', newline='') as catalogue:
+            catalogue.write(catalogue_text)
+    except (OSError, ValueError):
+        with open(catalogue_path, encoding='utf-8') as catalogue:
+            catalogue_text = catalogue.read()
+        rows = event_pattern.findall(catalogue_text)
+        if not rows:
+            raise ValueError(
+                f'No STEREO ICME events could be parsed from {catalogue_path}'
+            )
+
+    events = pd.DataFrame(
+        rows,
+        columns=['Shock_time', 'ICME_end', 'magnetic_obstacle_start', 'STEREO']
+    )
+    flag = 1 if spacecraft == 'A' else -1
+    events['STEREO'] = events['STEREO'].astype(int)
+    events = events.loc[events['STEREO'] == flag].copy()
+    for column in ('Shock_time', 'ICME_end', 'magnetic_obstacle_start'):
+        events[column] = pd.to_datetime(events[column], utc=True).dt.tz_localize(None)
+    events['ICME_start'] = events['magnetic_obstacle_start']
+    return events.reset_index(drop=True)
+
+
 def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme_buffer=1,
                 interp_gaps=True):
     """
@@ -1014,6 +1129,7 @@ def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme
         Which ICME catalog to use. Options are:
         - 'CaneRichardson': Richardson & Cane near-Earth ICME list (default)
         - 'DONKI': NASA DONKI ICME database
+        - 'STEREO-A': Jian et al. STEREO-A ICME event list
     pre_icme_buffer : float, optional
         Time buffer before ICME shock arrival to also remove, in days.
         Default is 0.2 days.
@@ -1047,6 +1163,12 @@ def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme
         icmes = get_DONKI_ICMEs(dl_starttime, dl_endtime)
     elif icme_list == 'CaneRichardson':
         icmes = ICMElist()
+    elif icme_list in ('STEREO-A', 'STEREOA', 'STA'):
+        icmes = get_STEREO_ICMEs(spacecraft='A')
+    else:
+        raise ValueError(
+            "icme_list must be 'CaneRichardson', 'DONKI', or 'STEREO-A'"
+        )
     
     params = ['V', 'BX_GSE']
     # first remove all ICMEs and add NaNs to the required parameters
@@ -1446,7 +1568,8 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                             dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                             lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
                             cnn_smoothing_width=7, track_cmes=False, gamma=1.5,
-                            include_b_boundary=True, icme_list='CaneRichardson'):
+                            include_b_boundary=True, icme_list='CaneRichardson',
+                            observer='Earth'):
     """
     Create a SURF solar wind reconstruction using OMNI observations over a time interval.
     
@@ -1577,19 +1700,21 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     # Generate Carrington map using corotation (both forward and backward)
     if compressible:
         time_grid, vcarr_215, bcarr_215, rhocarr_215, tcarr_215 = generate_vCarr_from_OMNI(
-            start_time, end_time, 
+            start_time, end_time,
             omni_input=omni_input,
             dt=dt,
             corot_type='both',
-            compressible=True
+            compressible=True,
+            observer=observer
         )
     else:
         time_grid, vcarr_215, bcarr_215 = generate_vCarr_from_OMNI(
-            start_time, end_time, 
+            start_time, end_time,
             omni_input=omni_input,
             dt=dt,
             corot_type='both',
-            compressible=False
+            compressible=False,
+            observer=observer
         )
     
     # Get reference radius from generate_vCarr_from_OMNI (215 Rsun by default)
@@ -1715,8 +1840,12 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     # Calculate simulation time from start to end
     simtime = (Time(end_time).mjd - Time(start_time).mjd) * u.day
     
-    # Get Earth latitude
-    Elat = sin.get_earth_lat(start_time)
+    # Use the latitude of the observer supplying the in-situ measurements.
+    if observer.upper() == 'EARTH':
+        Elat = sin.get_earth_lat(start_time)
+    else:
+        source_pos = s.Observer(observer, Time([start_time]))
+        Elat = source_pos.lat_c[0]
     
     # Create SURF model with time-dependent boundary
     if run_2d:
@@ -1758,6 +1887,119 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
         )
     
     return model
+
+
+def staSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad,
+                           rmax=230*u.solRad, dt_scale=4, dt=1*u.day,
+                           sta_input=None, run_2d=False, solver='huxt',
+                           rho_source='speed', temp_source='speed', nlon=128,
+                           dr=1.5*u.solRad, v_max=3000*u.km/u.s,
+                           lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
+                           cnn_smoothing_width=7, track_cmes=False, gamma=1.5,
+                           include_b_boundary=True, icme_list='STEREO-A',
+                           icme_buffer=2*u.day):
+    """Create a SURF reconstruction using STEREO-A in-situ observations.
+
+    STEREO-A's merged hourly PLASTIC/IMPACT product is downloaded from CDAWeb
+    through SunPy/Fido. Its ephemeris is used for the Carrington mapping and
+    radial-distance correction. ICME removal is deliberately not applied.
+
+    Parameters
+    ----------
+    start_time : datetime.datetime
+        Start time of the reconstruction interval.
+    end_time : datetime.datetime
+        End time of the reconstruction interval.
+    rmin, rmax : astropy.units.Quantity, optional
+        Inner and outer radial boundaries. Defaults are 21.5 and 230 solar radii.
+    dt_scale : int, optional
+        Time-step scaling factor. Default is 4.
+    dt : astropy.units.Quantity, optional
+        Time resolution of the Carrington map. Default is one day.
+    sta_input : pandas.DataFrame, optional
+        Preloaded data in the column convention returned by
+        :func:`get_stereo_a`. If omitted, the interval plus a 28-day buffer is
+        downloaded automatically.
+    run_2d : bool, optional
+        Run over ``lon_start`` to ``lon_stop`` when True; otherwise run at one
+        longitude. Default is False.
+    solver : {'huxt', 'hydro', 'hydro-pcm'}, optional
+        Numerical solver. Default is ``'huxt'``.
+    rho_source, temp_source : {'speed', 'omni'}, optional
+        Density and temperature sources for compressible solvers. Here
+        ``'omni'`` means the corresponding STEREO-A measurement.
+    nlon : int, optional
+        Number of cells in the full longitude grid. Default is 128.
+    dr : astropy.units.Quantity, optional
+        Radial grid spacing. Default is 1.5 solar radii.
+    v_max : astropy.units.Quantity, optional
+        Maximum speed used to set the CFL step. Default is 3000 km/s.
+    lon_start, lon_stop : astropy.units.Quantity, optional
+        Edges of the 2-D longitude domain.
+    cnn_smoothing_width : int, optional
+        Periodic smoothing width applied after the CNN correction.
+    track_cmes : bool, optional
+        Enable CME tracer tracking. Default is False.
+    gamma : float, optional
+        Effective adiabatic index. Default is 1.5.
+    include_b_boundary : bool, optional
+        Include the STEREO-A-derived magnetic-polarity boundary.
+    icme_list : {'STEREO-A', None}, optional
+        ICME catalogue used to remove and interpolate across STEREO-A ICME
+        intervals. Defaults to ``'STEREO-A'``. Set to None or ``'None'`` to
+        retain the original measurements.
+    icme_buffer : astropy.units.Quantity or float, optional
+        Time removed both before each ICME start and after each ICME end. A
+        float is interpreted as days. Default is two days.
+
+    Returns
+    -------
+    model : surf.SURF
+        Initialized, unsolved SURF model. Call ``model.solve(cme_list)``.
+    """
+    if sta_input is None:
+        sta_input = get_stereo_a(
+            start_time - datetime.timedelta(days=28),
+            end_time + datetime.timedelta(days=28)
+        )
+    if icme_list is not None and icme_list != 'None':
+        if isinstance(icme_buffer, u.Quantity):
+            icme_buffer_days = icme_buffer.to_value(u.day)
+        else:
+            icme_buffer_days = float(icme_buffer)
+        if icme_buffer_days < 0:
+            raise ValueError('icme_buffer must be non-negative')
+        sta_input = removeICMEs(
+            sta_input,
+            icme_list=icme_list,
+            pre_icme_buffer=icme_buffer_days,
+            post_icme_buffer=icme_buffer_days
+        )
+
+    return omniSURF_reconstruction(
+        start_time,
+        end_time,
+        rmin=rmin,
+        rmax=rmax,
+        dt_scale=dt_scale,
+        dt=dt,
+        omni_input=sta_input,
+        run_2d=run_2d,
+        solver=solver,
+        rho_source=rho_source,
+        temp_source=temp_source,
+        nlon=nlon,
+        dr=dr,
+        v_max=v_max,
+        lon_start=lon_start,
+        lon_stop=lon_stop,
+        cnn_smoothing_width=cnn_smoothing_width,
+        track_cmes=track_cmes,
+        gamma=gamma,
+        include_b_boundary=include_b_boundary,
+        icme_list=None,
+        observer='STA'
+    )
 
 
 def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u.day,

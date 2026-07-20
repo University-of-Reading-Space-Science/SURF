@@ -38,6 +38,7 @@ dependencies = [
 "surf.data.ephemeris" = ["*.hdf5"]
 "surf.data.example_inputs" = ["*.fits", "*.in", "*.fits", "*.nc", "*.dat"]
 "surf.data.example_inputs.WSA_GONGZ" = ["*.fits"]
+"surf.data.insitu" = ["*.txt", "*.csv", "*.onnx", "*.save"]
 "surf.notebooks" = ["*.ipynb"]
 
 [project.scripts]
