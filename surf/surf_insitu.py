@@ -1746,7 +1746,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                 ref_r,
                 rmin,
                 b_orig=bcarr_215[:, t],
-                acc_profile='huxt', gamma=gamma
+                acc_profile='parker', gamma=gamma
             )
             if isinstance(mapped, tuple):
                 vcarr_rmin[:, t], bcarr_rmin[:, t] = mapped

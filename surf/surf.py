@@ -2809,7 +2809,8 @@ def map_properties_parker(velocity, r_from, r_to, density_from, temperature_from
     return v_to_kms * (u.km / u.s), n_to * (u.cm ** -3), T_to * u.K
 
 
-def get_omni_lookup_table_at_distance(r_target, lookup_table_path=None):
+def get_omni_lookup_table_at_distance(
+        r_target, lookup_table_path=None, gamma=1.5):
     """
     Map the OMNI 1 AU lookup table to a specified heliocentric distance using Parker nozzle
     equations.
@@ -2822,6 +2823,8 @@ def get_omni_lookup_table_at_distance(r_target, lookup_table_path=None):
         r_target: Target heliocentric distance (astropy Quantity with length units, e.g., 0.1*u.au)
         lookup_table_path: Path to the 1 AU lookup table file. If None, looks for 
                           'omni_lookup_table_1AU.txt' in the tests directory.
+        gamma: Adiabatic index used to map the 1 AU lookup table to the target
+               distance. Default is 1.5.
     
     Returns:
         tuple: (v_array, n_array, T_array) at r_target
@@ -2862,7 +2865,8 @@ def get_omni_lookup_table_at_distance(r_target, lookup_table_path=None):
             r_1au,
             r_target,
             n_1au[i] * (u.cm ** -3),
-            T_1au[i] * u.K
+            T_1au[i] * u.K,
+            gamma=gamma
         )
         
         v_target[i] = v_out.to((u.km / u.s)).value
@@ -2916,7 +2920,9 @@ def get_density_temperature_from_velocity(v_value, r_target, gamma=1.5, cache_id
     # Check if we have cached data for this r_target in this cache namespace
     if lookup_key not in cache:
         # Generate lookup table at target distance and cache it
-        v_lookup, n_lookup, T_lookup = get_omni_lookup_table_at_distance(r_target_q)
+        v_lookup, n_lookup, T_lookup = get_omni_lookup_table_at_distance(
+            r_target_q, gamma=gamma
+        )
         cache[lookup_key] = (v_lookup, n_lookup, T_lookup)
     else:
         v_lookup, n_lookup, T_lookup = cache[lookup_key]
