@@ -60,6 +60,13 @@ class Observer:
             print("Defaulting to Earth")
             self.body = "EARTH"
 
+        # synth_heeq_pos is only valid for a SYNTHETIC observer.
+        if synth_heeq_pos is not None and self.body != "SYNTHETIC":
+            raise ValueError(
+                f"synth_heeq_pos must be None for body '{self.body}'."
+                " It is only valid when body='SYNTHETIC'."
+            )
+
         # Handle real observers first.
         if self.body != "SYNTHETIC":
             # Get path to ephemeris file and open
@@ -70,10 +77,13 @@ class Observer:
             all_time = Time(ephem[self.body]['HEEQ']['time'], format='jd')
 
             # STEREO-A and ACE have shorter lengths of ephemeris data. Check requested times
-            if np.any(times > all_time[-1]):
-                raise ValueError(f"{body} ephemeris extends to {all_time[-1].isot}."
-                                 f" Requested times are outside this limit."
-                                 f" Updating the SURF ephemeris file may resolve this issue.")
+            # Check that all requested times fall within the span of the ephemeris.
+            if np.any(times < all_time[0]) or np.any(times > all_time[-1]):
+                raise ValueError(
+                    f"{body} ephemeris spans {all_time[0].isot} to {all_time[-1].isot}."
+                    f" One or more requested times fall outside this range."
+                    f" Updating the SURF ephemeris file may resolve this issue."
+                )
 
             # Pad out the window to account for single values being passed.
             if self.body in craft:
@@ -100,45 +110,45 @@ class Observer:
 
             else:
                 r = ephem[self.body]['HEEQ']['radius'][id_epoch]
-                self.r = np.interp(times.jd, epoch_time.jd, r)
+                self.r = np.interp(times.jd, epoch_time.jd, r, left=np.nan, right=np.nan)
                 self.r = (self.r * u.km).to(u.solRad)
 
                 lon = np.deg2rad(ephem[self.body]['HEEQ']['longitude'][id_epoch])
                 lon = np.unwrap(lon)
-                self.lon = np.interp(times.jd, epoch_time.jd, lon)
+                self.lon = np.interp(times.jd, epoch_time.jd, lon, left=np.nan, right=np.nan)
                 self.lon = zerototwopi(self.lon)
                 self.lon = self.lon * u.rad
 
                 lat = np.deg2rad(ephem[self.body]['HEEQ']['latitude'][id_epoch])
-                self.lat = np.interp(times.jd, epoch_time.jd, lat)
+                self.lat = np.interp(times.jd, epoch_time.jd, lat, left=np.nan, right=np.nan)
                 self.lat = self.lat * u.rad
 
                 r = ephem[self.body]['HAE']['radius'][id_epoch]
-                self.r_hae = np.interp(times.jd, epoch_time.jd, r)
+                self.r_hae = np.interp(times.jd, epoch_time.jd, r, left=np.nan, right=np.nan)
                 self.r_hae = (self.r_hae * u.km).to(u.solRad)
 
                 lon = np.deg2rad(ephem[self.body]['HAE']['longitude'][id_epoch])
                 lon = np.unwrap(lon)
-                self.lon_hae = np.interp(times.jd, epoch_time.jd, lon)
+                self.lon_hae = np.interp(times.jd, epoch_time.jd, lon, left=np.nan, right=np.nan)
                 self.lon_hae = zerototwopi(self.lon_hae)
                 self.lon_hae = self.lon_hae * u.rad
 
                 lat = np.deg2rad(ephem[self.body]['HAE']['latitude'][id_epoch])
-                self.lat_hae = np.interp(times.jd, epoch_time.jd, lat)
+                self.lat_hae = np.interp(times.jd, epoch_time.jd, lat, left=np.nan, right=np.nan)
                 self.lat_hae = self.lat_hae * u.rad
 
                 r = ephem[self.body]['CARR']['radius'][id_epoch]
-                self.r_c = np.interp(times.jd, epoch_time.jd, r)
+                self.r_c = np.interp(times.jd, epoch_time.jd, r, left=np.nan, right=np.nan)
                 self.r_c = (self.r_c * u.km).to(u.solRad)
 
                 lon = np.deg2rad(ephem[self.body]['CARR']['longitude'][id_epoch])
                 lon = np.unwrap(lon)
-                self.lon_c = np.interp(times.jd, epoch_time.jd, lon)
+                self.lon_c = np.interp(times.jd, epoch_time.jd, lon, left=np.nan, right=np.nan)
                 self.lon_c = zerototwopi(self.lon_c)
                 self.lon_c = self.lon_c * u.rad
 
                 lat = np.deg2rad(ephem[self.body]['CARR']['latitude'][id_epoch])
-                self.lat_c = np.interp(times.jd, epoch_time.jd, lat)
+                self.lat_c = np.interp(times.jd, epoch_time.jd, lat, left=np.nan, right=np.nan)
                 self.lat_c = self.lat_c * u.rad
 
             ephem.close()
@@ -225,7 +235,7 @@ class Observer:
             # the result back into [0, 2pi). This mirrors the real-observer branch.
             def _interp_angle(src_jd, angle_rad):
                 unwrapped = np.unwrap(angle_rad)
-                out = np.interp(self.time.jd, src_jd, unwrapped)
+                out = np.interp(self.time.jd, src_jd, unwrapped, left=np.nan, right=np.nan)
                 return zerototwopi(out) * u.rad
 
             # Do coordinate transforms on uninterpolated data as more robust/accurate.
@@ -234,17 +244,20 @@ class Observer:
                                                  synth_heeq_pos['r'],
                                                  obstime=synth_heeq_pos['time'])
 
-            self.r = np.interp(self.time.jd, heeq.obstime.jd, heeq.radius.to(u.solRad).value)
+            self.r = np.interp(self.time.jd, heeq.obstime.jd, heeq.radius.to(u.solRad).value,
+                               left=np.nan, right=np.nan)
             self.r = self.r * u.solRad
 
             self.lon = _interp_angle(heeq.obstime.jd, heeq.lon.to(u.rad).value)
 
             # Latitude is bounded to [-pi/2, pi/2] and never wraps, so interpolate directly.
-            self.lat = np.interp(self.time.jd, heeq.obstime.jd, heeq.lat.to(u.rad).value)
+            self.lat = np.interp(self.time.jd, heeq.obstime.jd, heeq.lat.to(u.rad).value,
+                                 left=np.nan, right=np.nan)
             self.lat = self.lat * u.rad
 
             carr = heeq.transform_to(coords.HeliographicCarrington(observer="self"))
-            self.r_c = np.interp(self.time.jd, carr.obstime.jd, carr.radius.to(u.solRad).value)
+            self.r_c = np.interp(self.time.jd, carr.obstime.jd, carr.radius.to(u.solRad).value,
+                                 left=np.nan, right=np.nan)
             self.r_c = self.r_c * u.solRad
 
             self.lon_c = _interp_angle(carr.obstime.jd, carr.lon.to(u.rad).value)
@@ -254,7 +267,8 @@ class Observer:
 
             hae = heeq.transform_to(acoords.HeliocentricMeanEcliptic(equinox='J2000',
                                                                      obstime=heeq.obstime))
-            self.r_hae = np.interp(self.time.jd, heeq.obstime.jd, hae.distance.to(u.solRad).value)
+            self.r_hae = np.interp(self.time.jd, heeq.obstime.jd, hae.distance.to(u.solRad).value,
+                                   left=np.nan, right=np.nan)
             self.r_hae = self.r_hae * u.solRad
 
             self.lon_hae = _interp_angle(heeq.obstime.jd, hae.lon.to(u.rad).value)
