@@ -117,6 +117,98 @@ def get_stereo_a(starttime, endtime):
     return sta.reset_index(drop=True)
 
 
+def _get_coho_spacecraft(starttime, endtime, dataset_id, spacecraft_name):
+    """Download and normalize a CDAWeb COHO hourly merged data product."""
+    start = pd.Timestamp(starttime)
+    end = pd.Timestamp(endtime)
+    if end < start:
+        raise ValueError('endtime must be on or after starttime')
+
+    trange = attrs.Time(starttime, endtime)
+    dataset = attrs.cdaweb.Dataset(dataset_id)
+    result = Fido.search(trange, dataset)
+    downloaded_files = Fido.fetch(result)
+    if len(downloaded_files) == 0:
+        raise ValueError(
+            f'No {spacecraft_name} data are available from {start} through {end}')
+
+    data = TimeSeries(downloaded_files, concatenate=True).to_dataframe()
+    required_columns = {
+        'ProtonSpeed', 'protonDensity', 'protonTemp', 'BR', 'B'
+    }
+    missing = required_columns.difference(data.columns)
+    if missing:
+        raise ValueError(
+            f'{dataset_id} is missing required variable(s): '
+            f'{", ".join(sorted(missing))}')
+
+    output = pd.DataFrame(index=data.index)
+    output['V'] = data['ProtonSpeed']
+    output['N'] = data['protonDensity']
+    output['T'] = data['protonTemp']
+    output['BR'] = data['BR']
+    output['BX_GSE'] = -output['BR']
+    output['B'] = data['B']
+
+    # Retain the vector components when present; the common SURF interface
+    # above only requires the radial component and magnitude.
+    for column in ('BT', 'BN', 'VR', 'VT', 'VN'):
+        if column in data.columns:
+            output[column] = data[column]
+
+    output['datetime'] = pd.to_datetime(output.index)
+    mask = ((output['datetime'] >= start) & (output['datetime'] <= end))
+    output = output.loc[mask].copy()
+    if output.empty:
+        raise ValueError(
+            f'No {spacecraft_name} data are available from {start} through {end}')
+
+    # COHO CDF fill values have extremely large magnitudes. Avoid tight upper
+    # limits here because PSP can observe legitimately large density and field
+    # values near perihelion.
+    output.loc[(output['V'] <= 0) | (np.abs(output['V']) >= 1e30), 'V'] = np.nan
+    output.loc[(output['N'] < 0) | (np.abs(output['N']) >= 1e30), 'N'] = np.nan
+    output.loc[(output['T'] < 0) | (np.abs(output['T']) >= 1e30), 'T'] = np.nan
+    for column in ('BR', 'BX_GSE', 'B', 'BT', 'BN', 'VR', 'VT', 'VN'):
+        if column in output.columns:
+            output.loc[np.abs(output[column]) >= 1e30, column] = np.nan
+
+    output['mjd'] = Time(output['datetime'].to_numpy()).mjd
+    return output.reset_index(drop=True)
+
+
+def get_psp(starttime, endtime):
+    """Download hourly Parker Solar Probe plasma and magnetic-field data.
+
+    Data come from CDAWeb's merged PSP COHO product. The returned DataFrame
+    uses the same columns as :func:`get_omni` and :func:`get_stereo_a`:
+    ``datetime``, ``mjd``, ``V`` (km/s), ``N`` (cm^-3), ``T`` (K),
+    ``BR``/``BX_GSE`` (nT), and ``B`` (nT). Available RTN vector components
+    are retained as additional columns.
+    """
+    return _get_coho_spacecraft(
+        starttime,
+        endtime,
+        dataset_id='PSP_COHO1HR_MERGED_MAG_PLASMA',
+        spacecraft_name='Parker Solar Probe'
+    )
+
+
+def get_solo(starttime, endtime):
+    """Download hourly Solar Orbiter plasma and magnetic-field data.
+
+    Data come from CDAWeb's merged Solar Orbiter COHO product. The returned
+    DataFrame uses the same normalized columns as :func:`get_psp`, making it
+    suitable for the SURF in-situ mapping functions.
+    """
+    return _get_coho_spacecraft(
+        starttime,
+        endtime,
+        dataset_id='SOLO_COHO1HR_MERGED_MAG_PLASMA',
+        spacecraft_name='Solar Orbiter'
+    )
+
+
 def _read_ace_realtime_file(url, columns, timeout=30):
     """Read one whitespace-delimited NOAA ACE real-time archive file."""
     with urlopen(url, timeout=timeout) as response:
