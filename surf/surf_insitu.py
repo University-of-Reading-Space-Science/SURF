@@ -1340,7 +1340,8 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       solver='huxt', nlon=128, dr=1.5*u.solRad,
                       v_max=3000*u.km/u.s, lon_start=0*u.rad,
                       lon_stop=2*np.pi*u.rad, cnn_smoothing_width=7, track_cmes=False,
-                      gamma=1.5, include_b_boundary=True, icme_list='CaneRichardson'):
+                      gamma=1.5, include_b_boundary=True, icme_list='CaneRichardson',
+                      observer='Earth'):
     """
     Create a SURF solar wind forecast initialized from in-situ OMNI observations.
     
@@ -1405,6 +1406,9 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     include_b_boundary : bool, optional
         Whether to supply the OMNI-derived magnetic field boundary to SURF.
         Default is True.
+    observer : str, optional
+        Observer whose ephemeris describes the supplied in-situ data. Default
+        is ``'Earth'``. This is primarily used by spacecraft-specific wrappers.
 
     
     Returns
@@ -1457,8 +1461,8 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
             omni_input = removeICMEs(omni, icme_list=icme_list)
     
     # cut out the precise bit of the OMNI data that is required
-    mask = (omni_input['datetime'] <= ftime) 
-    omni_input = omni_input.loc[mask]
+    mask = (omni_input['datetime'] <= ftime)
+    omni_input = omni_input.loc[mask].copy()
     
     
     # add the carrington longitude to the omni data
@@ -1468,9 +1472,14 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
         else:
             return np.floor(cr_frac).astype(int)
     
-    cr_frac = sun.carrington_rotation_number(omni_input['datetime'])
-    cr = remainder(cr_frac)
-    omni_input['lon_carr'] = 2 * np.pi * (1 - (cr_frac - cr)) 
+    if observer.upper() == 'EARTH':
+        cr_frac = sun.carrington_rotation_number(omni_input['datetime'])
+        cr = remainder(cr_frac)
+        omni_input['lon_carr'] = 2 * np.pi * (1 - (cr_frac - cr))
+    else:
+        observer_pos = s.Observer(
+            observer, Time(omni_input['datetime'].to_numpy()))
+        omni_input['lon_carr'] = observer_pos.lon_c.to_value(u.rad)
     
     # create vCarr with the omni time series at 1 AU
     # unwrap the carr long
@@ -1486,25 +1495,29 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     omni_lon = omni_chunk.sort_values(by='lon_carr').reset_index(drop=True)
     
     # now map back to the inner boundary
-    # Get Earth's radial distance from ephemeris data
-    dirs = s._setup_dirs_()
-    ephem = h5py.File(dirs['ephemeris'], 'r')
-    # convert ephemeris to mjd and interpolate to required time
-    all_time = Time(ephem['EARTH']['HEEQ']['time'], format='jd').value - 2400000.5
-    Earth_R_km = np.interp(Time(ftime).mjd, all_time, ephem['EARTH']['HEEQ']['radius'][:]) * u.km
-    ephem.close()
+    # Get the observing spacecraft's radial distance from the ephemeris.
+    if observer.upper() == 'EARTH':
+        dirs = s._setup_dirs_()
+        ephem = h5py.File(dirs['ephemeris'], 'r')
+        all_time = Time(ephem['EARTH']['HEEQ']['time'], format='jd').value - 2400000.5
+        observer_r = np.interp(
+            Time(ftime).mjd, all_time, ephem['EARTH']['HEEQ']['radius'][:]) * u.km
+        ephem.close()
+    else:
+        observer_at_ftime = s.Observer(observer, Time([ftime]))
+        observer_r = observer_at_ftime.r[0]
     
     # Backmap to the inner boundary with solver-dependent acceleration profile.
     if solver == 'huxt':
         vcarr_rmin_back, bcarr_rmin_back = sin.map_v_boundary_inwards(
                                                 omni_lon['V'].to_numpy()*u.km/u.s,
-                                                Earth_R_km.to(u.solRad), rmin,
+                                                observer_r.to(u.solRad), rmin,
                                                 acc_profile='huxt',
                                                 b_orig=-omni_lon['BX_GSE'].to_numpy())
     else:
         vcarr_rmin_back, bcarr_rmin_back = sin.map_v_boundary_inwards(
                                                 omni_lon['V'].to_numpy()*u.km/u.s,
-                                                Earth_R_km.to(u.solRad), rmin,
+                                                observer_r.to(u.solRad), rmin,
                                                 acc_profile='parker',
                                                 b_orig=-omni_lon['BX_GSE'].to_numpy(),
                                                 gamma=gamma)
@@ -1537,8 +1550,11 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     # set up the model run to start 5 days before the forecast time, to allow for CMEs
     cr, cr_lon_init = sin.datetime2surfinputs(ftime - datetime.timedelta(days=buffertime.value))
     
-    # Get Earth latitude - using get_earth_lat if available, otherwise default to 0
-    Elat = sin.get_earth_lat(ftime)
+    # Use the latitude of the observer supplying the in-situ measurements.
+    if observer.upper() == 'EARTH':
+        Elat = sin.get_earth_lat(ftime)
+    else:
+        Elat = observer_at_ftime.lat_c[0]
 
     
     if run_2d:
@@ -1560,6 +1576,78 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes,
                       gamma=gamma)
     return model
+
+
+def staSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad,
+                     rmax=230*u.solRad, dt_scale=4, sta_input=None,
+                     buffertime=5*u.day, run_2d=False, solver='huxt', nlon=128,
+                     dr=1.5*u.solRad, v_max=3000*u.km/u.s,
+                     lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
+                     cnn_smoothing_width=7, track_cmes=False, gamma=1.5,
+                     include_b_boundary=True, icme_list='STEREO-A',
+                     icme_buffer=2*u.day):
+    """Create a SURF forecast initialized from STEREO-A observations.
+
+    This is the STEREO-A equivalent of :func:`omniSURF_forecast`.  It uses
+    STEREO-A's Carrington longitude, radial distance, and latitude when
+    constructing the boundary condition.  If ``sta_input`` is omitted, the
+    merged hourly PLASTIC/IMPACT data covering the preceding solar rotation
+    are downloaded automatically.
+
+    Parameters are the same as for :func:`omniSURF_forecast`, except that
+    ``sta_input`` follows the column convention returned by
+    :func:`get_stereo_a`. ``icme_list`` may be ``'STEREO-A'`` (the default),
+    None, or ``'None'``. ``icme_buffer`` is the interval removed on either
+    side of each catalogue ICME and may be a time quantity or a number of
+    days.
+
+    Returns
+    -------
+    model : surf.SURF
+        Initialized, unsolved SURF model.
+    """
+    if sta_input is None:
+        sta_input = get_stereo_a(
+            ftime - datetime.timedelta(days=28),
+            ftime + datetime.timedelta(days=28)
+        )
+
+    if icme_list is not None and icme_list != 'None':
+        if isinstance(icme_buffer, u.Quantity):
+            icme_buffer_days = icme_buffer.to_value(u.day)
+        else:
+            icme_buffer_days = float(icme_buffer)
+        if icme_buffer_days < 0:
+            raise ValueError('icme_buffer must be non-negative')
+        sta_input = removeICMEs(
+            sta_input,
+            icme_list=icme_list,
+            pre_icme_buffer=icme_buffer_days,
+            post_icme_buffer=icme_buffer_days
+        )
+
+    return omniSURF_forecast(
+        ftime,
+        simtime=simtime,
+        rmin=rmin,
+        rmax=rmax,
+        dt_scale=dt_scale,
+        omni_input=sta_input,
+        buffertime=buffertime,
+        run_2d=run_2d,
+        solver=solver,
+        nlon=nlon,
+        dr=dr,
+        v_max=v_max,
+        lon_start=lon_start,
+        lon_stop=lon_stop,
+        cnn_smoothing_width=cnn_smoothing_width,
+        track_cmes=track_cmes,
+        gamma=gamma,
+        include_b_boundary=include_b_boundary,
+        icme_list=None,
+        observer='STA'
+    )
 
 
 def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u.solRad,

@@ -703,7 +703,8 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
 
 
 def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=False,
-                 annotateplot=True, plot_rmax=None, plotHCS=True, polar_var='V'):
+                 annotateplot=True, plot_rmax=None, plotHCS=True, polar_var='V',
+                 plot_omni=False):
     """
     Make a plot with two subfigures: left shows top-down polar view of selected variable,
     right shows Earth timeseries.
@@ -722,6 +723,9 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
         polar_var: String specifying variable to plot in left polar subplot.
                Compressible options: 'P_DYN', 'V', 'n', 'T'.
                In incompressible mode only 'V' is supported.
+        plot_omni: Boolean. If True, download and overlay OMNI observations on
+                   the Earth time-series panels. Data are cached on the model
+                   so animation frames do not trigger repeated downloads.
     Returns:
         fig: Figure handle.
         subfigs: Array of subfigure handles [subfig_left, subfig_right].
@@ -991,6 +995,17 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
     ts = model._cached_earth_timeseries
     current_time = model.time_init + time
 
+    omni_ts = None
+    if plot_omni:
+        if not hasattr(model, '_cached_omni_timeseries'):
+            omni_start = ts['time'].iloc[0]
+            omni_end = ts['time'].iloc[-1]
+            omni_data = sinsit.get_omni(omni_start, omni_end)
+            mask = ((omni_data['datetime'] >= omni_start) &
+                    (omni_data['datetime'] <= omni_end))
+            model._cached_omni_timeseries = omni_data.loc[mask].copy()
+        omni_ts = model._cached_omni_timeseries
+
     if is_compressible:
         # Compute P_dyn from timeseries: P_dyn = 0.5 * rho * v^2
         # n is in protons/cm³, convert to kg/m³
@@ -1003,7 +1018,10 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
         axes_ts = subfigs[1].subplots(4, 1, sharex=True)
 
         # Plot 1: Velocity (left y-axis)
-        axes_ts[0].plot(ts['time'], ts['vsw'], 'k-', linewidth=1.5)
+        axes_ts[0].plot(ts['time'], ts['vsw'], 'k-', linewidth=1.5, label='SURF')
+        if plot_omni:
+            axes_ts[0].plot(omni_ts['datetime'], omni_ts['V'], color='tab:blue',
+                            linestyle='--', linewidth=1.2, label='OMNI')
         axes_ts[0].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
                            alpha=0.7)
         axes_ts[0].yaxis.tick_left()
@@ -1017,6 +1035,10 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
 
         # Plot 2: Number Density (log scale, right y-axis)
         axes_ts[1].semilogy(ts['time'], ts['n'], 'k-', linewidth=1.5)
+        if plot_omni and 'N' in omni_ts.columns:
+            omni_n = omni_ts['N'].where((omni_ts['N'] > 0) & (omni_ts['N'] < 999))
+            axes_ts[1].semilogy(omni_ts['datetime'], omni_n, color='tab:blue',
+                               linestyle='--', linewidth=1.2)
         axes_ts[1].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
                            alpha=0.7)
         axes_ts[1].yaxis.tick_right()
@@ -1031,6 +1053,10 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
 
         # Plot 3: Temperature (log scale, left y-axis)
         axes_ts[2].semilogy(ts['time'], ts['T'], 'k-', linewidth=1.5)
+        if plot_omni and 'T' in omni_ts.columns:
+            omni_t = omni_ts['T'].where((omni_ts['T'] > 0) & (omni_ts['T'] < 999999))
+            axes_ts[2].semilogy(omni_ts['datetime'], omni_t, color='tab:blue',
+                               linestyle='--', linewidth=1.2)
         axes_ts[2].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
                            alpha=0.7)
         axes_ts[2].yaxis.tick_left()
@@ -1044,6 +1070,12 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
 
         # Plot 4: Dynamic Pressure (log scale, right y-axis)
         axes_ts[3].semilogy(ts['time'], pdyn_ts, 'k-', linewidth=1.5)
+        if plot_omni and {'N', 'V'}.issubset(omni_ts.columns):
+            omni_n = omni_ts['N'].where((omni_ts['N'] > 0) & (omni_ts['N'] < 999))
+            omni_v = omni_ts['V'].where((omni_ts['V'] > 0) & (omni_ts['V'] < 9999))
+            omni_pdyn = 0.5 * (omni_n * m_p * 1e6) * (omni_v * 1e3)**2 * 1e9
+            axes_ts[3].semilogy(omni_ts['datetime'], omni_pdyn, color='tab:blue',
+                               linestyle='--', linewidth=1.2)
         axes_ts[3].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
                            alpha=0.7)
         axes_ts[3].yaxis.tick_right()
@@ -1057,12 +1089,18 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
     else:
         ax_ts = subfigs[1].subplots(1, 1)
-        ax_ts.plot(ts['time'], ts['vsw'], 'k-', linewidth=1.5)
+        ax_ts.plot(ts['time'], ts['vsw'], 'k-', linewidth=1.5, label='SURF')
+        if plot_omni:
+            ax_ts.plot(omni_ts['datetime'], omni_ts['V'], color='tab:blue',
+                       linestyle='--', linewidth=1.2, label='OMNI')
         ax_ts.axvline(current_time.datetime, color='r', linestyle='--', linewidth=2, alpha=0.7)
         ax_ts.set_ylim(200, 1000)
         ax_ts.set_ylabel('V [km/s]')
         ax_ts.grid(True, alpha=0.3)
         axes_ts = np.array([ax_ts])
+
+    if plot_omni:
+        axes_ts[0].legend(loc='upper left', fontsize=9)
     
     # Format x-axis
     
@@ -1111,7 +1149,7 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
 
 def animate_with_ts(model, tag='', duration=10, fps=20, outputfilepath='',
                     minimalplot=False, annotateplot=True, plot_rmax=None,
-                    plotHCS=True, polar_var='V'):
+                    plotHCS=True, polar_var='V', plot_omni=False):
     """
     Animate the solar wind solution with Earth time series, and save as MP4 (or GIF fallback).
 
@@ -1129,6 +1167,8 @@ def animate_with_ts(model, tag='', duration=10, fps=20, outputfilepath='',
         plotHCS: Boolean, if True plots heliospheric current sheet coordinates.
         polar_var: String specifying variable to plot in left polar subplot.
                In incompressible mode only 'V' is supported.
+        plot_omni: Boolean. If True, overlay OMNI observations for each
+                   variable shown in the Earth time-series panel.
     Returns:
         pathlib.Path: Full path to the saved animation file.
     """
@@ -1150,7 +1190,8 @@ def animate_with_ts(model, tag='', duration=10, fps=20, outputfilepath='',
         i = np.int32((model.nt_out - 1) * frame / nframes)
         plot_with_ts(model, model.time_out[i], save=False, tag=tag,
                      fighandle=fig, minimalplot=minimalplot, annotateplot=annotateplot,
-                     plot_rmax=plot_rmax, plotHCS=plotHCS, polar_var=polar_var)
+                     plot_rmax=plot_rmax, plotHCS=plotHCS, polar_var=polar_var,
+                     plot_omni=plot_omni)
         return frame
 
     # Create the animation
