@@ -1718,17 +1718,8 @@ def get_earth_lat(dt):
 
     """
 
-    cr, cr_lon_init = datetime2surfinputs(dt)
-    # Use the SURF ephemeris data to get Earth lat over the CR
-    # ========================================================
-    dummymodel = s.SURF(v_boundary=np.ones(128)*400*(u.km/u.s), simtime=0.1*u.day, cr_num=cr,
-                           cr_lon_init=cr_lon_init, lon_out=0.0*u.deg)
-    # retrieve a bodies position at each model timestep:
-    earth = dummymodel.get_observer('earth')
-    # get average Earth lat
-    E_lat = np.nanmean(earth.lat_c)
-    
-    return E_lat
+    earth = s.Observer('earth', Time([dt]))
+    return earth.lat_c[0]
 
 
 def surf_td_input_from_WSA_runs(datadir, start_dt, stop_dt, latitude, deacc=True,
