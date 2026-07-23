@@ -86,10 +86,11 @@ class Observer:
                 )
 
             # Pad out the window to account for single values being passed.
+            # Need at least 2 extra vals either side for interplation to be robust.
             if self.body in craft:
-                dt = TimeDelta(2 * 60 * 60, format='sec')  # craft ephem is 4 hourly, so dt=2
+                dt = TimeDelta(8 * 60 * 60, format='sec')  # craft ephem is 4 hourly
             elif self.body in planets:
-                dt = TimeDelta(6 * 60 * 60, format='sec')  # planet ephem is 12 hourly, so dt=6
+                dt = TimeDelta(24 * 60 * 60, format='sec')  # planet ephem is 12 hourly
 
             id_epoch = (all_time >= (times.min() - dt)) & (all_time <= (times.max() + dt))
             epoch_time = all_time[id_epoch]
