@@ -1431,7 +1431,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       dt_scale=4, omni_input=None, buffertime=5*u.day, run_2d=False,
                       solver='huxt', nlon=128, dr=1.5*u.solRad,
                       v_max=3000*u.km/u.s, lon_start=0*u.rad,
-                      lon_stop=2*np.pi*u.rad, cnn_smoothing_width=7, track_cmes=False,
+                      lon_stop=2*np.pi*u.rad, cnn_smoothing_width=3, track_cmes=False,
                       gamma=1.5, include_b_boundary=True, icme_list='CaneRichardson',
                       observer='Earth'):
     """
@@ -1675,7 +1675,7 @@ def staSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad,
                      buffertime=5*u.day, run_2d=False, solver='huxt', nlon=128,
                      dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                      lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
-                     cnn_smoothing_width=7, track_cmes=False, gamma=1.5,
+                     cnn_smoothing_width=3, track_cmes=False, gamma=1.5,
                      include_b_boundary=True, icme_list='STEREO-A',
                      icme_buffer=2*u.day):
     """Create a SURF forecast initialized from STEREO-A observations.
@@ -1747,7 +1747,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                             rho_source='speed', temp_source='speed', nlon=128,
                             dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                             lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
-                            cnn_smoothing_width=7, track_cmes=False, gamma=1.5,
+                            cnn_smoothing_width=3, track_cmes=False, gamma=1.5,
                             include_b_boundary=True, icme_list='CaneRichardson',
                             observer='Earth'):
     """
@@ -2075,7 +2075,7 @@ def staSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad,
                            rho_source='speed', temp_source='speed', nlon=128,
                            dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                            lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
-                           cnn_smoothing_width=7, track_cmes=False, gamma=1.5,
+                           cnn_smoothing_width=3, track_cmes=False, gamma=1.5,
                            include_b_boundary=True, icme_list='STEREO-A',
                            icme_buffer=2*u.day):
     """Create a SURF reconstruction using STEREO-A in-situ observations.
