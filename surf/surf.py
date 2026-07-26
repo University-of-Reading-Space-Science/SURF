@@ -2415,6 +2415,7 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
     # calling ts_from_vlong once for the full duration.
     # ------------------------------------------------------------------
     full_buffertime = model.buffertime
+    full_input_iscme_ts_flag = model.input_iscme_ts_flag
     if not model.input_v_ts_flag:
         model.ts_from_vlong()
         model.input_v_ts_flag = True
@@ -2433,7 +2434,8 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
     full_model_time = model.model_time.copy()
     full_input_b_ts = model.input_b_ts.copy() if model.track_b else None
     full_input_iscme_ts = (model.input_iscme_ts.copy()
-                           if not np.all(np.isnan(model.input_iscme_ts))
+                           if full_input_iscme_ts_flag
+                           and not np.all(np.isnan(model.input_iscme_ts))
                            else None)
     if model.compressible:
         full_input_rho_ts = model.input_rho_ts.copy()
@@ -2560,6 +2562,10 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
                 )).astype('int')
             model.input_iscme_ts = chunk_input_iscme
             model.input_iscme_ts_flag = True
+        else:
+            # Cone CMEs still need to be inserted by model.solve().  Marking
+            # an empty mask as prescribed causes solve() to skip insertion.
+            model.input_iscme_ts_flag = False
 
         if model.compressible:
             chunk_input_rho = np.zeros((nt_chunk, nlon)) * (u.kg / u.m ** 3)
@@ -2575,7 +2581,13 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
             model.input_temp_ts = chunk_input_temp
 
         # --- Solve this chunk ---
-        model.solve(cme_list, streak_carr=streak_carr)
+        # Each chunk has a local time axis, so express cone launch times
+        # relative to this chunk while leaving the caller's objects unchanged.
+        chunk_cme_list = copy.deepcopy(cme_list)
+        for cme in chunk_cme_list:
+            if isinstance(cme, ConeCME):
+                cme.t_launch = cme.t_launch - chunk_start
+        model.solve(chunk_cme_list, streak_carr=streak_carr)
 
         # Collect output — offset time_out by elapsed time
         if model.nt_out > 0:
@@ -2618,6 +2630,7 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
         model.input_b_ts = full_input_b_ts
     if full_input_iscme_ts is not None:
         model.input_iscme_ts = full_input_iscme_ts
+    model.input_iscme_ts_flag = full_input_iscme_ts_flag
     if model.compressible:
         model.input_rho_ts = full_input_rho_ts
         model.input_temp_ts = full_input_temp_ts
