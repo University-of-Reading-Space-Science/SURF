@@ -33,3 +33,4 @@ dist/
 .venv/
 .pytest_cache/
 .coverage
+tests/test_chunked_cme.py
