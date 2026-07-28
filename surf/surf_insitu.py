@@ -1245,6 +1245,11 @@ def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme
     are modified. Other columns remain unchanged.
     """
     # create a copy of the OMNI data for ICME removal
+    pre_icme_buffer = float(pre_icme_buffer)
+    post_icme_buffer = float(post_icme_buffer)
+    if pre_icme_buffer < 0 or post_icme_buffer < 0:
+        raise ValueError('ICME buffers must be non-negative')
+
     omni_noicmes = omni.copy()
     
     dl_starttime = omni.loc[0]['datetime'] - datetime.timedelta(days=27)
@@ -1433,7 +1438,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       v_max=3000*u.km/u.s, lon_start=0*u.rad,
                       lon_stop=2*np.pi*u.rad, cnn_smoothing_width=3, track_cmes=False,
                       gamma=1.5, include_b_boundary=True, icme_list='CaneRichardson',
-                      observer='Earth'):
+                      observer='Earth', pre_icme_buffer=0.2, post_icme_buffer=1):
     """
     Create a SURF solar wind forecast initialized from in-situ OMNI observations.
     
@@ -1550,7 +1555,11 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
         if icme_list is None or icme_list == 'None':
             omni_input = omni
         else:
-            omni_input = removeICMEs(omni, icme_list=icme_list)
+            omni_input = removeICMEs(
+                omni, icme_list=icme_list,
+                pre_icme_buffer=pre_icme_buffer,
+                post_icme_buffer=post_icme_buffer
+            )
     
     # cut out the precise bit of the OMNI data that is required
     mask = (omni_input['datetime'] <= ftime)
@@ -1677,7 +1686,7 @@ def staSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad,
                      lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
                      cnn_smoothing_width=3, track_cmes=False, gamma=1.5,
                      include_b_boundary=True, icme_list='STEREO-A',
-                     icme_buffer=2*u.day):
+                     pre_icme_buffer=0.2, post_icme_buffer=1):
     """Create a SURF forecast initialized from STEREO-A observations.
 
     This is the STEREO-A equivalent of :func:`omniSURF_forecast`.  It uses
@@ -1689,9 +1698,9 @@ def staSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad,
     Parameters are the same as for :func:`omniSURF_forecast`, except that
     ``sta_input`` follows the column convention returned by
     :func:`get_stereo_a`. ``icme_list`` may be ``'STEREO-A'`` (the default),
-    None, or ``'None'``. ``icme_buffer`` is the interval removed on either
-    side of each catalogue ICME and may be a time quantity or a number of
-    days.
+    None, or ``'None'``. ``pre_icme_buffer`` and ``post_icme_buffer`` are the
+    intervals removed before and after each catalogue ICME, in days, matching
+    :func:`removeICMEs`.
 
     Returns
     -------
@@ -1705,17 +1714,15 @@ def staSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad,
         )
 
     if icme_list is not None and icme_list != 'None':
-        if isinstance(icme_buffer, u.Quantity):
-            icme_buffer_days = icme_buffer.to_value(u.day)
-        else:
-            icme_buffer_days = float(icme_buffer)
-        if icme_buffer_days < 0:
-            raise ValueError('icme_buffer must be non-negative')
+        pre_icme_buffer = float(pre_icme_buffer)
+        post_icme_buffer = float(post_icme_buffer)
+        if pre_icme_buffer < 0 or post_icme_buffer < 0:
+            raise ValueError('ICME buffers must be non-negative')
         sta_input = removeICMEs(
             sta_input,
             icme_list=icme_list,
-            pre_icme_buffer=icme_buffer_days,
-            post_icme_buffer=icme_buffer_days
+            pre_icme_buffer=pre_icme_buffer,
+            post_icme_buffer=post_icme_buffer
         )
 
     return omniSURF_forecast(
@@ -1738,7 +1745,9 @@ def staSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad,
         gamma=gamma,
         include_b_boundary=include_b_boundary,
         icme_list=None,
-        observer='STA'
+        observer='STA',
+        pre_icme_buffer=pre_icme_buffer,
+        post_icme_buffer=post_icme_buffer
     )
 
 
@@ -1749,7 +1758,8 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                             lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
                             cnn_smoothing_width=3, track_cmes=False, gamma=1.5,
                             include_b_boundary=True, icme_list='CaneRichardson',
-                            observer='Earth'):
+                            observer='Earth', pre_icme_buffer=0.2,
+                            post_icme_buffer=1):
     """
     Create a SURF solar wind reconstruction using OMNI observations over a time interval.
     
@@ -1871,7 +1881,11 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
         if icme_list is None or icme_list == 'None':
             omni_input = omni
         else:
-            omni_input = removeICMEs(omni, icme_list=icme_list)
+            omni_input = removeICMEs(
+                omni, icme_list=icme_list,
+                pre_icme_buffer=pre_icme_buffer,
+                post_icme_buffer=post_icme_buffer
+            )
     
     # Determine if we need density and temperature from OMNI
     need_compressible = _is_compressible_solver(solver)
@@ -2077,7 +2091,7 @@ def staSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad,
                            lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
                            cnn_smoothing_width=3, track_cmes=False, gamma=1.5,
                            include_b_boundary=True, icme_list='STEREO-A',
-                           icme_buffer=2*u.day):
+                           pre_icme_buffer=0.2, post_icme_buffer=1):
     """Create a SURF reconstruction using STEREO-A in-situ observations.
 
     STEREO-A's merged hourly PLASTIC/IMPACT product is downloaded from CDAWeb
@@ -2128,9 +2142,9 @@ def staSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad,
         ICME catalogue used to remove and interpolate across STEREO-A ICME
         intervals. Defaults to ``'STEREO-A'``. Set to None or ``'None'`` to
         retain the original measurements.
-    icme_buffer : astropy.units.Quantity or float, optional
-        Time removed both before each ICME start and after each ICME end. A
-        float is interpreted as days. Default is two days.
+    pre_icme_buffer, post_icme_buffer : float, optional
+        Time removed before each ICME start and after each ICME end, in days.
+        Defaults are 0.2 and 1 day, matching :func:`removeICMEs`.
 
     Returns
     -------
@@ -2143,17 +2157,15 @@ def staSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad,
             end_time + datetime.timedelta(days=28)
         )
     if icme_list is not None and icme_list != 'None':
-        if isinstance(icme_buffer, u.Quantity):
-            icme_buffer_days = icme_buffer.to_value(u.day)
-        else:
-            icme_buffer_days = float(icme_buffer)
-        if icme_buffer_days < 0:
-            raise ValueError('icme_buffer must be non-negative')
+        pre_icme_buffer = float(pre_icme_buffer)
+        post_icme_buffer = float(post_icme_buffer)
+        if pre_icme_buffer < 0 or post_icme_buffer < 0:
+            raise ValueError('ICME buffers must be non-negative')
         sta_input = removeICMEs(
             sta_input,
             icme_list=icme_list,
-            pre_icme_buffer=icme_buffer_days,
-            post_icme_buffer=icme_buffer_days
+            pre_icme_buffer=pre_icme_buffer,
+            post_icme_buffer=post_icme_buffer
         )
 
     return omniSURF_reconstruction(
@@ -2178,7 +2190,9 @@ def staSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad,
         gamma=gamma,
         include_b_boundary=include_b_boundary,
         icme_list=None,
-        observer='STA'
+        observer='STA',
+        pre_icme_buffer=pre_icme_buffer,
+        post_icme_buffer=post_icme_buffer
     )
 
 
@@ -2186,7 +2200,8 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
                      omni_input=None, run_2d=False, solver='hydro', nlon=128,
                      dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                      lon_start=0*u.rad, lon_stop=2*np.pi*u.rad, track_cmes=False,
-                     gamma=1.5, include_b_boundary=True, icme_list='CaneRichardson'):
+                     gamma=1.5, include_b_boundary=True, icme_list='CaneRichardson',
+                     pre_icme_buffer=0.2, post_icme_buffer=1):
     """
     Create a SURF solar wind simulation starting from ~1 AU using OMNI observations.
 
@@ -2259,7 +2274,11 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
         if icme_list is None or icme_list == 'None':
             omni_input = omni
         else:
-            omni_input = removeICMEs(omni, icme_list=icme_list)
+            omni_input = removeICMEs(
+                omni, icme_list=icme_list,
+                pre_icme_buffer=pre_icme_buffer,
+                post_icme_buffer=post_icme_buffer
+            )
 
     # Generate Carrington map with density and temperature from OMNI
     need_compressible = _is_compressible_solver(solver)

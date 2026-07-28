@@ -34,3 +34,4 @@ dist/
 .pytest_cache/
 .coverage
 tests/test_chunked_cme.py
+tests/test_stereo_icme_buffers.py
