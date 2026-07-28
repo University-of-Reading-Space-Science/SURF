@@ -2533,6 +2533,8 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
     b_chunks = []
     cme_r_chunks = []
     cme_v_chunks = []
+    hcs_chunks = []
+    streak_chunks = []
     time_out_chunks = []
 
     state = None  # will hold the restart state after each chunk
@@ -2671,6 +2673,10 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
                 b_chunks.append(model.b_grid.copy())
             cme_r_chunks.append(model.cme_particles_r.value.copy())
             cme_v_chunks.append(model.cme_particles_v.value.copy())
+            if model.track_b and hasattr(model, 'hcs_particles_r'):
+                hcs_chunks.append(model.hcs_particles_r.value.copy())
+            if model.track_streak and hasattr(model, 'streak_particles_r'):
+                streak_chunks.append(model.streak_particles_r.value.copy())
 
         # Get the final state for restarting the next chunk
         state = model.get_final_state()
@@ -2690,6 +2696,12 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
         model.temp_grid = np.concatenate(temp_chunks, axis=0) * u.K
     if b_chunks:
         model.b_grid = np.concatenate(b_chunks, axis=0)
+    if hcs_chunks:
+        model.hcs_particles_r = np.concatenate(
+            hcs_chunks, axis=1) * u.dimensionless_unscaled
+    if streak_chunks:
+        model.streak_particles_r = np.concatenate(
+            streak_chunks, axis=0) * u.dimensionless_unscaled
     if cme_r_chunks:
         model.cme_particles_r = np.concatenate(
             cme_r_chunks, axis=1) * u.dimensionless_unscaled
