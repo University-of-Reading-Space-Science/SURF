@@ -814,7 +814,7 @@ def _find_previous_iswa_wsa_map(timestamp, version, timeout, base_url):
 def get_WSA_from_ISWA(
         timestamp, datadir=None, timeout=30,
         versions=('WSA6', 'WSA5.4', 'WSA5.X'),
-        max_age=datetime.timedelta(days=1),
+        max_age=datetime.timedelta(days=2),
         base_url='https://iswa.ccmc.gsfc.nasa.gov/iswa_data_tree/model/solar'):
     """
     Download the newest available GONG_Z WSA velocity map at or before a given time.
@@ -822,7 +822,7 @@ def get_WSA_from_ISWA(
     Newer WSA model versions are preferred over older versions. The archive is
     currently searched in this order: WSA6, WSA5.4, then WSA5.X. Within the
     first version containing a sufficiently recent map, the map with the latest
-    timestamp not later than ``timestamp`` is selected. Maps more than one day
+    timestamp not later than ``timestamp`` is selected. Maps more than two days
     older than the requested time are ignored.
 
     Args:
@@ -842,7 +842,8 @@ def get_WSA_from_ISWA(
         pathlib.Path: Path to the downloaded FITS file.
 
     Raises:
-        FileNotFoundError: If no supported WSA version has a map within one day
+        FileNotFoundError: If no supported WSA version has a map within
+                           ``max_age``
                            before the requested time.
         requests.RequestException: If an archive request fails.
     """
@@ -871,8 +872,9 @@ def get_WSA_from_ISWA(
             break
 
     if selected is None:
+        max_age_days = max_age.total_seconds() / datetime.timedelta(days=1).total_seconds()
         raise FileNotFoundError(
-            f'No GONG_Z WSA map is available within one day before '
+            f'No GONG_Z WSA map is available within {max_age_days:g} days before '
             f'{timestamp:%Y-%m-%d %H:%M}.')
 
     url, _ = selected
