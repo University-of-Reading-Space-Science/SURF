@@ -12,7 +12,7 @@ authors = [
   {name = "Mathew Owens", email = "m.j.owens@reading.ac.uk" },
 ]
 license-files = ["LICENSE.md"]
-requires-python = ">=3.12.11"
+requires-python = ">=3.12"
 dependencies = [
   "appdirs>=1.4.4",
   "astropy>=7.1.0",
