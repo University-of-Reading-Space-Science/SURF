@@ -501,16 +501,14 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
 
     # plot any HCS that have been traced
     if plotHCS and hasattr(model, 'b_grid'):
-        hcs_id_t = min(id_t, model.hcs_particles_r.shape[1] - 1)
         for i in range(0, len(model.hcs_particles_r[:, 0, 0, 0])):
-            r = model.hcs_particles_r[i, hcs_id_t, 0, :] * u.km.to(u.solRad)
+            r = model.hcs_particles_r[i, id_t, 0, :] * u.km.to(u.solRad)
             lons = model.lon
             for ax in axes:
                 ax.plot(lons, r, 'w.')
 
     # Plot any tracked streaklines
     if model.track_streak:
-        streak_id_t = min(id_t, model.streak_particles_r.shape[0] - 1)
         nstreak = len(model.streak_particles_r[0, :, 0, 0])
         r_max = model.r[-1].to(u.solRad).value
         dr = (model.r[1] - model.r[0]).to(u.solRad).value  # Grid spacing
@@ -524,7 +522,7 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
             for irot in range(0, nrot):
                 streak_lon = streak_lon + model.lon.value.tolist()
                 streak_r = streak_r + (
-                        model.streak_particles_r[streak_id_t, istreak, irot, :]
+                        model.streak_particles_r[id_t, istreak, irot, :]
                         * u.km.to(u.solRad)).value.tolist()
                 
             # Get the real values for plotting

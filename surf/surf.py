@@ -2713,6 +2713,35 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
                 for cme_num, cme in enumerate(model.cmes):
                     cme._track_(model, cme_num)
 
+    # All time-dependent products must describe the same output timeline.
+    # Check this here, before a chunked model can be saved and later fail in
+    # analysis or animation with an unrelated-looking indexing exception.
+    timeline_lengths = {
+        'time_out': len(model.time_out),
+        'v_grid': model.v_grid.shape[0],
+        'cme_particles_r': model.cme_particles_r.shape[1],
+        'cme_particles_v': model.cme_particles_v.shape[1],
+    }
+    if model.compressible:
+        timeline_lengths['rho_grid'] = model.rho_grid.shape[0]
+        timeline_lengths['temp_grid'] = model.temp_grid.shape[0]
+    if model.track_b:
+        timeline_lengths['b_grid'] = model.b_grid.shape[0]
+        timeline_lengths['hcs_particles_r'] = model.hcs_particles_r.shape[1]
+    if model.track_streak:
+        timeline_lengths['streak_particles_r'] = model.streak_particles_r.shape[0]
+
+    inconsistent = {
+        name: length for name, length in timeline_lengths.items()
+        if length != model.nt_out
+    }
+    if inconsistent:
+        lengths = ', '.join(
+            f'{name}={length}' for name, length in timeline_lengths.items())
+        raise RuntimeError(
+            'Chunked solve produced inconsistent output timelines: '
+            f'{lengths}. The model has not been saved.')
+
     # Restore the full input time series
     model.input_v_ts = full_input_v_ts
     model.model_time = full_model_time
