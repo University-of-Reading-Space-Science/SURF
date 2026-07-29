@@ -583,8 +583,9 @@ class CompressibleSolver:
         self.time += dt
         return self.U
     
-    def solve(self, t_grid, v_bc_func, rho_bc_func, T_bc_func, 
+    def solve(self, t_grid, v_bc_func, rho_bc_func, T_bc_func,
               num_particles=0, particle_injection_rate=None, particle_release_rate=None,
+              particle_initial_positions=None,
               v_init=None, rho_init=None, T_init=None):
         """
         Run simulation over time grid.
@@ -662,18 +663,30 @@ class CompressibleSolver:
         
         if isinstance(num_particles, dict):
             particles_enabled = True
+            v_initial = self.U[:, 1] / self.U[:, 0]
             for group_name, n_p in num_particles.items():
                 inj_times = particle_injection_rate[group_name]
                 rel_times = particle_release_rate[group_name] \
                     if particle_release_rate and group_name in particle_release_rate else inj_times
                 behavior = 1 if 'cme' in group_name.lower() else 0
                 
+                initial_positions = (
+                    particle_initial_positions.get(group_name, [])
+                    if particle_initial_positions else [])
+                initial_positions = list(initial_positions)
+                initial_velocities = [
+                    np.interp(r_p, self.r, v_initial)
+                    for r_p in initial_positions]
                 particle_groups[group_name] = {
                     'n_particles': n_p,
                     'injection_times': inj_times,
                     'release_times': rel_times,
-                    'r': [], 'v': [], 't': [], 't_inject': [], 'active': [],
-                    'particles_injected': 0,
+                    'r': [[r_p] for r_p in initial_positions],
+                    'v': [[v_p] for v_p in initial_velocities],
+                    't': [[t_grid[0]] for _ in initial_positions],
+                    't_inject': [t_grid[0] for _ in initial_positions],
+                    'active': [True for _ in initial_positions],
+                    'particles_injected': len(initial_positions),
                     'behavior': behavior
                 }
         elif isinstance(num_particles, int) and num_particles > 0:
