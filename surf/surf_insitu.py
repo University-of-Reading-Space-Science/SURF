@@ -1496,8 +1496,9 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     v_max : astropy.units.Quantity, optional
         Maximum speed used with dr to set the CFL time step.
     cnn_smoothing_width : int, optional
-        Odd-width periodic running mean applied to CNN-corrected velocity for
-        compressible solvers. Use 1 to disable smoothing. Default is 5.
+        Odd-width periodic running mean applied to CNN-corrected velocity and
+        the radial magnetic field for compressible solvers. Use 1 to disable
+        smoothing. Default is 3.
     gamma : float, optional
         Effective adiabatic index used for Parker mapping and by SURF. Default is 1.5.
     include_b_boundary : bool, optional
@@ -1637,16 +1638,25 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     vcarr_rmin_back_cnn = _resample_longitude_grid(vcarr_rmin_back_cnn, nlon)
     if blon is not None:
         blon = _resample_longitude_grid(blon, nlon)
-    b_boundary = blon if include_b_boundary else np.nan
 
     #apply some smoothing to the CNN output
     if _is_compressible_solver(solver):
         #vcarr_rmin_back_cnn = vcarr_rmin_back_cnn * 1.0
         #smooth the series, periodic at the edges
         vcarr_rmin_back_cnn = _periodic_running_mean(vcarr_rmin_back_cnn, cnn_smoothing_width)
-        
+        if blon is not None:
+            blon = _periodic_running_mean(blon, cnn_smoothing_width)
+
         #ensure no speeds below 250
         vcarr_rmin_back_cnn[vcarr_rmin_back_cnn <250] = 250
+
+    if not np.any(np.isfinite(vcarr_rmin_back_cnn)):
+        raise ValueError(
+            f"No finite {observer} speed boundary could be constructed for "
+            f"{ftime:%Y-%m-%d %H:%M}."
+        )
+
+    b_boundary = blon if include_b_boundary else np.nan
     
     # set up the model run to start 5 days before the forecast time, to allow for CMEs
     cr, cr_lon_init = sin.datetime2surfinputs(ftime - datetime.timedelta(days=buffertime.value))

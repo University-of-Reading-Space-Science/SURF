@@ -874,7 +874,7 @@ class SURF:
             print("Warning: No V boundary conditions supplied. Using default")
             self.v_boundary = 400 * np.ones(self.nlon_full) * self.kms
             lon_boundary, dlon, nlon = longitude_grid(nlon=self.nlon_full)
-            self.v_boundary_lons = lon_boundary * u.rad
+            self.v_boundary_lons = lon_boundary
         elif not np.all(np.isnan(v_boundary)):
             # check that the implicit time step from vlong is not comparable to the SURF timestep
             assert v_boundary.size < 4600  # this equates to about 9 mins
