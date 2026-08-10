@@ -1018,15 +1018,16 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
         axes_ts = subfigs[1].subplots(4, 1, sharex=True)
 
         # Plot 1: Velocity (left y-axis)
-        axes_ts[0].plot(ts['time'], ts['vsw'], 'k-', linewidth=1.5, label='SURF')
+        surf_label = f'SURF-{_compressible_solver_label(model)}'
+        axes_ts[0].plot(ts['time'], ts['vsw'], 'r-', linewidth=1.5, label=surf_label)
         if plot_omni:
-            axes_ts[0].plot(omni_ts['datetime'], omni_ts['V'], color='tab:blue',
-                            linestyle='--', linewidth=1.2, label='OMNI')
+            axes_ts[0].plot(omni_ts['datetime'], omni_ts['V'], 'k-',
+                            linewidth=1.2, label='OMNI')
         axes_ts[0].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
                            alpha=0.7)
         axes_ts[0].yaxis.tick_left()
         axes_ts[0].yaxis.set_label_position('left')
-        axes_ts[0].grid(True, alpha=0.3)
+        axes_ts[0].grid(True, alpha=0.3, which='major', axis='both')
         axes_ts[0].set_ylim(200, 1000)
         axes_ts[0].set_yticks(np.arange(200, 1001, 200))
         axes_ts[0].text(0.98, 0.90, 'V [km/s]', transform=axes_ts[0].transAxes,
@@ -1034,11 +1035,12 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
         # Plot 2: Number Density (log scale, right y-axis)
-        axes_ts[1].semilogy(ts['time'], ts['n'], 'k-', linewidth=1.5)
+        axes_ts[1].semilogy(ts['time'], ts['n'], 'r-', linewidth=1.5,
+                           label=surf_label)
         if plot_omni and 'N' in omni_ts.columns:
             omni_n = omni_ts['N'].where((omni_ts['N'] > 0) & (omni_ts['N'] < 999))
-            axes_ts[1].semilogy(omni_ts['datetime'], omni_n, color='tab:blue',
-                               linestyle='--', linewidth=1.2)
+            axes_ts[1].semilogy(omni_ts['datetime'], omni_n, 'k-',
+                               linewidth=1.2, label='OMNI')
         axes_ts[1].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
                            alpha=0.7)
         axes_ts[1].yaxis.tick_right()
@@ -1052,11 +1054,12 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
         # Plot 3: Temperature (log scale, left y-axis)
-        axes_ts[2].semilogy(ts['time'], ts['T'], 'k-', linewidth=1.5)
+        axes_ts[2].semilogy(ts['time'], ts['T'], 'r-', linewidth=1.5,
+                           label=surf_label)
         if plot_omni and 'T' in omni_ts.columns:
             omni_t = omni_ts['T'].where((omni_ts['T'] > 0) & (omni_ts['T'] < 999999))
-            axes_ts[2].semilogy(omni_ts['datetime'], omni_t, color='tab:blue',
-                               linestyle='--', linewidth=1.2)
+            axes_ts[2].semilogy(omni_ts['datetime'], omni_t, 'k-',
+                               linewidth=1.2, label='OMNI')
         axes_ts[2].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
                            alpha=0.7)
         axes_ts[2].yaxis.tick_left()
@@ -1069,13 +1072,14 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
         # Plot 4: Dynamic Pressure (log scale, right y-axis)
-        axes_ts[3].semilogy(ts['time'], pdyn_ts, 'k-', linewidth=1.5)
+        axes_ts[3].semilogy(ts['time'], pdyn_ts, 'r-', linewidth=1.5,
+                           label=surf_label)
         if plot_omni and {'N', 'V'}.issubset(omni_ts.columns):
             omni_n = omni_ts['N'].where((omni_ts['N'] > 0) & (omni_ts['N'] < 999))
             omni_v = omni_ts['V'].where((omni_ts['V'] > 0) & (omni_ts['V'] < 9999))
             omni_pdyn = 0.5 * (omni_n * m_p * 1e6) * (omni_v * 1e3)**2 * 1e9
-            axes_ts[3].semilogy(omni_ts['datetime'], omni_pdyn, color='tab:blue',
-                               linestyle='--', linewidth=1.2)
+            axes_ts[3].semilogy(omni_ts['datetime'], omni_pdyn, 'k-',
+                               linewidth=1.2, label='OMNI')
         axes_ts[3].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
                            alpha=0.7)
         axes_ts[3].yaxis.tick_right()
@@ -1089,18 +1093,18 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
     else:
         ax_ts = subfigs[1].subplots(1, 1)
-        ax_ts.plot(ts['time'], ts['vsw'], 'k-', linewidth=1.5, label='SURF')
+        ax_ts.plot(ts['time'], ts['vsw'], 'r-', linewidth=1.5, label='SURF-HUXt')
         if plot_omni:
-            ax_ts.plot(omni_ts['datetime'], omni_ts['V'], color='tab:blue',
-                       linestyle='--', linewidth=1.2, label='OMNI')
+            ax_ts.plot(omni_ts['datetime'], omni_ts['V'], 'k-',
+                       linewidth=1.2, label='OMNI')
         ax_ts.axvline(current_time.datetime, color='r', linestyle='--', linewidth=2, alpha=0.7)
         ax_ts.set_ylim(200, 1000)
         ax_ts.set_ylabel('V [km/s]')
         ax_ts.grid(True, alpha=0.3)
         axes_ts = np.array([ax_ts])
 
-    if plot_omni:
-        axes_ts[0].legend(loc='upper left', fontsize=9)
+    for ax in axes_ts:
+        ax.legend(loc='upper left', fontsize=9)
     
     # Format x-axis
     
@@ -1113,14 +1117,14 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
     # Determine if short run (<=7 days) for daily ticks
     duration_days = (t_end - t_start).total_seconds() / 86400
     
-    if duration_days <= 7:
-        # Daily ticks for short runs
-        axes_ts[-1].xaxis.set_major_locator(mdates.DayLocator())
-    else:
-        # Auto locator for longer runs
-        axes_ts[-1].xaxis.set_major_locator(mdates.AutoDateLocator())
-    
-    axes_ts[-1].xaxis.set_major_formatter(mdates.DateFormatter('%d-%m'))
+    for ax in axes_ts:
+        if duration_days <= 7:
+            # Daily ticks for short runs
+            ax.xaxis.set_major_locator(mdates.DayLocator())
+        else:
+            # Equivalent independent locators keep all stacked panels aligned.
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m'))
     subfigs[1].autofmt_xdate(rotation=0, ha='center')
     
     # Add xlabel with year from the data
@@ -1762,7 +1766,7 @@ def plot_earth_timeseries(model, plot_omni=True, save=False, tag='', timefromrun
     if is_compressible:
         n_panels += 2  # Add density and temperature panels
         
-    fig, axs = plt.subplots(n_panels, 1, figsize=(14, 3 * n_panels))
+    fig, axs = plt.subplots(n_panels, 1, figsize=(14, 3 * n_panels), sharex=True)
     if n_panels == 1:
         axs = np.array([axs])
 
@@ -1856,6 +1860,7 @@ def plot_earth_timeseries(model, plot_omni=True, save=False, tag='', timefromrun
 
     for a in axs:
         a.set_xlim(starttime, endtime)
+        a.grid(True, alpha=0.3, which='major', axis='both')
         a.legend()
 
     # Only last panel gets x-label

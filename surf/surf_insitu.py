@@ -1436,7 +1436,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       dt_scale=4, omni_input=None, buffertime=5*u.day, run_2d=False,
                       solver='huxt', nlon=128, dr=1.5*u.solRad,
                       v_max=3000*u.km/u.s, lon_start=0*u.rad,
-                      lon_stop=2*np.pi*u.rad, cnn_smoothing_width=3, track_cmes=False,
+                      lon_stop=2*np.pi*u.rad, cnn_smoothing_width=5, track_cmes=False,
                       gamma=1.5, include_b_boundary=True, icme_list='CaneRichardson',
                       observer='Earth', pre_icme_buffer=0.2, post_icme_buffer=1):
     """
@@ -1668,12 +1668,16 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
         Elat = observer_at_ftime.lat_c[0]
 
     
+    # A 1-D radial is fixed relative to Earth; a 2-D heliospheric domain is
+    # fixed relative to the Sun so that Earth moves through model longitude.
+    frame = 'sidereal' if run_2d else 'synodic'
+
     if run_2d:
         model = s.SURF(v_boundary=vcarr_rmin_back_cnn.flatten() * u.km/u.s,
                       b_boundary=b_boundary,
                       cr_num=cr, cr_lon_init=cr_lon_init,
                       simtime=simtime, r_min=rmin, r_max=rmax,
-                      dt_scale=dt_scale, latitude=Elat, frame='synodic',
+                      dt_scale=dt_scale, latitude=Elat, frame=frame,
                       solver=solver, nlon=nlon,
                       lon_start=lon_start, lon_stop=lon_stop, dr=dr,
                       v_max=v_max, track_cmes=track_cmes, gamma=gamma)
@@ -1682,7 +1686,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       b_boundary=b_boundary,
                       cr_num=cr, cr_lon_init=cr_lon_init,
                       simtime=simtime, r_min=rmin, r_max=rmax,
-                      dt_scale=dt_scale, latitude=Elat, frame='synodic',
+                      dt_scale=dt_scale, latitude=Elat, frame=frame,
                       lon_out=0*u.rad, solver=solver,
                       nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes,
                       gamma=gamma)
@@ -1694,7 +1698,7 @@ def staSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad,
                      buffertime=5*u.day, run_2d=False, solver='huxt', nlon=128,
                      dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                      lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
-                     cnn_smoothing_width=3, track_cmes=False, gamma=1.5,
+                     cnn_smoothing_width=5, track_cmes=False, gamma=1.5,
                      include_b_boundary=True, icme_list='STEREO-A',
                      pre_icme_buffer=0.2, post_icme_buffer=1):
     """Create a SURF forecast initialized from STEREO-A observations.
@@ -1766,7 +1770,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                             rho_source='speed', temp_source='speed', nlon=128,
                             dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                             lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
-                            cnn_smoothing_width=3, track_cmes=False, gamma=1.5,
+                            cnn_smoothing_width=5, track_cmes=False, gamma=1.5,
                             include_b_boundary=True, icme_list='CaneRichardson',
                             observer='Earth', pre_icme_buffer=0.2,
                             post_icme_buffer=1):
@@ -2051,6 +2055,10 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
         source_pos = s.Observer(observer, Time([start_time]))
         Elat = source_pos.lat_c[0]
     
+    # A 1-D radial is fixed relative to Earth; a 2-D heliospheric domain is
+    # fixed relative to the Sun so that Earth moves through model longitude.
+    frame = 'sidereal' if run_2d else 'synodic'
+
     # Create SURF model with time-dependent boundary
     if run_2d:
         model = sin.set_time_dependent_boundary(
@@ -2065,7 +2073,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
             r_max=rmax,
             dt_scale=dt_scale,
             latitude=Elat,
-            frame='synodic',
+            frame=frame,
             lon_start=lon_start,
             lon_stop=lon_stop,
             solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes,
@@ -2084,7 +2092,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
             r_max=rmax,
             dt_scale=dt_scale,
             latitude=Elat,
-            frame='synodic',
+            frame=frame,
             lon_out=0*u.rad,
             solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes,
             gamma=gamma
@@ -2099,7 +2107,7 @@ def staSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad,
                            rho_source='speed', temp_source='speed', nlon=128,
                            dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                            lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
-                           cnn_smoothing_width=3, track_cmes=False, gamma=1.5,
+                           cnn_smoothing_width=5, track_cmes=False, gamma=1.5,
                            include_b_boundary=True, icme_list='STEREO-A',
                            pre_icme_buffer=0.2, post_icme_buffer=1):
     """Create a SURF reconstruction using STEREO-A in-situ observations.
