@@ -16,6 +16,7 @@ import tqdm
 import os
 import re
 import h5py
+import warnings
 
 from sunpy.net import Fido
 from sunpy.net import attrs
@@ -23,6 +24,7 @@ from sunpy.timeseries import TimeSeries
 from sunpy.coordinates import sun
 from dtaidistance import dtw
 
+from urllib.parse import urlencode
 from urllib.request import urlopen
 import json
 
@@ -80,6 +82,94 @@ def get_omni(starttime, endtime):
     omni = omni.reset_index()
 
     return omni
+
+
+_ISWA_HAPI_URL = 'https://iswa.ccmc.gsfc.nasa.gov/hapi/data'
+
+
+def _get_iswa_hapi(dataset_id, starttime, endtime, timeout=60):
+    """Download an ISWA HAPI JSON dataset into a DataFrame."""
+    start = pd.Timestamp(starttime)
+    end = pd.Timestamp(endtime)
+    if start >= end:
+        raise ValueError('starttime must be before endtime')
+
+    def hapi_time(value):
+        if value.tzinfo is not None:
+            value = value.tz_convert('UTC').tz_localize(None)
+        return value.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    query = urlencode({
+        'id': dataset_id,
+        'time.min': hapi_time(start),
+        'time.max': hapi_time(end),
+        'format': 'json',
+    })
+    with urlopen(f'{_ISWA_HAPI_URL}?{query}', timeout=timeout) as response:
+        payload = json.load(response)
+    if payload.get('status', {}).get('code') != 1200:
+        message = payload.get('status', {}).get('message', 'unknown HAPI error')
+        raise RuntimeError(f'ISWA HAPI request failed: {message}')
+    records = payload.get('data', [])
+    if not records:
+        raise ValueError(f'No {dataset_id} data are available from {start} through {end}')
+    columns = [parameter['name'] for parameter in payload['parameters']]
+    frame = pd.DataFrame(records, columns=columns)
+    frame['datetime'] = pd.to_datetime(frame.pop('Time'), utc=True).dt.tz_localize(None)
+    for parameter in payload['parameters'][1:]:
+        name = parameter['name']
+        if parameter.get('type') in {'double', 'float', 'integer'} and name in frame:
+            frame[name] = pd.to_numeric(frame[name], errors='coerce')
+            fill = parameter.get('fill')
+            if fill not in {None, 'null'}:
+                frame.loc[frame[name] == float(fill), name] = np.nan
+    if 'isPrimary' in frame and (frame['isPrimary'] == 1).any():
+        frame = frame.loc[frame['isPrimary'] == 1]
+    return frame.sort_values('datetime').drop_duplicates('datetime', keep='last')
+
+
+def get_SWPC_realtime(starttime, endtime, include_mag=True, timeout=60):
+    """Download NOAA/SWPC real-time L1 solar-wind data from NASA ISWA HAPI.
+
+    The returned DataFrame follows :func:`get_omni` conventions so it can be
+    supplied as ``omni_input`` to the SURF forecast and reconstruction helpers.
+    Plasma is read from ``swpc_rtsw_plasma_P1M``. The companion magnetic feed
+    ``swpc_rtsw_mag_P1M`` is merged by one-minute timestamp when requested.
+    """
+    plasma = _get_iswa_hapi(
+        'swpc_rtsw_plasma_P1M', starttime, endtime, timeout=timeout
+    ).rename(columns={
+        'BulkSpeed': 'V',
+        'ProtonDensity': 'N',
+        'IonTemperature': 'T',
+        'source': 'plasma_source',
+        'isPrimary': 'plasma_isPrimary',
+    })
+
+    combined = plasma
+    if include_mag:
+        try:
+            magnetic = _get_iswa_hapi(
+                'swpc_rtsw_mag_P1M', starttime, endtime, timeout=timeout
+            ).rename(columns={
+                'source': 'mag_source',
+                'isPrimary': 'mag_isPrimary',
+            })
+            combined = pd.merge(plasma, magnetic, on='datetime', how='left')
+        except Exception as error:
+            warnings.warn(
+                f'SWPC magnetic data could not be loaded ({error}); returning plasma only.',
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    combined['BX_GSE'] = combined['B_x'] if 'B_x' in combined else np.nan
+    combined['BR'] = -combined['BX_GSE']
+    combined['B'] = combined['B_t'] if 'B_t' in combined else np.nan
+    combined['mjd'] = Time(combined['datetime'].to_numpy()).mjd
+    if not np.isfinite(combined['V']).any():
+        raise ValueError('The SWPC real-time feed contains no usable solar-wind speeds.')
+    return combined.sort_values('datetime').reset_index(drop=True)
 
 
 def get_stereo_a(starttime, endtime):
@@ -1565,6 +1655,25 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     # cut out the precise bit of the OMNI data that is required
     mask = (omni_input['datetime'] <= ftime)
     omni_input = omni_input.loc[mask].copy()
+
+    # A forecast boundary requires measured solar-wind speed from the preceding
+    # Carrington rotation. Do not let an empty or all-fill-value download proceed
+    # into interpolation/backmapping as a boundary full of NaNs.
+    lookback_start = ftime - datetime.timedelta(days=27.27)
+    recent_mask = (
+        (omni_input['datetime'] >= lookback_start)
+        & (omni_input['datetime'] <= ftime)
+        & np.isfinite(omni_input['V'])
+    )
+    if not recent_mask.any():
+        raise ValueError(
+            "No usable OMNI solar-wind speed data are available in the 27 days "
+            f"before the forecast time {ftime:%Y-%m-%d %H:%M}."
+        )
+    omni_input = omni_input.loc[
+        (omni_input['datetime'] >= lookback_start)
+        & (omni_input['datetime'] <= ftime)
+    ].copy()
     
     
     # add the carrington longitude to the omni data
@@ -1611,18 +1720,26 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     
     # Backmap to the inner boundary with solver-dependent acceleration profile.
     if solver == 'huxt':
-        vcarr_rmin_back, bcarr_rmin_back = sin.map_v_boundary_inwards(
-                                                omni_lon['V'].to_numpy()*u.km/u.s,
-                                                observer_r.to(u.solRad), rmin,
-                                                acc_profile='huxt',
-                                                b_orig=-omni_lon['BX_GSE'].to_numpy())
+        mapped_boundary = sin.map_v_boundary_inwards(
+                                omni_lon['V'].to_numpy()*u.km/u.s,
+                                observer_r.to(u.solRad), rmin,
+                                acc_profile='huxt',
+                                b_orig=-omni_lon['BX_GSE'].to_numpy())
     else:
-        vcarr_rmin_back, bcarr_rmin_back = sin.map_v_boundary_inwards(
-                                                omni_lon['V'].to_numpy()*u.km/u.s,
-                                                observer_r.to(u.solRad), rmin,
-                                                acc_profile='parker',
-                                                b_orig=-omni_lon['BX_GSE'].to_numpy(),
-                                                gamma=gamma)
+        mapped_boundary = sin.map_v_boundary_inwards(
+                                omni_lon['V'].to_numpy()*u.km/u.s,
+                                observer_r.to(u.solRad), rmin,
+                                acc_profile='parker',
+                                b_orig=-omni_lon['BX_GSE'].to_numpy(),
+                                gamma=gamma)
+
+    # The mapper returns velocity alone when the input magnetic field contains no
+    # finite samples, and a (velocity, polarity) tuple otherwise.
+    if isinstance(mapped_boundary, tuple):
+        vcarr_rmin_back, bcarr_rmin_back = mapped_boundary
+    else:
+        vcarr_rmin_back = mapped_boundary
+        bcarr_rmin_back = None
     
     
     # interp to typical SURF resolution

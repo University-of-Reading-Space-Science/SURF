@@ -764,7 +764,8 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
 
 def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=False,
                  annotateplot=True, plot_rmax=None, plotHCS=True, polar_var='V',
-                 plot_omni=False, show_body_latitudes=False, bodies=None):
+                 plot_omni=False, show_body_latitudes=False, bodies=None,
+                 insitu_source='OMNI'):
     """
     Make a plot with two subfigures: left shows top-down polar view of selected variable,
     right shows Earth timeseries.
@@ -786,6 +787,7 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
         plot_omni: Boolean. If True, download and overlay OMNI observations on
                    the Earth time-series panels. Data are cached on the model
                    so animation frames do not trigger repeated downloads.
+        insitu_source: ``'OMNI'`` or ``'SWPC'`` observation source for the overlay.
         show_body_latitudes: Boolean. Include instantaneous observer latitudes in the
                              polar-panel legend.
         bodies: Optional observer-name sequence. None retains model-dependent defaults.
@@ -1086,24 +1088,31 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
 
     omni_ts = None
     if plot_omni:
-        if not hasattr(model, '_cached_omni_timeseries'):
+        insitu_source = str(insitu_source).upper()
+        if insitu_source not in {'OMNI', 'SWPC'}:
+            raise ValueError("insitu_source must be 'OMNI' or 'SWPC'")
+        cache_name = f'_cached_{insitu_source.lower()}_timeseries'
+        if not hasattr(model, cache_name):
             omni_start = ts['time'].iloc[0]
             omni_end = ts['time'].iloc[-1]
             try:
-                omni_data = sinsit.get_omni(omni_start, omni_end)
+                grabber = (sinsit.get_SWPC_realtime
+                           if insitu_source == 'SWPC' else sinsit.get_omni)
+                omni_data = grabber(omni_start, omni_end)
                 mask = ((omni_data['datetime'] >= omni_start) &
                         (omni_data['datetime'] <= omni_end))
-                model._cached_omni_timeseries = omni_data.loc[mask].copy()
+                setattr(model, cache_name, omni_data.loc[mask].copy())
             except Exception as error:
                 warnings.warn(
-                    f"OMNI data could not be loaded ({error}); plotting SURF data only.",
+                    f"{insitu_source} data could not be loaded ({error}); "
+                    "plotting SURF data only.",
                     RuntimeWarning,
                     stacklevel=2,
                 )
                 # Cache the failed attempt so every animation frame does not retry the
                 # same download.
-                model._cached_omni_timeseries = None
-        omni_ts = model._cached_omni_timeseries
+                setattr(model, cache_name, None)
+        omni_ts = getattr(model, cache_name)
         if (omni_ts is None or omni_ts.empty or
                 not {'datetime', 'V'}.issubset(omni_ts.columns)):
             plot_omni = False
@@ -1121,10 +1130,11 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
 
         # Plot 1: Velocity (left y-axis)
         surf_label = f'SURF-{_compressible_solver_label(model)}'
+        observation_label = 'SWPC real-time L1' if insitu_source == 'SWPC' else 'OMNI'
         axes_ts[0].plot(ts['time'], ts['vsw'], 'r-', linewidth=1.5, label=surf_label)
         if plot_omni:
             axes_ts[0].plot(omni_ts['datetime'], omni_ts['V'], 'k-',
-                            linewidth=1.2, label='OMNI')
+                            linewidth=1.2, label=observation_label)
         axes_ts[0].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
                            alpha=0.7)
         axes_ts[0].yaxis.tick_left()
@@ -1142,7 +1152,7 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
         if plot_omni and 'N' in omni_ts.columns:
             omni_n = omni_ts['N'].where((omni_ts['N'] > 0) & (omni_ts['N'] < 999))
             axes_ts[1].semilogy(omni_ts['datetime'], omni_n, 'k-',
-                               linewidth=1.2, label='OMNI')
+                               linewidth=1.2, label=observation_label)
         axes_ts[1].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
                            alpha=0.7)
         axes_ts[1].yaxis.tick_right()
@@ -1161,7 +1171,7 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
         if plot_omni and 'T' in omni_ts.columns:
             omni_t = omni_ts['T'].where((omni_ts['T'] > 0) & (omni_ts['T'] < 999999))
             axes_ts[2].semilogy(omni_ts['datetime'], omni_t, 'k-',
-                               linewidth=1.2, label='OMNI')
+                               linewidth=1.2, label=observation_label)
         axes_ts[2].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
                            alpha=0.7)
         axes_ts[2].yaxis.tick_left()
@@ -1181,7 +1191,7 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
             omni_v = omni_ts['V'].where((omni_ts['V'] > 0) & (omni_ts['V'] < 9999))
             omni_pdyn = 0.5 * (omni_n * m_p * 1e6) * (omni_v * 1e3)**2 * 1e9
             axes_ts[3].semilogy(omni_ts['datetime'], omni_pdyn, 'k-',
-                               linewidth=1.2, label='OMNI')
+                               linewidth=1.2, label=observation_label)
         axes_ts[3].axvline(current_time.datetime, color='r', linestyle='--', linewidth=2,
                            alpha=0.7)
         axes_ts[3].yaxis.tick_right()
@@ -1195,10 +1205,11 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
     else:
         ax_ts = subfigs[1].subplots(1, 1)
+        observation_label = 'SWPC real-time L1' if insitu_source == 'SWPC' else 'OMNI'
         ax_ts.plot(ts['time'], ts['vsw'], 'r-', linewidth=1.5, label='SURF-HUXt')
         if plot_omni:
             ax_ts.plot(omni_ts['datetime'], omni_ts['V'], 'k-',
-                       linewidth=1.2, label='OMNI')
+                       linewidth=1.2, label=observation_label)
         ax_ts.axvline(current_time.datetime, color='r', linestyle='--', linewidth=2, alpha=0.7)
         ax_ts.set_ylim(200, 1000)
         ax_ts.set_ylabel('V [km/s]')
@@ -1270,7 +1281,7 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
 def animate_with_ts(model, tag='', duration=10, fps=20, outputfilepath='',
                     minimalplot=False, annotateplot=True, plot_rmax=None,
                     plotHCS=True, polar_var='V', plot_omni=False,
-                    show_body_latitudes=False, bodies=None):
+                    show_body_latitudes=False, bodies=None, insitu_source='OMNI'):
     """
     Animate the solar wind solution with Earth time series, and save as MP4 (or GIF fallback).
 
@@ -1292,6 +1303,7 @@ def animate_with_ts(model, tag='', duration=10, fps=20, outputfilepath='',
                    variable shown in the Earth time-series panel.
         show_body_latitudes: Boolean. Include instantaneous observer latitudes in frame legends.
         bodies: Optional observer-name sequence. None retains model-dependent defaults.
+        insitu_source: ``'OMNI'`` or ``'SWPC'`` observation overlay source.
     Returns:
         pathlib.Path: Full path to the saved animation file.
     """
@@ -1315,7 +1327,7 @@ def animate_with_ts(model, tag='', duration=10, fps=20, outputfilepath='',
                      fighandle=fig, minimalplot=minimalplot, annotateplot=annotateplot,
                      plot_rmax=plot_rmax, plotHCS=plotHCS, polar_var=polar_var,
                      plot_omni=plot_omni, show_body_latitudes=show_body_latitudes,
-                     bodies=bodies)
+                     bodies=bodies, insitu_source=insitu_source)
         return frame
 
     # Create the animation
@@ -1859,13 +1871,15 @@ def get_horizons_body_for_SURF(t_start, t_stop, step='12H', naif_code=799, body_
     }
 
 
-def plot_earth_timeseries(model, plot_omni=True, save=False, tag='', timefromrunstart='False'):
+def plot_earth_timeseries(model, plot_omni=True, save=False, tag='', timefromrunstart='False',
+                          insitu_source='OMNI'):
     """
     A function to plot the SURF Earth time series. With option to download and plot OMNI data.
     For compressible models, also plots density and temperature.
     Args:
         model : input model class
         plot_omni: Boolean, if True downloads and plots OMNI data
+        insitu_source: ``'OMNI'`` or ``'SWPC'`` observation source.
         save: Boolean, if True saves plot
         tag: String, tag string to append to the plot title
         timefromrunstart: String 'True'/'False', if 'True' plots against time from run start in days
@@ -1940,16 +1954,20 @@ def plot_earth_timeseries(model, plot_omni=True, save=False, tag='', timefromrun
     endtime = times[len(times) - 1]
 
     if plot_omni:
-        # grab the omni data
-        data = sinsit.get_omni(starttime, endtime)
+        insitu_source = str(insitu_source).upper()
+        if insitu_source not in {'OMNI', 'SWPC'}:
+            raise ValueError("insitu_source must be 'OMNI' or 'SWPC'")
+        grabber = sinsit.get_SWPC_realtime if insitu_source == 'SWPC' else sinsit.get_omni
+        observation_label = 'SWPC real-time L1' if insitu_source == 'SWPC' else 'OMNI'
+        data = grabber(starttime, endtime)
         # plot the period of interest
         mask = (data['datetime'] >= starttime) & (data['datetime'] <= endtime)
         plotdata = data[mask]
-        axs[0].plot(plotdata['datetime'], plotdata['V'], 'k', label='OMNI')
+        axs[0].plot(plotdata['datetime'], plotdata['V'], 'k', label=observation_label)
 
         if hasattr(model, 'b_grid'):
             axs[1].plot(plotdata['datetime'], -np.sign(plotdata['BX_GSE']) * 0.92, 'k.',
-                        label='OMNI')
+                        label=observation_label)
             axs[1].set_ylim(-1.1, 1.1)
         
         # Plot OMNI density if compressible model
@@ -1963,7 +1981,8 @@ def plot_earth_timeseries(model, plot_omni=True, save=False, tag='', timefromrun
                 omni_n = plotdata['N'].copy()
                 omni_n[omni_n == 999.9] = np.nan
                 omni_n[omni_n == 9999.0] = np.nan
-                axs[density_panel].semilogy(plotdata['datetime'], omni_n, 'k-', label='OMNI')
+                axs[density_panel].semilogy(
+                    plotdata['datetime'], omni_n, 'k-', label=observation_label)
         
         # Plot OMNI temperature if compressible model
         if is_compressible and 'T' in surf_ts.columns:
@@ -1976,7 +1995,8 @@ def plot_earth_timeseries(model, plot_omni=True, save=False, tag='', timefromrun
                 omni_t = plotdata['T'].copy()
                 omni_t[omni_t == 9999999.0] = np.nan
                 omni_t[omni_t == 999999.0] = np.nan
-                axs[temp_panel].semilogy(plotdata['datetime'], omni_t, 'k-', label='OMNI')
+                axs[temp_panel].semilogy(
+                    plotdata['datetime'], omni_t, 'k-', label=observation_label)
 
     for a in axs:
         a.set_xlim(starttime, endtime)
