@@ -1,5 +1,6 @@
 """Plot and analyse SURF simulations."""
 import datetime
+import warnings
 from pathlib import Path
 
 import astropy.units as u
@@ -43,8 +44,36 @@ def get_figure_dir():
     return figure_dir
 
 
+def _observer_legend_label(body, observer, time_index, show_body_latitudes=False):
+    """Build an observer legend label, optionally including its latitude now."""
+    if not show_body_latitudes:
+        return body
+    latitude = observer.lat[time_index].to(u.deg).value
+    return f"{body} ({latitude:+.1f}°)"
+
+
+def _bodies_to_plot(model, bodies=None):
+    """Return explicit observer names or the model-dependent plotting defaults."""
+    if bodies is None:
+        return get_planets_to_plot(model) + get_spacecraft_to_plot(model)
+    if isinstance(bodies, str):
+        raise TypeError("bodies must be a sequence of observer names, not a string")
+    available = observer_styles()
+    selected = []
+    for body in bodies:
+        name = str(body).strip().upper()
+        if name not in available:
+            raise ValueError(
+                f"Unknown body {body!r}; choose from {', '.join(available)}"
+            )
+        if name not in selected:
+            selected.append(name)
+    return selected
+
+
 def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, minimalplot=False,
-         plotHCS=True, annotateplot=True, trace_earth_connection=False, plot_rmax=None):
+         plotHCS=True, annotateplot=True, trace_earth_connection=False, plot_rmax=None,
+         show_body_latitudes=False, bodies=None):
     """
     Make a contour plot on a polar axis of the solar wind solution at a specific time.
     Args:
@@ -60,6 +89,10 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
         trace_earth_connection: boolean, whether to plot Earth-connected field. Slow.
         plot_rmax: float (no units, but in rS). Limit outer boundary to help with field lines
                    during CMEs
+        show_body_latitudes: Boolean. Include each observer's latitude at the plotted time
+                             in its legend label.
+        bodies: Optional sequence of planet/spacecraft names. None uses the existing
+                model-radius and model-date dependent defaults.
     Returns:
         fig: Figure handle.
         ax: Axes handle.
@@ -143,9 +176,7 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
     if not minimalplot:
 
         # determine which bodies should be plotted
-        planet_list = get_planets_to_plot(model)
-        spacecraft_list = get_spacecraft_to_plot(model)
-        observers_list = planet_list + spacecraft_list
+        observers_list = _bodies_to_plot(model, bodies)
 
         # Add on observers
         styles = observer_styles()
@@ -157,17 +188,33 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
                 deltalon = earth_pos.lon_hae[id_t] - earth_pos.lon_hae[0]
 
             obslon = zerototwopi(obs.lon[id_t] + deltalon)
+            label = _observer_legend_label(body, obs, id_t, show_body_latitudes)
             ax.plot(obslon, obs.r[id_t], markersize=14, color=styles[body]['color'],
-                    marker=styles[body]['marker'], linestyle='', label=body)
+                    marker=styles[body]['marker'], linestyle='', label=label)
 
         # Add on a legend.
-        if annotateplot:
-            ax.legend(ncol=len(observers_list), loc='lower center', frameon=False, fontsize=14,
-                      handletextpad=0.1, columnspacing=0.5,  bbox_to_anchor=(0.5, -0.18))
+        two_row_legend = False
+        if annotateplot and observers_list:
+            legend = ax.legend(
+                ncol=len(observers_list), loc='lower center', frameon=False, fontsize=14,
+                handletextpad=0.1, columnspacing=0.5, bbox_to_anchor=(0.5, -0.18),
+            )
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            if legend.get_window_extent(renderer).width > ax.get_window_extent(renderer).width:
+                two_row_legend = True
+                legend.remove()
+                legend_columns = max(1, int(np.ceil(len(observers_list) / 2)))
+                ax.legend(
+                    ncol=legend_columns, loc='lower center', frameon=False, fontsize=14,
+                    handletextpad=0.1, columnspacing=0.5, bbox_to_anchor=(0.5, -0.24),
+                )
 
         ax.patch.set_facecolor('slategrey')
         pos = ax.get_position()
-        new_pos = (pos.x0, pos.y0 + 0.1, pos.width, pos.height)
+        vertical_offset = 0.15 if two_row_legend else 0.1
+        plot_height = pos.height - 0.05 if two_row_legend else pos.height
+        new_pos = (pos.x0, pos.y0 + vertical_offset, pos.width, plot_height)
         ax.set_position(new_pos)
 
         # Add a colour bar
@@ -190,7 +237,7 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
             ax.text(0.98, -0.01, label, fontsize=15, transform=ax.transAxes,
                     horizontalalignment='right')
 
-            label = f"HUXt2D \nLat: {model.latitude.to(u.deg).value:3.0f} deg"
+            label = f"HUXt2D \nLat: {model.latitude.to(u.deg).value:.1f} deg"
             ax.text(0.02, -0.01, label, fontsize=15, transform=ax.transAxes)
 
         # plot any tracked streaklines
@@ -265,7 +312,7 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
 
 def animate(model, tag, duration=10, fps=20, plotHCS=True, trace_earth_connection=False,
             outputfilepath='',
-            plot_rmax=None):
+            plot_rmax=None, show_body_latitudes=False, bodies=None):
     """
     Animate the model solution, and save as an MP4.
     Args:
@@ -277,6 +324,8 @@ def animate(model, tag, duration=10, fps=20, plotHCS=True, trace_earth_connectio
         trace_earth_connection: Boolean flag on whether to plot the earth connected streak line.
         outputfilepath: full path, including filename if output is to be saved anywhere other than SURF/figures
         plot_rmax: float (no units, but in rS). Limit outer boundary to help with field lines during CMEs
+        show_body_latitudes: Boolean. Include instantaneous observer latitudes in frame legends.
+        bodies: Optional observer-name sequence. None retains model-dependent defaults.
     Returns:
         pathlib.Path: Full path to the saved animation file.
     """
@@ -303,11 +352,13 @@ def animate(model, tag, duration=10, fps=20, plotHCS=True, trace_earth_connectio
         # Use plot_compressible for compressible models, otherwise use standard plot
         if hasattr(model, 'compressible') and model.compressible:
             plot_compressible(model, model.time_out[i], fighandle=fig, minimalplot=False,
-                              annotateplot=True, plot_rmax=plot_rmax)
+                              annotateplot=True, plot_rmax=plot_rmax,
+                              show_body_latitudes=show_body_latitudes, bodies=bodies)
         else:
             ax = fig.add_subplot(111, projection='polar')
             plot(model, model.time_out[i], fighandle=fig, axhandle=ax, plotHCS=plotHCS,
-                 trace_earth_connection=trace_earth_connection, plot_rmax=plot_rmax)
+                 trace_earth_connection=trace_earth_connection, plot_rmax=plot_rmax,
+                 show_body_latitudes=show_body_latitudes, bodies=bodies)
         return frame
 
     # Create a new figure - size depends on compressible mode
@@ -350,7 +401,8 @@ def animate(model, tag, duration=10, fps=20, plotHCS=True, trace_earth_connectio
 
 
 def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimalplot=False,
-                      annotateplot=True, plot_rmax=None, plotHCS=True):
+                      annotateplot=True, plot_rmax=None, plotHCS=True,
+                      show_body_latitudes=False, bodies=None):
     """
     Make three contour plots on polar axes of the compressible solar wind solution at a specific
     time. Shows velocity, density, and temperature in separate subplots.
@@ -366,6 +418,10 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
         plot_rmax: float (no units, but in Rs). Limit outer boundary to help with field lines
                    during CMEs
         plotHCS: Boolean, if True plots heliospheric current sheet coordinates
+        show_body_latitudes: Boolean. Include each observer's latitude at the plotted time
+                             in its legend label.
+        bodies: Optional sequence of planet/spacecraft names. None uses the existing
+                model-radius and model-date dependent defaults.
     Returns:
         fig: Figure handle.
         axes: Array of axes handles [ax_v, ax_rho, ax_T].
@@ -556,14 +612,16 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
 
     if not minimalplot:
         # Determine which bodies should be plotted
-        planet_list = get_planets_to_plot(model)
-        spacecraft_list = get_spacecraft_to_plot(model)
-        observers_list = planet_list + spacecraft_list
+        observers_list = _bodies_to_plot(model, bodies)
 
         # Add observers to all plots
         styles = observer_styles()
+        observer_labels = {}
         for body in observers_list:
             obs = model.get_observer(body)
+            observer_labels[body] = _observer_legend_label(
+                body, obs, id_t, show_body_latitudes
+            )
             deltalon = 0.0 * u.rad
             if model.frame == 'sidereal':
                 earth_pos = model.get_observer('EARTH')
@@ -572,7 +630,7 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
             obslon = zerototwopi(obs.lon[id_t] + deltalon)
             # Plot on all axes, but only add label on first axis for legend
             for i, ax in enumerate(axes):
-                label = body if i == 0 else None
+                label = observer_labels[body] if i == 0 else None
                 ax.plot(obslon, obs.r[id_t], markersize=14, color=styles[body]['color'], 
                        marker=styles[body]['marker'], linestyle='', label=label)
         
@@ -617,7 +675,8 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
         # Each item: circle (0.015) + gap (0.008) + text (~0.007 per char)
         item_widths = []
         for body in observers_list:
-            text_width = len(body) * 0.007  # Approximate width per character
+            observer_label = observer_labels[body]
+            text_width = len(observer_label) * 0.007  # Approximate width per character
             item_width = 0.015 + 0.008 + text_width  # marker + gap + text
             item_widths.append(item_width)
         
@@ -664,7 +723,8 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
                     color=styles[body]['color'], 
                     horizontalalignment='center', verticalalignment='center', zorder=11)
             # Add body name - darker and bolder for visibility
-            fig.text(current_x + 0.015 + 0.008, label_y, body.upper(), fontsize=13,
+            observer_label = observer_labels[body]
+            fig.text(current_x + 0.015 + 0.008, label_y, observer_label.upper(), fontsize=13,
                     color='black', fontweight='bold',
                     horizontalalignment='left', verticalalignment='center', zorder=11)
             
@@ -683,7 +743,7 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
         
         # Add model info at top left, aligned with left edge of left panel
         model_label = f"SURF-{_compressible_solver_label(model)} | Lat: {model.latitude.to(
-                      u.deg).value:3.0f}°"
+                      u.deg).value:.1f}°"
         fig.text(pos_left.x0, pos_left.y1 + 0.01, model_label, fontsize=16, fontweight='bold',
                 horizontalalignment='left', verticalalignment='bottom')
 
@@ -704,7 +764,7 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
 
 def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=False,
                  annotateplot=True, plot_rmax=None, plotHCS=True, polar_var='V',
-                 plot_omni=False):
+                 plot_omni=False, show_body_latitudes=False, bodies=None):
     """
     Make a plot with two subfigures: left shows top-down polar view of selected variable,
     right shows Earth timeseries.
@@ -726,6 +786,9 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
         plot_omni: Boolean. If True, download and overlay OMNI observations on
                    the Earth time-series panels. Data are cached on the model
                    so animation frames do not trigger repeated downloads.
+        show_body_latitudes: Boolean. Include instantaneous observer latitudes in the
+                             polar-panel legend.
+        bodies: Optional observer-name sequence. None retains model-dependent defaults.
     Returns:
         fig: Figure handle.
         subfigs: Array of subfigure handles [subfig_left, subfig_right].
@@ -926,9 +989,7 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
 
     if not minimalplot:
         # Determine which bodies should be plotted
-        planet_list = get_planets_to_plot(model)
-        spacecraft_list = get_spacecraft_to_plot(model)
-        observers_list = planet_list + spacecraft_list
+        observers_list = _bodies_to_plot(model, bodies)
 
         # Add observers
         styles = observer_styles()
@@ -940,8 +1001,9 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
                 deltalon = earth_pos.lon_hae[id_t] - earth_pos.lon_hae[0]
 
             obslon = zerototwopi(obs.lon[id_t] + deltalon)
-            ax_polar.plot(obslon, obs.r[id_t], markersize=14, color=styles[body]['color'], 
-                       marker=styles[body]['marker'], linestyle='', label=body)
+            label = _observer_legend_label(body, obs, id_t, show_body_latitudes)
+            ax_polar.plot(obslon, obs.r[id_t], markersize=14, color=styles[body]['color'],
+                       marker=styles[body]['marker'], linestyle='', label=label)
         
         # Set background color
         ax_polar.patch.set_facecolor('slategrey')
@@ -966,14 +1028,41 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
 
         # Add legend for observers below plot
         if len(observers_list) > 0:
-            ax_polar.legend(loc='upper center', bbox_to_anchor=(0.45, -0.05), 
-                          framealpha=0.8, fontsize=13, ncol=3)
+            legend = ax_polar.legend(
+                loc='upper center', bbox_to_anchor=(0.5, -0.02),
+                borderaxespad=0, framealpha=0.8, fontsize=13,
+                ncol=len(observers_list),
+            )
+            # Use a second row only when the rendered labels exceed the polar plot.
+            # This accounts for the optional latitude text rather than relying on a
+            # fixed observer-count threshold.
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            if legend.get_window_extent(renderer).width > ax_polar.get_window_extent(renderer).width:
+                legend.remove()
+                legend_columns = max(1, int(np.ceil(len(observers_list) / 2)))
+                ax_polar.legend(
+                    loc='upper left', bbox_to_anchor=(-0.08, -0.02, 1.16, 0),
+                    mode='expand', borderaxespad=0, framealpha=0.8,
+                    fontsize=13, ncol=legend_columns,
+                )
+                vertical_shift = 0.035
+                polar_pos = ax_polar.get_position()
+                ax_polar.set_position([
+                    polar_pos.x0, polar_pos.y0 + vertical_shift,
+                    polar_pos.width, polar_pos.height,
+                ])
+                colorbar_pos = cbaxes.get_position()
+                cbaxes.set_position([
+                    colorbar_pos.x0, colorbar_pos.y0 + vertical_shift,
+                    colorbar_pos.width, colorbar_pos.height,
+                ])
             
     if annotateplot:
         # Add model and time labels to main figure
         if is_compressible:
             model_label = (f"SURF-{_compressible_solver_label(model)} | "
-                           f"Lat: {model.latitude.to(u.deg).value:3.0f}°")
+                           f"Lat: {model.latitude.to(u.deg).value:.1f}°")
         else:
             model_label = "SURF-HUXt"
         fig.text(0.02, 0.98, model_label, fontsize=16, fontweight='bold',
@@ -1000,11 +1089,24 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
         if not hasattr(model, '_cached_omni_timeseries'):
             omni_start = ts['time'].iloc[0]
             omni_end = ts['time'].iloc[-1]
-            omni_data = sinsit.get_omni(omni_start, omni_end)
-            mask = ((omni_data['datetime'] >= omni_start) &
-                    (omni_data['datetime'] <= omni_end))
-            model._cached_omni_timeseries = omni_data.loc[mask].copy()
+            try:
+                omni_data = sinsit.get_omni(omni_start, omni_end)
+                mask = ((omni_data['datetime'] >= omni_start) &
+                        (omni_data['datetime'] <= omni_end))
+                model._cached_omni_timeseries = omni_data.loc[mask].copy()
+            except Exception as error:
+                warnings.warn(
+                    f"OMNI data could not be loaded ({error}); plotting SURF data only.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                # Cache the failed attempt so every animation frame does not retry the
+                # same download.
+                model._cached_omni_timeseries = None
         omni_ts = model._cached_omni_timeseries
+        if (omni_ts is None or omni_ts.empty or
+                not {'datetime', 'V'}.issubset(omni_ts.columns)):
+            plot_omni = False
 
     if is_compressible:
         # Compute P_dyn from timeseries: P_dyn = 0.5 * rho * v^2
@@ -1114,17 +1216,31 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
     for ax in axes_ts:
         ax.set_xlim(t_start, t_end)
     
-    # Determine if short run (<=7 days) for daily ticks
     duration_days = (t_end - t_start).total_seconds() / 86400
-    
+
     for ax in axes_ts:
-        if duration_days <= 7:
-            # Daily ticks for short runs
-            ax.xaxis.set_major_locator(mdates.DayLocator())
+        # Keep labelled dates sparse enough for movie frames while retaining
+        # calendar-aligned minor marks at a useful scale for the run length.
+        ax.xaxis.set_major_locator(
+            mdates.AutoDateLocator(minticks=4, maxticks=6, interval_multiples=True)
+        )
+        if duration_days <= 2:
+            minor_locator = mdates.HourLocator(interval=6)
+        elif duration_days <= 14:
+            minor_locator = mdates.DayLocator(interval=1)
+        elif duration_days <= 60:
+            minor_locator = mdates.DayLocator(interval=5)
+        elif duration_days <= 180:
+            minor_locator = mdates.DayLocator(interval=10)
+        elif duration_days <= 730:
+            minor_locator = mdates.MonthLocator(interval=1)
         else:
-            # Equivalent independent locators keep all stacked panels aligned.
-            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+            minor_locator = mdates.MonthLocator(interval=3)
+        ax.xaxis.set_minor_locator(minor_locator)
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%d-%m'))
+        ax.xaxis.set_minor_formatter(mpl.ticker.NullFormatter())
+        ax.tick_params(axis='x', which='minor', length=3)
+        ax.grid(True, axis='x', which='minor', alpha=0.12)
     subfigs[1].autofmt_xdate(rotation=0, ha='center')
     
     # Add xlabel with year from the data
@@ -1153,7 +1269,8 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
 
 def animate_with_ts(model, tag='', duration=10, fps=20, outputfilepath='',
                     minimalplot=False, annotateplot=True, plot_rmax=None,
-                    plotHCS=True, polar_var='V', plot_omni=False):
+                    plotHCS=True, polar_var='V', plot_omni=False,
+                    show_body_latitudes=False, bodies=None):
     """
     Animate the solar wind solution with Earth time series, and save as MP4 (or GIF fallback).
 
@@ -1173,6 +1290,8 @@ def animate_with_ts(model, tag='', duration=10, fps=20, outputfilepath='',
                In incompressible mode only 'V' is supported.
         plot_omni: Boolean. If True, overlay OMNI observations for each
                    variable shown in the Earth time-series panel.
+        show_body_latitudes: Boolean. Include instantaneous observer latitudes in frame legends.
+        bodies: Optional observer-name sequence. None retains model-dependent defaults.
     Returns:
         pathlib.Path: Full path to the saved animation file.
     """
@@ -1195,7 +1314,8 @@ def animate_with_ts(model, tag='', duration=10, fps=20, outputfilepath='',
         plot_with_ts(model, model.time_out[i], save=False, tag=tag,
                      fighandle=fig, minimalplot=minimalplot, annotateplot=annotateplot,
                      plot_rmax=plot_rmax, plotHCS=plotHCS, polar_var=polar_var,
-                     plot_omni=plot_omni)
+                     plot_omni=plot_omni, show_body_latitudes=show_body_latitudes,
+                     bodies=bodies)
         return frame
 
     # Create the animation
