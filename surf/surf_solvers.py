@@ -58,6 +58,9 @@ M_P_SI = _CONSTANTS['proton_mass']
 SMALL_RHO = _CONSTANTS['min_density']
 SMALL_P = _CONSTANTS['min_pressure']
 NUMBA_CACHE = _CONSTANTS['numba_cache']
+AU_M = 1.496e11
+PUI_REFERENCE_RADIUS_M = AU_M
+PUI_SLOWDOWN_PER_AU = 0.0027
 del _CONSTANTS
 
 
@@ -431,7 +434,29 @@ def _extract_snapshot(U, nr, gamma, M_P_val, K_B_val):
 
 
 @njit(cache=NUMBA_CACHE)
-def _step_euler(U, U_bc, nr, A, V, dt, gamma, use_plm):
+def _apply_pui_source(U, r, nr, dt, enabled):
+    """Apply the continuous 1 AU-anchored PUI trend, preserving internal energy."""
+    if not enabled:
+        return U
+    for i in range(nr):
+        if r[i] <= PUI_REFERENCE_RADIUS_M:
+            continue
+        rho = max(U[i, 0], SMALL_RHO)
+        velocity = U[i, 1] / rho
+        internal_energy = U[i, 2] - 0.5 * rho * velocity * velocity
+        distance_au = max((r[i] - PUI_REFERENCE_RADIUS_M) / AU_M, 0.0)
+        trend = max(1.0 - PUI_SLOWDOWN_PER_AU * distance_au, 1e-6)
+        # The radius-dependent rate integrates to the paper's linear radial trend.
+        rate_per_m = (PUI_SLOWDOWN_PER_AU / AU_M) / trend
+        factor = max(1.0 - rate_per_m * abs(velocity) * dt, 0.0)
+        velocity_new = velocity * factor
+        U[i, 1] = rho * velocity_new
+        U[i, 2] = internal_energy + 0.5 * rho * velocity_new * velocity_new
+    return U
+
+
+@njit(cache=NUMBA_CACHE)
+def _step_euler(U, U_bc, nr, A, V, r, dt, gamma, use_plm, pui):
     """
     Forward Euler time step with area-weighted fluxes and geometric source.
     """
@@ -466,16 +491,16 @@ def _step_euler(U, U_bc, nr, A, V, dt, gamma, use_plm):
             U_new[i] = U[i]
     
     U_new[0] = U_bc
-    return U_new
+    return _apply_pui_source(U_new, r, nr, dt, pui)
 
 
 @njit(cache=NUMBA_CACHE)
-def _step_rk2(U, U_bc, nr, A, V, dt, gamma, use_plm):
+def _step_rk2(U, U_bc, nr, A, V, r, dt, gamma, use_plm, pui):
     """
     RK2 (Heun's method) time step.
     """
-    U1 = _step_euler(U, U_bc, nr, A, V, dt, gamma, use_plm)
-    U2 = _step_euler(U1, U_bc, nr, A, V, dt, gamma, use_plm)
+    U1 = _step_euler(U, U_bc, nr, A, V, r, dt, gamma, use_plm, pui)
+    U2 = _step_euler(U1, U_bc, nr, A, V, r, dt, gamma, use_plm, pui)
     
     U_new = np.zeros_like(U)
     for i in range(nr):
@@ -520,11 +545,12 @@ class CompressibleSolver:
     
     def __init__(self, r_grid, gamma=1.5, cfl=None,
                  riemann='hllc', reconstruction='plm', time_integration='euler',
-                 verbose=False):
+                 verbose=False, pui=False):
         self.r = r_grid.copy()
         self.nr = len(r_grid)
         self.gamma = gamma
         self.verbose = verbose
+        self.pui = bool(pui)
         
         self.reconstruction = reconstruction.lower()
         self.time_integration = time_integration.lower()
@@ -574,11 +600,11 @@ class CompressibleSolver:
         use_plm = (self.reconstruction == 'plm')
         
         if self.time_integration == 'rk2':
-            self.U = _step_rk2(self.U, U_bc, self.nr, self.A, self.V,
-                               dt, self.gamma, use_plm)
+            self.U = _step_rk2(self.U, U_bc, self.nr, self.A, self.V, self.r,
+                               dt, self.gamma, use_plm, self.pui)
         else:
-            self.U = _step_euler(self.U, U_bc, self.nr, self.A, self.V,
-                                 dt, self.gamma, use_plm)
+            self.U = _step_euler(self.U, U_bc, self.nr, self.A, self.V, self.r,
+                                 dt, self.gamma, use_plm, self.pui)
         
         self.time += dt
         return self.U
@@ -783,6 +809,7 @@ class CompressibleSolver:
             'solver_info': {
                 'reconstruction': self.reconstruction,
                 'time_integration': self.time_integration,
+                'pui': self.pui,
             }
         }
         
@@ -825,7 +852,8 @@ class CompressibleSolver:
 # Factory Function
 # =============================================================================
 
-def create_solver(r_grid, gamma=1.5, method='hllc-plm', cfl=None, verbose=False):
+def create_solver(r_grid, gamma=1.5, method='hllc-plm', cfl=None, verbose=False,
+                  pui=False):
     """
     Create a compressible solver with specified method.
     
@@ -856,7 +884,7 @@ def create_solver(r_grid, gamma=1.5, method='hllc-plm', cfl=None, verbose=False)
     return CompressibleSolver(
         r_grid, gamma=gamma, cfl=cfl,
         reconstruction=reconstruction,
-        time_integration=time_int, verbose=verbose
+        time_integration=time_int, verbose=verbose, pui=pui
     )
 
 

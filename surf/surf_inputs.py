@@ -1407,7 +1407,8 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
         lon_stop: Longitude of the other edge of the longitudinal domain.
         bgrid_carr: input magnetic polarity as a function of Carrington longitude and time
         track_cmes: Bool, whether to track CMEs through the simulation.
-        solver: String, numerical solver. Valid options are 'huxt', 'hydro', and 'hydro-pcm'.
+        solver: Numerical solver. Add the '-pui' suffix to enable gradual pick-up ion deceleration
+                from 1 AU (for example, 'huxt-pui' or 'hydro-pui').
         nlon: Number of equally spaced longitudes in the full longitude grid.
               Must match the longitude dimension of the supplied boundary maps.
         dr: Radial grid spacing.

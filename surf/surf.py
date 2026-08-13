@@ -768,8 +768,11 @@ class SURF:
                         reduction).
             solver: String specifying the numerical solver to use. Options:
                      'huxt' (default): First-order HUXt advection scheme (incompressible)
+                     'huxt-pui': HUXt with gradual pick-up ion deceleration from 1 AU
                      'hydro': Second-order compressible HLLC+PLM solver
+                     'hydro-pui': Compressible HLLC+PLM with pick-up ion deceleration
                      'hydro-pcm': Compressible HLLC+PCM solver
+                     'hydro-pcm-pui': Compressible HLLC+PCM with pick-up ion deceleration
             parallel: Boolean flag to enable parallel computation across longitude slices
                       (default True). Uses joblib threading backend for parallelization. Set to
                       False for debugging or if running on a single-core system.
@@ -800,15 +803,18 @@ class SURF:
         
         # Validate and store solver choice
         validate_solver_name(solver)
-        if solver == 'hydro':
+        if solver in ('hydro', 'hydro-pui'):
             print("[OK] Compressible solver (hydro: HLLC+PLM) available")
-        elif solver == 'hydro-pcm':
+        elif solver in ('hydro-pcm', 'hydro-pcm-pui'):
             print("[OK] Compressible solver (hydro-pcm: HLLC+PCM) available")
+        if solver.endswith('-pui'):
+            print("[OK] Gradual pick-up ion deceleration enabled from 1 AU")
         
         self.solver = solver
+        self.pui = solver.endswith('-pui')
         
         # Auto-determine compressible mode based on solver choice
-        compressible = solver in ('hydro', 'hydro-pcm')
+        compressible = solver in ('hydro', 'hydro-pui', 'hydro-pcm', 'hydro-pcm-pui')
         
         # Store parallel computation flag
         self.parallel = parallel
@@ -1061,7 +1067,8 @@ class SURF:
         self.model_params = np.array([self.dtdr.value, self.alpha, self.r_accel.value,
                                       self.dt_scale.value, self.nt_out, self.nr, self.nlon,
                                       self.r[0].to('km').value,
-                                      self.rotation_period.to(u.s).value, self.gamma])
+                                      self.rotation_period.to(u.s).value, self.gamma,
+                                      int(self.pui)])
 
         # Process inputs for time dependent boundary conditions, e.g., from in-situ data
         self.input_b_ts = np.nan
@@ -1512,6 +1519,7 @@ class SURF:
             nt_out=self.nt_out,
             nr=self.nr,
             riemann=_compressible_method_from_solver(self.solver),
+            pui=self.pui,
             verbose=False,  # Suppress detailed solver output in parallel mode
             num_particles=num_particles,
             particle_injection_rate=particle_injection_rate,
@@ -1823,7 +1831,8 @@ class SURF:
         self.model_params = np.array([self.dtdr.value, self.alpha, self.r_accel.value,
                                       self.dt_scale.value, self.nt_out, self.nr, self.nlon,
                                       self.r[0].to('km').value,
-                                      self.rotation_period.to(u.s).value, self.gamma])
+                                      self.rotation_period.to(u.s).value, self.gamma,
+                                      int(self.pui)])
 
         # ======================================================================
         # Generate ambient solar wind time series
@@ -2538,7 +2547,8 @@ def surf_constants():
     T_sw_1au = 1e5 * u.K  # Typical solar wind temperature at 1 AU (~100,000 K)
     n_sw_21p5 = 600 * (u.cm ** -3)  # Reference ambient proton density at 21.5 Rs
     T_sw_21p5 = 1e6 * u.K  # Reference ambient temperature at 21.5 Rs
-    valid_solvers = ("huxt", "hydro", "hydro-pcm")
+    valid_solvers = ("huxt", "huxt-pui", "hydro", "hydro-pui",
+                     "hydro-pcm", "hydro-pcm-pui")
     
     boltzmann_constant = 1.380649e-23  # J/K
     proton_mass = 1.67262192e-27  # kg
@@ -3001,7 +3011,9 @@ def _compressible_method_from_solver(solver_name):
     """Map public solver names to internal compressible method strings."""
     method_map = {
         'hydro': 'hllc-plm-rk2',
+        'hydro-pui': 'hllc-plm-rk2',
         'hydro-pcm': 'hllc-pcm',
+        'hydro-pcm-pui': 'hllc-pcm',
     }
     if solver_name not in method_map:
         raise ValueError(f"Solver '{solver_name}' is not a compressible solver.")
@@ -3553,7 +3565,8 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
                               num_particles=0, particle_injection_rate=None,
                               particle_release_rate=None, solver_instance=None,
                               particle_initial_positions=None,
-                              v_init_kms=None, rho_init_kgm3=None, T_init_K=None):
+                              v_init_kms=None, rho_init_kgm3=None, T_init_K=None,
+                              pui=False):
     """
     Solve 1D radial solar wind expansion using a compressible solver with selectable Riemann solver.
     
@@ -3674,6 +3687,7 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
             gamma=gamma,
             method=method,
             cfl=0.7 if 'plm' in method else 0.8, # Lower CFL for PLM
+            pui=pui,
             verbose=verbose
         )
     else:
@@ -3830,7 +3844,7 @@ def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
     nt_out = np.int32(params[4])
     nr = np.int32(params[5])
     r_boundary = params[7]
-    solver = 'huxt'  # This function is only called for huxt-family solvers
+    pui = bool(params[10]) if len(params) > 10 else False
     compressible = False  # huxt solver is incompressible by default
     
     # Compute the radial grid for the test particles
@@ -3978,17 +3992,14 @@ def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
         # Do a single model time step
         # Solver dispatch: select numerical method based on solver parameter
         
-        if solver == 'huxt':
-            # HUXt advection scheme (implemented with first-order upwind differencing)
-           
-            # Incompressible HUXt update (velocity only)
-            u_up_next = _upwind_step_(u_up, u_dn, dtdr, alpha, r_accel, rrel)
-            
-            # Save the updated time step (direct assignment, no copy needed)
-            v[1:] = u_up_next
-        
+        if pui:
+            u_up_next = _upwind_step_pui_(
+                u_up, u_dn, dtdr, alpha, r_accel, rrel, rgrid)
         else:
-            raise ValueError(f"Unknown solver: {solver}. Supported solvers: 'huxt'")
+            u_up_next = _upwind_step_(u_up, u_dn, dtdr, alpha, r_accel, rrel)
+
+        # Save the updated time step (direct assignment, no copy needed)
+        v[1:] = u_up_next
 
         # Move the CME test particles forward
         if (t > 0 or cme_r_init is not None) and do_cme:
@@ -4213,6 +4224,33 @@ def _upwind_step_(v_up, v_dn, dtdr, alpha, r_accel, rrel):
     # Add the residual acceleration over this grid cell
     v_up_next = v_up_next + (v_dn * dtdr * v_diff)
 
+    return v_up_next
+
+
+@jit(nopython=True)
+def _upwind_step_pui_(v_up, v_dn, dtdr, alpha, r_accel, rrel, rgrid):
+    """Advance HUXt with observation-calibrated PUI deceleration from 1 AU.
+
+    Elliott et al. (2026, ApJ 1001, 55) find a mean simulated slowdown of
+    0.27 percent per AU, reaching about 13--15 percent at 50--58.5 AU.
+    """
+    au_km = 1.496e8
+    reference_radius_km = au_km
+    slowdown_per_au = 0.0027
+
+    v_up_next = _upwind_step_(v_up, v_dn, dtdr, alpha, r_accel, rrel)
+    dt = dtdr * (rgrid[1] - rgrid[0])
+    for i in range(len(v_up_next)):
+        radius_km = rgrid[i + 1]
+        if radius_km > reference_radius_km:
+            distance_au = (radius_km - reference_radius_km) / au_km
+            trend = max(1.0 - slowdown_per_au * distance_au, 1e-6)
+            # Apply only the slowdown accumulated over the distance travelled
+            # during this timestep.  Applying a whole radial-cell ratio here
+            # over-counts the source by approximately the inverse CFL number.
+            travelled_au = abs(v_up_next[i]) * dt / au_km
+            trend_next = max(trend - slowdown_per_au * travelled_au, 1e-6)
+            v_up_next[i] *= trend_next / trend
     return v_up_next
 
 

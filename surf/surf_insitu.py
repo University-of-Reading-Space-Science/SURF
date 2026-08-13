@@ -36,7 +36,7 @@ from surf import surf_inputs as sin
 
 
 def _is_compressible_solver(solver):
-    return solver in ("hydro", "hydro-pcm")
+    return solver in ("hydro", "hydro-pui", "hydro-pcm", "hydro-pcm-pui")
 
 
 def get_omni(starttime, endtime):
@@ -1740,7 +1740,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
         observer_r = observer_at_ftime.r[0]
     
     # Backmap to the inner boundary with solver-dependent acceleration profile.
-    if solver == 'huxt':
+    if solver in ('huxt', 'huxt-pui'):
         mapped_boundary = sin.map_v_boundary_inwards(
                                 omni_lon['V'].to_numpy()*u.km/u.s,
                                 observer_r.to(u.solRad), rmin,
@@ -2072,7 +2072,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     vcarr_rmin = np.zeros_like(vcarr_215.value)
     bcarr_rmin = np.zeros_like(bcarr_215)
     
-    if solver == 'huxt':
+    if solver in ('huxt', 'huxt-pui'):
         for t in range(nt):
             mapped = sin.map_v_boundary_inwards(
                 vcarr_215[:, t],
