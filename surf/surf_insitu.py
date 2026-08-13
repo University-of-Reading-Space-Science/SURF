@@ -1085,7 +1085,8 @@ def remove_ICMEs(data_df, icmes, interpolate=True, icme_buffer=0.1 * u.day, inte
     return data
 
 
-def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.day):
+def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.day,
+                    min_quality=1):
     """
     Scrape the DONKI database of interplanetary shocks at Earth or STEREO, to create a pseudo-ICME
     list in the same format as the Cane and Richardson list.
@@ -1094,12 +1095,19 @@ def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.
         enddate: Datetime of the end of the window
         location: Earth or STEREO A/B
         ICME_duration: Timespan of the assumed ICME duration. Should have units of days.
+        min_quality: Minimum DONKI ``quality`` rating to include. Valid values
+                     are -1 (all), 0 (weak or better), 1 (some signatures or
+                     better; default), and 2 (clear signatures only).
 
     Returns:
         icmes: A dataframe of ICMEs
     """
     # scrape the DONKI database of interplanetary shocks at Earth or STEREO. Create
     # a pseudo-ICME list in the same format as Cane and Richardson
+
+    min_quality = int(min_quality)
+    if min_quality not in (-1, 0, 1, 2):
+        raise ValueError('min_quality must be -1, 0, 1, or 2')
 
     # construct the url
     startdate_str = startdate.strftime('%Y-%m-%d')
@@ -1116,16 +1124,21 @@ def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.
         # convert to DataFrame
         df = pd.DataFrame(data)
 
-        # only include ICMEs at given location
-        mask = df['location'] == location
-        icmes = df[mask]
-        icmes = icmes.reset_index()
+        # Only include ICMEs at the requested location and quality. Treat a
+        # missing quality as DONKI's -1 (unspecified) rating.
+        quality_values = (
+            df['quality'] if 'quality' in df else pd.Series(-1, index=df.index)
+        )
+        quality = pd.to_numeric(quality_values, errors='coerce').fillna(-1)
+        mask = (df['location'] == location) & (quality >= min_quality)
+        icmes = df[mask].reset_index()
 
-        # put it in the same format as the Cane&Richardson ICME list
-        L = len(icmes)
-        for i in range(0, L):
-            icmes.loc[i, 'Shock_time'] = datetime.datetime.strptime(icmes.loc[i, 'eventTime'],
-                                                                    '%Y-%m-%dT%H:%MZ')
+        # Put it in the same format as the Cane & Richardson ICME list. Assign
+        # the full column so an empty filtered result still has the schema that
+        # removeICMEs expects.
+        icmes['Shock_time'] = pd.to_datetime(
+            icmes['eventTime'], format='%Y-%m-%dT%H:%MZ'
+        )
 
         # add a guess at the ICME end time
         icmes['ICME_end'] = icmes['Shock_time'] + datetime.timedelta(days=ICME_duration.value)
@@ -1295,7 +1308,7 @@ def get_STEREO_ICMEs(
 
 
 def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme_buffer=1,
-                interp_gaps=True):
+                interp_gaps=True, donki_min_quality=1):
     """
     Remove ICME periods from OMNI solar wind data.
     
@@ -1322,6 +1335,9 @@ def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme
         If True, interpolate through the data gaps created by ICME removal
         using time-weighted interpolation with forward/backward fill for edges.
         Default is True.
+    donki_min_quality : {-1, 0, 1, 2}, optional
+        Minimum DONKI ICME quality to remove when ``icme_list='DONKI'``.
+        The default, 1, includes ratings 1 and 2.
     
     Returns
     -------
@@ -1347,7 +1363,9 @@ def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme
     
     # load the ICME list
     if icme_list == 'DONKI':
-        icmes = get_DONKI_ICMEs(dl_starttime, dl_endtime)
+        icmes = get_DONKI_ICMEs(
+            dl_starttime, dl_endtime, min_quality=donki_min_quality
+        )
     elif icme_list == 'CaneRichardson':
         icmes = ICMElist()
     elif icme_list in ('STEREO-A', 'STEREOA', 'STA'):
@@ -1356,6 +1374,9 @@ def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme
         raise ValueError(
             "icme_list must be 'CaneRichardson', 'DONKI', or 'STEREO-A'"
         )
+
+    if icmes.empty:
+        return omni_noicmes
     
     params = ['V', 'BX_GSE']
     # first remove all ICMEs and add NaNs to the required parameters
