@@ -1974,10 +1974,12 @@ class SURF:
                         self.input_v_ts[:, i] = v * (u.km / u.s)
                     self.input_iscme_ts[:, i] = isincme
 
-        # Set up the CME test particle position field
-        self.cme_particles_r = np.full((n_cme, self.nt_out, 2, self.nlon),
+        # Boundary CMEs still affect the solution when tracking is disabled,
+        # but no tracer storage or tracer integration is then required.
+        n_cme_tracers = n_cme if self.track_cmes else 0
+        self.cme_particles_r = np.full((n_cme_tracers, self.nt_out, 2, self.nlon),
                                        np.nan) * u.dimensionless_unscaled
-        self.cme_particles_v = np.full((n_cme, self.nt_out, 2, self.nlon),
+        self.cme_particles_v = np.full((n_cme_tracers, self.nt_out, 2, self.nlon),
                                        np.nan) * u.dimensionless_unscaled
 
         # ======================================================================    
@@ -2149,7 +2151,7 @@ class SURF:
             if self.parallel:
                 # Parallel execution using joblib
                 results = Parallel(n_jobs=-1, backend='threading')(
-                    delayed(self.process_longitude)(i, n_cme, n_hcs_max, streak_times) 
+                    delayed(self.process_longitude)(i, n_cme_tracers, n_hcs_max, streak_times) 
                     for i in range(self.lon.size)
                 )
                 
@@ -2184,7 +2186,7 @@ class SURF:
                     (i, v, cme_r_bounds, cme_v_bounds, hcs_r, streak_r,
                      rho_out, temp_out, final_v, final_cme_r, final_cme_v,
                      final_hcs_r, final_hcs_count, final_streak_r) = (
-                        self.process_longitude(i, n_cme, n_hcs_max, streak_times))
+                        self.process_longitude(i, n_cme_tracers, n_hcs_max, streak_times))
                     
                     # Save the output at each longitude
                     self.v_grid[:, :, i] = v * self.kms
@@ -3868,7 +3870,7 @@ def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
 
     # Check if CMEs need to be tracked.
     do_cme = 0
-    if np.any(iscmeinput) > 0 or cme_r_init is not None:
+    if n_cme > 0 and (np.any(iscmeinput) > 0 or cme_r_init is not None):
         do_cme = 1
 
     # Check if HCS needs to be tracked.
