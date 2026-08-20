@@ -765,13 +765,15 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
 def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=False,
                  annotateplot=True, plot_rmax=None, plotHCS=True, polar_var='V',
                  plot_omni=False, show_body_latitudes=False, bodies=None,
-                 insitu_source='OMNI'):
+                 insitu_source='OMNI', model_ambient=None):
     """
     Make a plot with two subfigures: left shows top-down polar view of selected variable,
     right shows Earth timeseries.
     
     Args:
         model: An instance of the SURF class with a completed solution.
+        model_ambient: Optional matching SURF solution evolved without CMEs. Its
+                       Earth time series is overlaid as a blue dashed line.
         time: Time to look up closest model time to (with an astropy.unit of time).
         save: Boolean to determine if the figure is saved.
         tag: String to append to the filename if saving the figure.
@@ -1084,6 +1086,12 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
         model._cached_earth_timeseries = get_observer_timeseries(model, observer='Earth')
     
     ts = model._cached_earth_timeseries
+    ts_ambient = None
+    if model_ambient is not None:
+        if not hasattr(model_ambient, '_cached_earth_timeseries'):
+            model_ambient._cached_earth_timeseries = get_observer_timeseries(
+                model_ambient, observer='Earth')
+        ts_ambient = model_ambient._cached_earth_timeseries
     current_time = model.time_init + time
 
     omni_ts = None
@@ -1132,6 +1140,9 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
         surf_label = f'SURF-{_compressible_solver_label(model)}'
         observation_label = 'SWPC real-time L1' if insitu_source == 'SWPC' else 'OMNI'
         axes_ts[0].plot(ts['time'], ts['vsw'], 'r-', linewidth=1.5, label=surf_label)
+        if ts_ambient is not None:
+            axes_ts[0].plot(ts_ambient['time'], ts_ambient['vsw'], 'b--',
+                            linewidth=1.5, label='Ambient (no CMEs)')
         if plot_omni:
             axes_ts[0].plot(omni_ts['datetime'], omni_ts['V'], 'k-',
                             linewidth=1.2, label=observation_label)
@@ -1149,6 +1160,9 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
         # Plot 2: Number Density (log scale, right y-axis)
         axes_ts[1].semilogy(ts['time'], ts['n'], 'r-', linewidth=1.5,
                            label=surf_label)
+        if ts_ambient is not None and 'n' in ts_ambient:
+            axes_ts[1].semilogy(ts_ambient['time'], ts_ambient['n'], 'b--',
+                               linewidth=1.5, label='Ambient (no CMEs)')
         if plot_omni and 'N' in omni_ts.columns:
             omni_n = omni_ts['N'].where((omni_ts['N'] > 0) & (omni_ts['N'] < 999))
             axes_ts[1].semilogy(omni_ts['datetime'], omni_n, 'k-',
@@ -1168,6 +1182,9 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
         # Plot 3: Temperature (log scale, left y-axis)
         axes_ts[2].semilogy(ts['time'], ts['T'], 'r-', linewidth=1.5,
                            label=surf_label)
+        if ts_ambient is not None and 'T' in ts_ambient:
+            axes_ts[2].semilogy(ts_ambient['time'], ts_ambient['T'], 'b--',
+                               linewidth=1.5, label='Ambient (no CMEs)')
         if plot_omni and 'T' in omni_ts.columns:
             omni_t = omni_ts['T'].where((omni_ts['T'] > 0) & (omni_ts['T'] < 999999))
             axes_ts[2].semilogy(omni_ts['datetime'], omni_t, 'k-',
@@ -1186,6 +1203,12 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
         # Plot 4: Dynamic Pressure (log scale, right y-axis)
         axes_ts[3].semilogy(ts['time'], pdyn_ts, 'r-', linewidth=1.5,
                            label=surf_label)
+        if ts_ambient is not None and {'n', 'vsw'}.issubset(ts_ambient):
+            rho_ambient = ts_ambient['n'].values * m_p * 1e6
+            v_ambient = ts_ambient['vsw'].values * 1e3
+            pdyn_ambient = 0.5 * rho_ambient * v_ambient**2 * 1e9
+            axes_ts[3].semilogy(ts_ambient['time'], pdyn_ambient, 'b--',
+                               linewidth=1.5, label='Ambient (no CMEs)')
         if plot_omni and {'N', 'V'}.issubset(omni_ts.columns):
             omni_n = omni_ts['N'].where((omni_ts['N'] > 0) & (omni_ts['N'] < 999))
             omni_v = omni_ts['V'].where((omni_ts['V'] > 0) & (omni_ts['V'] < 9999))
@@ -1207,6 +1230,9 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
         ax_ts = subfigs[1].subplots(1, 1)
         observation_label = 'SWPC real-time L1' if insitu_source == 'SWPC' else 'OMNI'
         ax_ts.plot(ts['time'], ts['vsw'], 'r-', linewidth=1.5, label='SURF-HUXt')
+        if ts_ambient is not None:
+            ax_ts.plot(ts_ambient['time'], ts_ambient['vsw'], 'b--',
+                       linewidth=1.5, label='Ambient (no CMEs)')
         if plot_omni:
             ax_ts.plot(omni_ts['datetime'], omni_ts['V'], 'k-',
                        linewidth=1.2, label=observation_label)
@@ -1281,12 +1307,15 @@ def plot_with_ts(model, time, save=False, tag='', fighandle=np.nan, minimalplot=
 def animate_with_ts(model, tag='', duration=10, fps=20, outputfilepath='',
                     minimalplot=False, annotateplot=True, plot_rmax=None,
                     plotHCS=True, polar_var='V', plot_omni=False,
-                    show_body_latitudes=False, bodies=None, insitu_source='OMNI'):
+                    show_body_latitudes=False, bodies=None, insitu_source='OMNI',
+                    model_ambient=None):
     """
     Animate the solar wind solution with Earth time series, and save as MP4 (or GIF fallback).
 
     Args:
         model: An instance of the SURF class with a completed solution.
+        model_ambient: Optional matching SURF solution evolved without CMEs. Its
+                       Earth time series is included in every movie frame.
         tag: String to append to the filename of the animation.
         duration: the movie duration, in seconds.
         fps: frames per second.
@@ -1327,7 +1356,8 @@ def animate_with_ts(model, tag='', duration=10, fps=20, outputfilepath='',
                      fighandle=fig, minimalplot=minimalplot, annotateplot=annotateplot,
                      plot_rmax=plot_rmax, plotHCS=plotHCS, polar_var=polar_var,
                      plot_omni=plot_omni, show_body_latitudes=show_body_latitudes,
-                     bodies=bodies, insitu_source=insitu_source)
+                     bodies=bodies, insitu_source=insitu_source,
+                     model_ambient=model_ambient)
         return frame
 
     # Create the animation
