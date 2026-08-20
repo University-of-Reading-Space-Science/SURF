@@ -44,12 +44,22 @@ imported, so restart Python after changing it.
 
 
 
-Installation through either method produces two command line tools. The first, `surf-open-examples` starts JupyterLab and opens our examples notebook in a browser. The second `huxt-make-ephemeris` runs a script that updates the HUXt ephemeris file using JPL Horizons. This is intermittently necessary to update the ephemeris data for the STEREO-A and ACE spacecraft, as JPL Horizons only provides ephemeris data for these missions a few months into the future. 
+Installation also provides the `surf-open-examples` and
+`surf-make-ephemeris` command-line tools.
 
-The desktop GUI is maintained in the separate
-[`SURFs_UP`](https://github.com/University-of-Reading-Space-Science/SURFs_UP)
-project. This keeps Qt out of the core SURF installation while allowing the
-interface to use SURF as a normal dependency.
+### SURFs_UP web interface
+
+SURFs_UP is included as the `surfs_up` package. Start its local web interface
+with either command:
+
+```powershell
+surfs-up
+surfs-up-web
+```
+
+Then open `http://127.0.0.1:5000`. The local launcher runs the background job
+worker in the same process. For a WSGI deployment, run `surfs-up-worker` as a
+separate persistent process.
 
 
 ### Testing

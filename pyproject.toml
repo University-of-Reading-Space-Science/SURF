@@ -17,6 +17,7 @@ dependencies = [
   "appdirs>=1.4.4",
   "astropy>=7.1.0",
   "dtaidistance>=2.3.13",
+  "Flask>=3.1.0",
   "h5py>=3.14.0",
   "imageio>=2.37.0",
   "imageio-ffmpeg>=0.6.0",
@@ -41,10 +42,14 @@ dependencies = [
 "surf.data.example_inputs.WSA_GONGZ" = ["*.fits"]
 "surf.data.insitu" = ["*.txt", "*.csv", "*.onnx", "*.save"]
 "surf.notebooks" = ["*.ipynb"]
+"surfs_up.web" = ["templates/*.html"]
 
 [project.scripts]
 surf-make-ephemeris = "surf.scripts.make_ephemeris:main"
 surf-open-examples = "surf.scripts.open_examples_notebook:main"
+surfs-up = "surfs_up.web.app:main"
+surfs-up-web = "surfs_up.web.app:main"
+surfs-up-worker = "surfs_up.jobs:main"
 
 [project.urls]
 Homepage = "https://github.com/University-of-Reading-Space-Science/SURF"
@@ -52,4 +57,4 @@ Repository = "https://github.com/University-of-Reading-Space-Science/SURF.git"
 Issues = "https://github.com/University-of-Reading-Space-Science/SURF/issues"
 
 [tool.setuptools.packages.find]
-include = ["surf*"]
+include = ["surf*", "surfs_up*"]

@@ -1,0 +1,2692 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SURFs_UP</title>
+  <style>
+    #startup-splash {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: grid;
+      place-items: center;
+      background: #08111f;
+      color: white;
+      font-family: "Segoe UI", Arial, sans-serif;
+      transition: opacity 220ms ease, visibility 220ms ease;
+    }
+    #startup-splash.splash-hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    .startup-splash-content {
+      text-align: center;
+    }
+    .startup-splash-spinner {
+      width: 42px;
+      height: 42px;
+      margin: 0 auto 18px;
+      border: 4px solid rgba(103, 232, 249, 0.25);
+      border-top-color: #67e8f9;
+      border-radius: 50%;
+      animation: startup-spin 0.8s linear infinite;
+    }
+    .startup-splash-title {
+      margin: 0;
+      font-size: 1.15rem;
+      font-weight: 650;
+      letter-spacing: 0.04em;
+    }
+    @keyframes startup-spin {
+      to { transform: rotate(360deg); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .startup-splash-spinner { animation: none; }
+      #startup-splash { transition: none; }
+    }
+  </style>
+  <script defer src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <style type="text/tailwindcss">
+    @theme {
+      --color-surf-50: #effcff;
+      --color-surf-500: #0891b2;
+      --color-surf-600: #0e7490;
+      --color-space-950: #08111f;
+    }
+    @layer base {
+      body { @apply min-h-screen bg-slate-100 text-slate-800 antialiased; }
+      h2 { @apply col-span-full mt-3 border-b border-slate-200 pb-2 text-xl font-semibold text-slate-900; }
+      label { @apply grid gap-1.5 text-sm font-medium text-slate-700; }
+      input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+        @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm
+               outline-none transition focus:border-surf-500 focus:ring-3 focus:ring-cyan-100;
+      }
+      input[type="file"] { @apply cursor-pointer text-slate-600 file:mr-3 file:rounded-md file:border-0
+                                  file:bg-cyan-50 file:px-3 file:py-1.5 file:font-medium file:text-surf-600; }
+      input[type="checkbox"] { @apply size-4 rounded border-slate-300 accent-surf-600; }
+      input[type="radio"] { @apply size-4 accent-surf-600; }
+      label > span { @apply flex items-center gap-2; }
+      button {
+        @apply cursor-pointer rounded-lg bg-surf-600 px-4 py-2.5 text-sm font-semibold text-white
+               shadow-sm transition hover:bg-cyan-800 focus:ring-3 focus:ring-cyan-200 disabled:opacity-50;
+      }
+      pre { @apply max-h-96 overflow-auto whitespace-pre-wrap rounded-xl bg-space-950 p-4
+                   font-mono text-xs leading-relaxed text-cyan-50 shadow-inner; }
+    }
+    @layer components {
+      .form-grid { @apply grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3; }
+      .wide, .actions { @apply col-span-full; }
+      .actions { @apply flex flex-wrap gap-3 border-t border-slate-200 pt-5; }
+      .workflow-footer { @apply items-center justify-between rounded-xl bg-slate-50 px-3 py-3; }
+      .button-group { @apply flex flex-wrap items-center gap-2; }
+      .secondary-button { @apply bg-slate-700 hover:bg-slate-800 focus:ring-slate-200; }
+      .busy-button { @apply bg-red-700 text-white hover:bg-red-700; }
+      .success-button { @apply bg-green-700 text-white hover:bg-green-700; }
+      .workflow-status { @apply min-w-40 flex-1 px-3 text-center text-sm font-medium text-slate-600; }
+      .card { @apply mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7; }
+      .error { @apply mt-5 rounded-xl border border-red-200 bg-red-50 p-4 font-medium text-red-700; }
+      .tab-button { @apply rounded-lg border border-transparent bg-slate-50 px-6 py-4 text-base font-semibold text-slate-600
+                           shadow-sm hover:border-cyan-200 hover:bg-white hover:text-slate-950 focus:ring-3 focus:ring-cyan-100; }
+      .tab-button.active { @apply border-surf-500 bg-white text-surf-600 shadow-md; }
+      .tab-button.has-new-output { @apply border-green-500 bg-green-600 text-white hover:bg-green-700 hover:text-white; }
+      .tab-button:disabled { @apply cursor-not-allowed text-slate-300 hover:bg-transparent; }
+      .tab-panel { @apply hidden; }
+      .tab-panel.active { @apply block; }
+      .tab-panel.form-grid.active { @apply grid; }
+      .group-box { @apply col-span-full rounded-xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5; }
+      .group-title { @apply mb-4 text-base font-semibold text-slate-900; }
+      .control-row { @apply grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3; }
+      .datetime-sync-row { @apply flex flex-col gap-3 sm:col-span-2 sm:flex-row sm:items-end sm:gap-6; }
+      .datetime-sync-row > label:first-child { @apply min-w-0 flex-1; }
+      .datetime-sync-row .sync-checkbox { @apply shrink-0 whitespace-nowrap pb-2; }
+      .source-choice { @apply flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200
+                              bg-white px-3 py-3 text-sm hover:border-cyan-300; }
+      .source-choice input[type="radio"] { @apply mt-0.5 shrink-0; }
+      .source-panel { @apply hidden; }
+      .source-panel.active { @apply block; }
+      .inner-tabs { @apply col-span-full mb-1 flex flex-wrap gap-1 border-b border-slate-200; }
+      .inner-tab-button { @apply rounded-b-none bg-transparent text-slate-500 shadow-none hover:bg-slate-100 hover:text-slate-900; }
+      .inner-tab-button.active { @apply border-b-3 border-surf-500 text-surf-600; }
+      .product-panel { @apply hidden; }
+      .product-panel.active { @apply block; }
+      dialog { @apply w-[min(46rem,calc(100%-2rem))] rounded-2xl border border-slate-200 bg-white p-0 shadow-2xl; }
+      dialog::backdrop { @apply bg-slate-950/55 backdrop-blur-sm; }
+      .speed-profile-editor { @apply relative w-full max-w-4xl rounded-xl border border-slate-200 bg-white p-3 shadow-inner; }
+      .speed-profile-canvas { @apply block h-64 w-full cursor-crosshair rounded-lg bg-white; touch-action: none; }
+      .speed-axis-label { writing-mode: vertical-rl; transform: rotate(180deg); }
+      input:disabled, select:disabled, textarea:disabled { @apply cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400 shadow-none; }
+      .brand-title {
+        font-family: "Segoe UI Variable Display", "Aptos Display", "Inter", "Segoe UI", sans-serif;
+        font-weight: 800;
+        letter-spacing: -0.01em;
+        line-height: 0.95;
+      }
+      .model-start-input {
+        width: 14rem !important;
+        max-width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="startup-splash" role="status" aria-live="polite" aria-label="Loading SURFs UP">
+    <div class="startup-splash-content">
+      <div class="startup-splash-spinner" aria-hidden="true"></div>
+      <p class="startup-splash-title">Loading SURFs UP…</p>
+    </div>
+  </div>
+  <script>
+    window.addEventListener("load", () => {
+      const splash = document.getElementById("startup-splash");
+      if (!splash) return;
+      splash.classList.add("splash-hidden");
+      window.setTimeout(() => splash.remove(), 250);
+    });
+  </script>
+  <header class="bg-space-950 text-white shadow-xl">
+    <div class="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+      <p class="mb-1 text-xs font-semibold tracking-wide text-cyan-300">Space-weather Utilities for Research and Forecasting (SURF)'s User Panel</p>
+      <h1 class="brand-title text-4xl sm:text-5xl">SURF's UP</h1>
+    </div>
+  </header>
+  <main class="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-10">
+  <section class="workflow-footer mb-4 flex flex-wrap gap-3 border border-slate-200 bg-white shadow-sm">
+    <div class="button-group">
+      <button type="button" id="load-configuration" class="secondary-button">Load Configuration</button>
+      <button type="button" id="save-configuration" class="secondary-button">Save Configuration</button>
+      <input id="configuration-file" type="file" accept=".json" class="hidden">
+    </div>
+    <p class="workflow-status" id="workflow-status">
+      {% if error %}Configuration error
+      {% elif result and result.success %}Run completed
+      {% elif result %}Run failed
+      {% elif code %}Code generated
+      {% else %}Ready{% endif %}
+    </p>
+    <div class="button-group">
+      <button type="button" class="secondary-button" id="show-generated-code">Show Code</button>
+      <button type="button" class="secondary-button" id="show-terminal-output"
+              {% if not result %}disabled{% endif %}>
+        Show Terminal Output
+      </button>
+      <button type="submit" form="simulation-form" name="action" value="run" id="run-surf-button"
+              {% if result and result.success %}class="success-button"{% endif %}>
+        {% if result and result.success %}Run Complete{% else %}Run SURF{% endif %}
+      </button>
+    </div>
+  </section>
+  <nav class="mb-6 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-sm"
+       aria-label="SURF workflow">
+    <div class="flex min-w-max items-stretch justify-between gap-2" role="tablist">
+      <div class="flex min-w-max">
+        <button class="tab-button active" type="button" role="tab" data-tab="model">Model specification</button>
+        <button class="tab-button" type="button" role="tab" data-tab="ambient">Ambient wind</button>
+        <button class="tab-button" type="button" role="tab" data-tab="cme">CMEs</button>
+        {% if run_id %}
+        <span class="mx-3 border-l border-slate-200" id="post-run-tab-spacer"></span>
+        <button class="tab-button" type="button" role="tab" data-tab="plots">Plots</button>
+        <button class="tab-button" type="button" role="tab" data-tab="movies"
+                {% if not show_movies %}disabled aria-disabled="true" title="Movies are unavailable for 1D runs"{% endif %}>Movies</button>
+        {% endif %}
+      </div>
+      <button class="tab-button" type="button" role="tab" data-tab="outputs">Outputs</button>
+    </div>
+  </nav>
+
+  <form class="card mt-0" id="simulation-form" method="post" enctype="multipart/form-data" novalidate>
+    <section class="tab-panel form-grid active" data-panel="model" role="tabpanel">
+    <fieldset class="group-box">
+      <legend class="group-title px-1">Model Parameters</legend>
+      <div class="grid gap-4">
+        <div class="grid items-end gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
+          <div class="grid gap-1.5">
+            <span class="text-sm font-medium text-slate-700">Model start date (default: 5 days prior to forecast date, to allow CME propagation)</span>
+            <label><span class="sr-only">Model start date</span>
+              <input class="model-start-input" name="start_datetime" id="model-start-datetime" type="datetime-local" step="1" value="{{ default_start }}">
+            </label>
+          </div>
+          <label class="grid gap-1.5"><span class="text-sm font-medium text-slate-700">Run end date</span>
+            <input id="model-end-datetime" type="datetime-local" step="1">
+          </label>
+          <label class="grid gap-1.5"><span class="text-sm font-medium text-slate-700">Run time (days)</span>
+            <input name="simtime_days" id="model-simtime-days" type="number" min="0.1" step="0.1" value="10">
+          </label>
+        </div>
+        <div class="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-[auto_minmax(7rem,1fr)_auto_minmax(10rem,1fr)_auto_minmax(10rem,1fr)_minmax(12rem,auto)]">
+          <span class="pb-2 text-sm font-medium text-slate-600">CR</span>
+          <label><span class="sr-only">Carrington rotation</span>
+            <input name="cr_num" id="model-cr-number" type="number" value="{{ default_cr_num }}">
+          </label>
+          <span class="pb-2 text-sm font-medium text-slate-600">Earth Carr lon at start (deg)</span>
+          <label><span class="sr-only">Earth Carrington longitude in degrees</span>
+            <input name="cr_lon_init_deg" id="model-cr-longitude" type="number" step="0.1" value="{{ '%.1f'|format(default_cr_lon) }}">
+          </label>
+          <span class="pb-2 text-sm font-medium text-slate-600">Solver</span>
+          <label><span class="sr-only">Solver</span>
+            <select name="solver"><option value="huxt">HUXt</option><option value="hydro">hydro</option><option value="huxt-pui">HUXt + PUI</option><option value="hydro-pui">hydro + PUI</option></select>
+          </label>
+          <label class="pb-2"><span><input name="include_bpol" type="checkbox"> Include B polarity</span></label>
+        </div>
+      </div>
+    </fieldset>
+    <fieldset class="group-box">
+      <legend class="group-title px-1">Coordinate settings</legend>
+      <div class="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(12rem,1fr)_auto_minmax(8rem,0.65fr)_minmax(18rem,1.6fr)]">
+        <label class="grid gap-1.5"><span class="whitespace-nowrap text-sm font-medium text-slate-700">Model latitude</span><input class="w-full min-w-0" name="latitude" id="model-latitude" type="number" step="0.1" value="{{ '%.2f'|format(default_latitude) }}"></label>
+        <label class="pb-2"><span><input name="average_body_latitude" id="average-body-latitude" type="checkbox" checked> Use average latitude of body</span></label>
+        <label class="grid gap-1.5"><span class="text-sm font-medium text-slate-700">Body</span><select name="latitude_body" id="latitude-body">
+          {% for body in ["Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "New Horizons"] %}<option{% if body == "Earth" %} selected{% endif %}>{{ body }}</option>{% endfor %}
+          {% for body in ["STEREO-A", "STEREO-B", "Parker Solar Probe", "Solar Orbiter"] %}<option data-spacecraft="true" disabled>{{ body }}</option>{% endfor %}
+        </select></label>
+        <label class="grid gap-1.5"><span class="text-sm font-medium text-slate-700">Frame</span><select name="frame"><option value="synodic">Synodic (recommended for 1D runs)</option><option value="sidereal">Sidereal (recommended for 2D runs)</option></select></label>
+      </div>
+      <div class="mt-4 grid items-start gap-4 lg:grid-cols-[minmax(18rem,auto)_1fr]">
+        <div class="grid gap-3">
+          <label><span><input name="is_1d" id="model-is-1d" type="checkbox" checked> Run as 1D (single longitude)</span></label>
+          <div class="grid items-end gap-3 sm:grid-cols-[auto_minmax(10rem,1fr)]">
+            <label class="pb-2"><span><input name="clamp_longitude_to_body" id="clamp-longitude-to-body" type="checkbox"> Clamp longitude to body</span></label>
+            <label class="grid gap-1.5 opacity-50" id="clamp-longitude-body-label"><span class="text-sm font-medium text-slate-700">Body</span><select name="clamp_longitude_body" id="clamp-longitude-body" disabled>
+              {% for value, label in [("Earth","Earth"),("Mercury","Mercury"),("Venus","Venus"),("Mars","Mars"),("Jupiter","Jupiter"),("Saturn","Saturn"),("Uranus","Uranus"),("NEW_HORIZONS","New Horizons"),("PSP","Parker Solar Probe"),("SOLO","Solar Orbiter"),("STA","STEREO-A"),("STB","STEREO-B"),("ULYSSES","Ulysses")] %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+            </select></label>
+          </div>
+        </div>
+        <div id="model-longitude-row" class="grid items-end gap-3 lg:grid-cols-[auto_1fr_auto_1fr]">
+          <span class="pb-2 text-sm font-medium text-slate-600">Longitude range (deg)</span>
+          <label><span class="sr-only">Longitude start in degrees</span><input name="lon_min" type="number" value="0"></label>
+          <span class="pb-2 text-sm font-medium text-slate-600">to</span>
+          <label><span class="sr-only">Longitude stop in degrees</span><input name="lon_max" type="number" value="360"></label>
+        </div>
+      </div>
+    </fieldset>
+    <fieldset class="group-box">
+      <legend class="group-title px-1">Advanced</legend>
+      <div class="grid gap-4">
+        <div class="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-[auto_1fr_auto_1fr]">
+          <span class="pb-2 text-sm font-medium text-slate-600">Radial bounds — rmin (Rs)</span>
+          <label><span class="sr-only">Inner radius in solar radii</span><input name="rmin" id="model-rmin" type="number" step="0.1" value="21.5"></label>
+          <span class="pb-2 text-sm font-medium text-slate-600">rmax (Rs)</span>
+          <label><span class="sr-only">Outer radius in solar radii</span><input name="rmax" type="number" step="0.1" value="240"></label>
+        </div>
+        <div class="grid items-end gap-3 sm:grid-cols-3 lg:grid-cols-[auto_1fr_auto_1fr_auto_1fr]">
+          <span class="pb-2 text-sm font-medium text-slate-600">Grid — dr (Rs)</span>
+          <label><span class="sr-only">Radial grid spacing in solar radii</span><input name="dr_rs" type="number" step="0.01" value="1.5"></label>
+          <span class="pb-2 text-sm font-medium text-slate-600">nlon</span>
+          <label><span class="sr-only">Longitude grid points</span><input name="nlon" type="number" step="1" value="128"></label>
+          <span class="pb-2 text-sm font-medium text-slate-600">vmax (km/s)</span>
+          <label><span class="sr-only">Maximum grid speed in kilometres per second</span><input name="vmax_kms" type="number" step="100" value="3000"></label>
+        </div>
+        <div class="grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-[auto_1fr_auto_1fr_auto_1fr]">
+          <span class="pb-2 text-sm font-medium text-slate-600">dt scale</span>
+          <label><span class="sr-only">Time-step scale</span><input name="dt_scale" type="number" min="1" step="1" value="4" data-auto-default="true"></label>
+          <label class="pb-2"><span><input name="chunked_solve" type="checkbox" checked> Run in chunks (days)</span></label>
+          <label><span class="sr-only">Chunk size in days</span><input name="chunk_size_days" type="number" min="0.01" step="0.1" value="3"></label>
+          <div class="contents" id="model-gamma-row">
+          <span class="pb-2 text-sm font-medium text-slate-600">Gamma</span>
+          <label><span class="sr-only">Adiabatic index gamma</span><input name="gamma" id="model-gamma" type="number" step="0.01" value="1.5"></label>
+          </div>
+        </div>
+        <div class="grid items-end gap-3 lg:grid-cols-[minmax(12rem,auto)_auto_1fr]">
+          <label class="pb-2"><span><input name="streak_lines_enabled" type="checkbox"> Enable streak lines</span></label>
+          <span class="pb-2 text-sm font-medium text-slate-600">Spacing (deg)</span>
+          <label><span class="sr-only">Streak-line spacing in degrees</span><input name="streak_spacing_deg" type="number" value="10"></label>
+        </div>
+        <label><span><input name="track_cmes" type="checkbox"> Track CME fronts</span></label>
+      </div>
+    </fieldset>
+    </section>
+
+    <section class="tab-panel form-grid" data-panel="ambient" role="tabpanel">
+    <input type="hidden" name="ambient_source" id="ambient-source" value="wsa_iswa">
+    <div class="inner-tabs wide" id="ambient-source-tabs">
+      {% for value, label in [
+        ("mas", "MAS (PredSci)"), ("wsa_iswa", "WSA (ISWA)"),
+        ("omni_group", "In Situ"), ("user_specified_group", "User specified")
+      ] %}
+      <button type="button" class="inner-tab-button ambient-tab-button {% if value == 'wsa_iswa' %}active{% endif %}"
+              data-ambient-tab="{{ value }}">{{ label }}</button>
+      {% endfor %}
+    </div>
+    <fieldset class="group-box source-panel" data-source-panel="mas">
+      <legend class="group-title px-1">HelioMAS boundary profile</legend>
+      <div class="control-row">
+        <label>Carrington rotation<input name="mas_cr_num" id="mas-cr-number" type="number" value="2000"></label>
+        <label>Map radius (Rs)<input name="mas_source_radius_rs" type="number" min="1" step="0.1" value="30"></label>
+        <label><span><input name="mas_decelerate" type="checkbox" checked> Decelerate to inner boundary</span></label>
+        <label><span><input name="mas_use_map_time" id="mas-use-map-time" type="checkbox" checked> Use map time - 5 days as model start time</span></label>
+      </div>
+      <div class="mt-4"><button type="button" onclick="showAmbientPlot(this)">Plot MAS input</button></div>
+    </fieldset>
+    <fieldset class="group-box source-panel active" data-source-panel="wsa_iswa">
+      <legend class="group-title px-1">WSA map from ISWA</legend>
+      <div class="control-row">
+        <div class="datetime-sync-row">
+          <label>Map date/time<input name="iswa_map_date" id="iswa-map-date" type="datetime-local" step="1" value="{{ default_iswa_map_datetime }}"></label>
+          <label class="sync-checkbox"><span><input name="iswa_use_model_start" id="iswa-use-model-start" type="checkbox" checked> Use map time - 5 days as model start time</span></label>
+        </div>
+        <p class="wide text-slate-600">Downloads the newest available WSA map at or before the selected map date/time.</p>
+        <label><span><input name="iswa_decelerate" type="checkbox" checked> Decelerate to inner boundary</span></label>
+        <label>Map radius (Rs)<input name="iswa_source_radius_rs" type="number" min="1" step="0.1" value="21.5"></label>
+        <label><span><input name="iswa_speed_reduction" type="checkbox" checked> Apply WSA speed reduction</span></label>
+      </div>
+      <div class="mt-4"><button type="button" onclick="showAmbientPlot(this)">Plot WSA input</button></div>
+    </fieldset>
+    <fieldset class="group-box source-panel" data-source-panel="omni_group">
+      <legend class="group-title px-1">In Situ boundary conditions</legend>
+      <div class="inner-tabs" data-inner-tabs="omni-boundaries">
+        <button type="button" class="inner-tab-button active" data-inner-tab="omni-backmapped"
+                data-omni-source="insitu_backmapped">Backmapped boundary</button>
+        <button type="button" class="inner-tab-button" data-inner-tab="omni-outwards"
+                data-omni-source="omni">Run from 1 AU outwards</button>
+      </div>
+      <div class="mb-4 flex flex-wrap items-end gap-3">
+        <label>Remove ICMEs using
+          <select name="omni_icme_list" id="omni-icme-list">
+            <option value="None">None</option>
+            <option value="CaneRichardson">CaneRichardson</option>
+            <option value="DONKI">DONKI</option>
+          </select>
+        </label>
+        <label id="donki-icme-quality-field">Minimum DONKI ICME quality
+          <select name="donki_icme_min_quality" id="donki-icme-min-quality">
+            <option value="2">2 — Clear signatures only</option>
+            <option value="1" selected>1 — Lacks some signatures or better</option>
+            <option value="0">0 — Weak signatures or better</option>
+            <option value="-1">−1 — Include unspecified</option>
+          </select>
+        </label>
+        <div class="contents" id="insitu-icme-buffer-fields">
+          <label>ICME buffer before (days)
+            <input name="insitu_pre_icme_buffer_days" id="insitu-pre-icme-buffer-days"
+                   type="number" min="0" step="0.1" value="0.2">
+          </label>
+          <label>ICME buffer after (days)
+            <input name="insitu_post_icme_buffer_days" id="insitu-post-icme-buffer-days"
+                   type="number" min="0" step="0.1" value="1">
+          </label>
+        </div>
+      </div>
+      <div>
+        <section class="product-panel active rounded-xl border border-slate-200 bg-white p-4"
+                 data-inner-panel="omni-backmapped">
+          <input type="radio" class="hidden" name="ambient_source_choice"
+                 value="insitu_backmapped" checked>
+          <p class="mb-4 text-sm text-slate-600">Use 1-AU data to infer the inner-boundary solar wind.</p>
+          <div class="control-row">
+            <label>Mode <select name="insitu_mode" id="insitu-mode">
+              <option value="forecast">Forecast</option>
+              <option value="reconstruction">Reconstruction (requires 27 days of data after run end time)</option>
+            </select></label>
+            <label>Spacecraft <select name="insitu_spacecraft" id="insitu-spacecraft">
+              <option value="OMNI"{% if default_insitu_source == "OMNI" %} selected{% endif %}>OMNI</option>
+              <option value="SWPC"{% if default_insitu_source == "SWPC" %} selected{% endif %}>SWPC real-time L1</option>
+              <option value="STEREO-A">STEREO-A</option>
+            </select></label>
+            <label>Forecast time<input name="omni_forecast_datetime" id="omni-forecast-datetime" type="datetime-local" step="1"></label>
+          </div>
+        </section>
+        <section class="product-panel rounded-xl border border-slate-200 bg-white p-4"
+                 data-inner-panel="omni-outwards">
+          <input type="radio" class="hidden" name="ambient_source_choice" value="omni">
+          <p class="text-sm text-slate-600">Use the OMNI boundary at 1 AU and propagate the solar wind outwards.</p>
+          <label class="mt-4"><span><input name="use_215_inner_boundary" type="checkbox"> Set model inner boundary to 215 Rs</span></label>
+        </section>
+      </div>
+    </fieldset>
+    <fieldset class="group-box source-panel" data-source-panel="user_specified_group">
+      <legend class="group-title px-1">User-specified boundary</legend>
+      <div class="inner-tabs" data-inner-tabs="user-boundaries">
+        <button type="button" class="inner-tab-button" data-inner-tab="user-wsa"
+                data-user-source="wsa">WSA</button>
+        <button type="button" class="inner-tab-button" data-inner-tab="user-cortom"
+                data-user-source="cortom">CorTom</button>
+        <button type="button" class="inner-tab-button active" data-inner-tab="user-line"
+                data-user-source="user_specified">Line method</button>
+      </div>
+      <div>
+        <section class="product-panel rounded-xl border border-slate-200 bg-white p-4"
+                 data-inner-panel="user-wsa">
+          <input type="radio" class="hidden" name="ambient_source_choice" value="wsa">
+          <div class="control-row">
+            <label class="wide">File<input name="wsa_file" id="wsa-file" type="file" accept=".fits"></label>
+            <label>Map radius (Rs)<input name="wsa_source_radius_rs" type="number" min="1" step="0.1" value="21.5"></label>
+            <label><span><input name="wsa_decelerate" type="checkbox" checked> Decelerate to inner boundary</span></label>
+            <label><span><input name="wsa_speed_reduction" type="checkbox" checked> Apply WSA speed reduction</span></label>
+            <label><span><input name="wsa_use_map_time" id="wsa-use-map-time" type="checkbox" checked> Use map time - 5 days as model start time</span></label>
+          </div>
+          <p class="wide mt-3 text-slate-600" id="wsa-file-status">No file selected.</p>
+          <div class="mt-4"><button type="button" onclick="selectAmbientSourceAndPlot('wsa', this)">Plot WSA input</button></div>
+        </section>
+        <section class="product-panel rounded-xl border border-slate-200 bg-white p-4"
+                 data-inner-panel="user-cortom">
+          <input type="radio" class="hidden" name="ambient_source_choice" value="cortom">
+          <div class="control-row">
+            <label class="wide">File<input name="cortom_file" id="cortom-file" type="file" accept=".dat"></label>
+            <label>Map radius (Rs)<input name="cortom_source_radius_rs" type="number" min="1" step="0.1" value="8"></label>
+            <label><span><input name="cortom_decelerate" type="checkbox" checked> Decelerate to inner boundary</span></label>
+            <label><span><input name="cortom_use_map_time" id="cortom-use-map-time" type="checkbox" checked> Use map time - 5 days as model start time</span></label>
+          </div>
+          <p class="wide mt-3 text-slate-600" id="cortom-file-status">No file selected.</p>
+          <div class="mt-4"><button type="button" onclick="selectAmbientSourceAndPlot('cortom', this)">Plot CorTom input</button></div>
+        </section>
+        <section class="product-panel active rounded-xl border border-slate-200 bg-white p-4"
+                 data-inner-panel="user-line">
+          <input type="radio" class="hidden" name="ambient_source_choice"
+                 value="user_specified">
+          <p class="mb-4 text-sm text-slate-600">Set solar-wind speed (km/s) at 128 Carrington longitudes. Changes are periodic across 0/360°.</p>
+          <div class="button-group mb-4">
+            <button type="button" class="secondary-button" id="reset-speed-profile">Reset</button>
+            <button type="button" class="secondary-button" id="smooth-speed-profile">Smooth</button>
+            <button type="button" class="secondary-button" id="randomise-speed-profile">Randomise</button>
+          </div>
+          <div class="speed-profile-editor">
+            <div class="flex items-stretch gap-3">
+              <div class="speed-axis-label flex items-center justify-center text-xs font-semibold text-slate-600">
+                Solar wind speed (km/s)
+              </div>
+              <div class="min-w-0 flex-1">
+                <canvas id="speed-profile-canvas" class="speed-profile-canvas" height="260"></canvas>
+            <div class="mt-1 flex justify-between text-xs text-slate-500"><span>0°</span><span>Carrington longitude</span><span>360°</span></div>
+          </div>
+            </div>
+          </div>
+          <textarea name="speed_profile" id="speed-profile" class="hidden"></textarea>
+          <input name="speed_kms" type="hidden" value="400">
+        </section>
+      </div>
+    </fieldset>
+    </section>
+
+    <section class="tab-panel form-grid" data-panel="cme" role="tabpanel">
+    <fieldset class="group-box">
+      <legend class="group-title px-1">Cone CME lists (typically for model inner boundary at 0.1 AU)</legend>
+      <div class="grid gap-4">
+        <fieldset class="rounded-lg border border-slate-200 p-4">
+          <legend class="px-1 text-sm font-semibold text-slate-700">CME defaults</legend>
+          <div class="control-row">
+            <label>Profile type<select name="donki_profile_type" id="donki-profile"><option>square</option><option>sinusoidal</option></select></label>
+            <label>Plasma mode<select name="donki_plasma_mode" id="donki-plasma-mode"><option>Fraction of ambient</option><option>Absolute values</option></select></label>
+            <label>Density fraction<input name="donki_density_fraction" id="donki-density-fraction" type="number" value="1" step="0.1"></label>
+            <label>Temperature fraction<input name="donki_temperature_fraction" id="donki-temperature-fraction" type="number" value="1" step="0.1"></label>
+            <label>CME density (p+/cm³)<input name="donki_cme_density_pcc" id="donki-density" type="number" value="{{ default_cme_density_pcc }}" step="1"></label>
+            <label>CME temperature (K)<input name="donki_cme_temperature_k" id="donki-temperature" type="number" value="{{ default_cme_temperature_k }}" step="1000"></label>
+            <label>Thickness (Rs)<input name="donki_thickness_rs" id="donki-thickness" type="number" value="0" step="0.5"></label>
+            <label>Initial height (Rs)<input name="donki_initial_height_rs" id="donki-initial-height" type="number" value="21.5" step="0.5"></label>
+            <label>Fixed duration (hours)<input name="donki_fixed_duration_hr" id="donki-duration" type="number" value="12" step="0.5"></label>
+            <label><span><input name="donki_cme_expansion" id="donki-expansion" type="checkbox"> Expansion</span></label>
+            <label><span><input name="donki_cme_fixed_duration" id="donki-fixed-duration" type="checkbox" checked> Fixed duration</span></label>
+          </div>
+        </fieldset>
+        <label>
+          <span><input name="grab_donki_at_run_start" type="checkbox" checked>
+            Grab DONKI CMEs at run start</span>
+        </label>
+        <label>
+          <span><input name="run_ambient_solution" type="checkbox">
+            Also run ambient solution (no CMEs)</span>
+        </label>
+        <label>DONKI feature<select name="donki_feature" id="donki-feature"><option value="LE">Leading edge (LE) (default)</option><option value="SH">Shock (SH)</option><option value="null">Unspecified / null (for early DONKI catalogue use)</option></select></label>
+        <div class="grid items-center gap-3 sm:grid-cols-[auto_1fr]">
+          <button type="button" id="load-donki">Grab the DONKI CMEs now</button>
+          <p id="donki-status" class="text-sm text-slate-500">Uses the current model start and run duration.</p>
+        </div>
+        <div class="grid items-center gap-3 sm:grid-cols-[auto_1fr]">
+          <button type="button" id="choose-cone-file">Load a user-supplied Cone CME list</button>
+          <input name="cone_file" id="cone-file" class="hidden" type="file" accept=".in">
+          <p id="cone-file-status" class="text-sm text-slate-500">No cone file loaded.</p>
+        </div>
+      </div>
+    </fieldset>
+    <fieldset class="group-box">
+      <legend class="group-title px-1">Manually add cone CME</legend>
+      <button type="button" id="open-cme-editor">Open manual CME editor</button>
+    </fieldset>
+    <dialog id="cme-editor">
+      <div class="p-5 sm:p-7">
+          <h3 class="mb-5 text-xl font-semibold text-slate-900" id="cme-editor-title">Manually add cone CME</h3>
+      <div class="control-row">
+        <label>HEEQ longitude (deg)<input id="cme-longitude" type="number" value="0" step="1"></label>
+        <label>HEEQ latitude (deg)<input id="cme-latitude" type="number" value="0" step="1"></label>
+        <label>Speed (km/s)<input id="cme-speed" type="number" value="800" step="10"></label>
+        <label>Full angular width (deg)<input id="cme-width" type="number" value="60" step="1"></label>
+        <label>Launch day (days after run start)<input id="cme-launch-day" type="number" value="0.5" step="0.1"></label>
+        <label>Launch datetime (UTC)<input id="cme-launch-datetime" type="datetime-local"></label>
+        <label>Thickness (Rs)<input id="cme-thickness" type="number" value="5" step="0.5"></label>
+        <label>Initial height (Rs)<input id="cme-initial-height" type="number" value="21.5" step="0.5"></label>
+        <label>Fixed duration (hours)<input id="cme-duration" type="number" value="12" step="0.5"></label>
+        <label>Profile type<select id="cme-profile"><option>square</option><option>sinusoidal</option></select></label>
+        <label>Plasma mode<select id="cme-plasma-mode"><option>Fraction of ambient</option><option>Absolute values</option></select></label>
+        <label>Density fraction<input id="cme-density-fraction" type="number" value="1" step="0.1"></label>
+        <label>Temperature fraction<input id="cme-temperature-fraction" type="number" value="1" step="0.1"></label>
+        <label>CME density (p+/cm³)<input id="cme-density" type="number" value="{{ default_cme_density_pcc }}" step="1"></label>
+        <label>CME temperature (K)<input id="cme-temperature" type="number" value="{{ default_cme_temperature_k }}" step="1000"></label>
+        <label><span><input id="cme-expansion" type="checkbox"> Expansion</span></label>
+        <label><span><input id="cme-fixed-duration" type="checkbox" checked> Fixed duration</span></label>
+      </div>
+      <div class="mt-6 flex justify-end gap-2 border-t border-slate-200 pt-4">
+        <button class="secondary-button" type="button" id="cancel-cme-editor">Cancel</button>
+        <button type="button" id="add-cme">Add CME</button>
+      </div>
+      </div>
+    </dialog>
+    <fieldset class="group-box">
+      <legend class="group-title px-1">CME List</legend>
+      <input type="hidden" name="cmes_json" id="cmes-json" value="[]">
+      <p class="mb-2 text-xs text-slate-500">Earth-intersecting launch cones are shown in bold (from HEEQ latitude, longitude, and width).</p>
+      <div id="cme-list" class="space-y-2 text-sm text-slate-600">
+        <p id="empty-cme-list">No CMEs added.</p>
+      </div>
+      <div class="mt-4 flex gap-2">
+        <button type="button" id="edit-selected-cme" disabled>Edit Selected</button>
+        <button class="bg-red-700 hover:bg-red-800" type="button" id="remove-selected-cme" disabled>Remove Selected</button>
+        <button class="bg-red-700 hover:bg-red-800" type="button" id="clear-cmes">Clear All</button>
+      </div>
+    </fieldset>
+    </section>
+  </form>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  {% if result %}
+    <dialog id="terminal-output-dialog">
+      <div class="p-5 sm:p-7">
+        <div class="mb-4 flex items-center justify-between gap-3">
+          <h2 class="m-0">{{ result.message }}</h2>
+          <button type="button" class="secondary-button" onclick="this.closest('dialog').close()">Close</button>
+        </div>
+        <pre>{{ result.output or "(No terminal output.)" }}</pre>
+      </div>
+    </dialog>
+  {% endif %}
+    <section class="card tab-panel" data-panel="plots" role="tabpanel">
+      {% if run_id %}
+      <form class="form-grid wide" id="plots-form" onsubmit="return false">
+        <div class="inner-tabs" data-inner-tabs="plot-products">
+          <button type="button" class="inner-tab-button" data-inner-tab="map-product">2D Map</button>
+          <button type="button" class="inner-tab-button" data-inner-tab="radial-product">Radial Profile</button>
+          <button type="button" class="inner-tab-button active" data-inner-tab="timeseries-product">Time Series</button>
+        </div>
+        <section class="product-panel wide" id="map-controls" data-inner-panel="map-product">
+          <h3 class="sr-only">2D Map (sa.plot)</h3>
+          <div class="grid gap-3">
+            <label class="grid max-w-2xl items-center gap-3 sm:grid-cols-[10rem_1fr]">Time (days)
+              <input id="plot-time" type="number" min="0" max="1000" step="0.1" value="1.5">
+            </label>
+            <fieldset class="body-selector w-full rounded-lg border border-slate-200 p-3">
+              <legend class="px-1 text-sm font-medium text-slate-700">Bodies</legend>
+              <div class="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-2">
+                {% for value, label in plot_body_choices %}<label><span><input class="map-body" type="checkbox" value="{{ value }}"{% if value in default_plot_bodies %} checked{% endif %}> {{ label }}</span></label>{% endfor %}
+              </div>
+            </fieldset>
+            <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <label><span><input id="map-minimal" type="checkbox"> Minimal plot</span></label>
+              <label><span><input id="map-hcs" type="checkbox" checked> Plot HCS</span></label>
+              <label><span><input id="map-annotate" type="checkbox" checked> Annotate plot</span></label>
+              <label><span><input id="map-body-latitudes" type="checkbox"> Show body latitudes in legend</span></label>
+              <label><span><input id="map-earth" type="checkbox"> Trace Earth connection (slow)</span></label>
+              <label><span><input id="map-limit-rmax" type="checkbox"> Limit outer radius (Rs)</span></label>
+              <input class="max-w-40" aria-label="Outer radius in solar radii" id="map-rmax"
+                     type="number" min="1" max="5000" value="240" step="5" disabled>
+            </div>
+            <div><button type="button" onclick="showPlot('map', this)">Plot 2D Map</button></div>
+          </div>
+        </section>
+        <section class="product-panel wide" data-inner-panel="radial-product">
+          <h3 class="sr-only">Radial Profile (sa.plot_radial)</h3>
+          <div class="grid max-w-2xl gap-3">
+            <label class="grid items-center gap-3 sm:grid-cols-[10rem_1fr]">Time (days)
+              <input id="radial-time" type="number" min="0" max="1000" step="0.1" value="1.5">
+            </label>
+            <label class="grid items-center gap-3 sm:grid-cols-[10rem_1fr]">Longitude (deg)
+              <input id="radial-lon" type="number" min="-360" max="360" step="1" value="0">
+            </label>
+            {% if ambient_model_available %}<label><span><input class="show-ambient-solution" type="checkbox"> Show ambient solution</span></label>{% endif %}
+            <div><button type="button" onclick="showPlot('radial', this)">Plot Radial Profile</button></div>
+          </div>
+        </section>
+        <section class="product-panel active wide" data-inner-panel="timeseries-product">
+          <h3 class="sr-only">Time Series (sa.plot_timeseries)</h3>
+          <div class="grid max-w-3xl gap-3">
+            <div class="grid items-center gap-3 sm:grid-cols-[10rem_1fr_auto]">
+              <label for="timeseries-observer" class="text-sm font-medium text-slate-700">Location</label>
+              <select id="timeseries-observer">
+                {% for value, label in [("Earth","Earth"),("Mercury","Mercury"),("Venus","Venus"),
+                  ("Mars","Mars"),("Jupiter","Jupiter"),("Saturn","Saturn"),("Uranus","Uranus"),
+                  ("PSP","Parker Solar Probe"),("SOLO","Solar Orbiter"),("STA","STEREO-A"),
+                  ("STB","STEREO-B"),("ULYSSES","Ulysses"),("custom","Custom coordinates")] %}
+                <option value="{{ value }}">{{ label }}</option>{% endfor %}
+                {% if ("NEW_HORIZONS", "New Horizons") in plot_body_choices %}<option value="New Horizons">New Horizons</option>{% endif %}
+              </select>
+              <label id="timeseries-insitu-option"><span><input id="timeseries-plot-omni" type="checkbox" checked> <span id="timeseries-insitu-label">Plot observations</span></span></label>
+            </div>
+            <label id="timeseries-earth-source" class="grid items-center gap-3 sm:grid-cols-[10rem_1fr]">Earth observations
+              <select id="timeseries-insitu-source"><option value="OMNI"{% if default_insitu_source == "OMNI" %} selected{% endif %}>OMNI</option><option value="SWPC"{% if default_insitu_source == "SWPC" %} selected{% endif %}>SWPC real-time L1</option></select>
+            </label>
+            <p class="text-sm text-slate-500">Standard locations follow each observer's ephemeris throughout the run. Custom longitude is fixed on the SURF model grid: HEEQ/model longitude at run start for sidereal runs, or corotating model longitude for synodic runs.</p>
+            {% if ambient_model_available %}<label><span><input class="show-ambient-solution" type="checkbox"> Show ambient solution</span></label>{% endif %}
+            <div class="hidden grid-cols-1 items-end gap-3 sm:grid-cols-[10rem_1fr_1fr]" id="timeseries-custom-coordinates">
+              <span class="pb-2 text-sm font-medium text-slate-700">Custom coordinates</span>
+              <label>Radius (AU)<input id="plot-radius" type="number" min="0.1" max="10" step="0.1" value="1"></label>
+              <label>Fixed model longitude (deg)<input id="timeseries-lon" type="number" min="-360" max="360" step="1" value="0"></label>
+            </div>
+            <div class="button-group">
+              <button type="button" onclick="showPlot('timeseries', this)">Plot Time Series</button>
+              <button type="button" class="secondary-button" onclick="downloadTimeseries(this)">Export Time Series CSV</button>
+            </div>
+          </div>
+        </section>
+      </form>
+      {% else %}
+      <p class="text-slate-500">Run SURF successfully to enable plots.</p>
+      {% endif %}
+    </section>
+
+    {% if show_movies %}
+    <section class="card tab-panel" data-panel="movies" role="tabpanel">
+      {% if run_id %}
+      <form class="form-grid wide" id="movies-form" onsubmit="return false">
+        <div class="grid wide gap-4">
+          <div class="grid max-w-4xl gap-3 sm:grid-cols-3">
+            <label>Tag<input id="movie-tag" value="gui"></label>
+            <label>Duration (s)<input id="movie-duration" type="number" min="1" max="600" value="10"></label>
+            <label>Frame rate (fps)<input id="movie-fps" type="number" min="1" max="60" value="5"></label>
+          </div>
+          <div class="flex max-w-4xl flex-wrap items-center gap-4">
+            <label id="movie-hcs-label" class="opacity-50"><span><input id="movie-hcs" type="checkbox" checked disabled> Plot HCS</span></label>
+            <label><span><input id="movie-body-latitudes" type="checkbox"> Show body latitudes in legend</span></label>
+            <label><span><input id="movie-limit-rmax" type="checkbox"> Limit outer radius (Rs)</span></label>
+            <input class="max-w-40" aria-label="Movie outer radius in solar radii" id="movie-rmax"
+                   type="number" min="1" max="5000" value="240" step="5" disabled>
+          </div>
+          <fieldset class="body-selector w-full rounded-lg border border-slate-200 p-3">
+            <legend class="px-1 text-sm font-medium text-slate-700">Bodies</legend>
+            <div class="grid grid-cols-[repeat(auto-fit,minmax(9rem,1fr))] gap-2">
+              {% for value, label in plot_body_choices %}<label><span><input class="movie-body" type="checkbox" value="{{ value }}"{% if value in default_plot_bodies %} checked{% endif %}> {{ label }}</span></label>{% endfor %}
+            </div>
+          </fieldset>
+        </div>
+        <div class="inner-tabs" data-inner-tabs="movie-products">
+          <button type="button" class="inner-tab-button active" data-inner-tab="map-movie">2D Movie</button>
+          <button type="button" class="inner-tab-button" data-inner-tab="timeseries-movie">Movie with Time Series</button>
+        </div>
+        <section class="product-panel active wide" data-inner-panel="map-movie">
+          <h3 class="sr-only">Animation (sa.animate)</h3>
+          <div class="grid max-w-4xl gap-4">
+            <input id="movie-output" type="hidden">
+            <div><button type="button" onclick="downloadMovie('map', this)">Create 2D Movie</button></div>
+          </div>
+        </section>
+        <section class="product-panel wide" data-inner-panel="timeseries-movie">
+          <h3 class="sr-only">Animation with time series (sa.animate_with_ts)</h3>
+          <div class="grid max-w-4xl gap-4">
+            <div class="flex flex-wrap items-center gap-4">
+              <label><span><input id="movie-ts-omni" type="checkbox" checked> Plot observations</span></label>
+              <label>Earth observations <select id="movie-ts-insitu-source"><option value="OMNI"{% if default_insitu_source == "OMNI" %} selected{% endif %}>OMNI</option><option value="SWPC"{% if default_insitu_source == "SWPC" %} selected{% endif %}>SWPC real-time L1</option></select></label>
+              {% if ambient_model_available %}<label><span><input id="movie-ts-ambient" type="checkbox"> Show ambient solution</span></label>{% endif %}
+            </div>
+            <label class="grid items-center gap-3 sm:grid-cols-[6rem_1fr]">Field
+              <select id="movie-ts-field"><option>P_DYN</option><option selected>V</option><option>n</option><option>T</option></select>
+            </label>
+            <input id="movie-ts-output" type="hidden">
+            <div><button type="button" onclick="downloadMovie('timeseries', this)">Create Movie With Time Series</button></div>
+          </div>
+        </section>
+      </form>
+      {% else %}
+      <p class="text-slate-500">Run SURF successfully to enable movies.</p>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    <section class="card tab-panel" data-panel="outputs" role="tabpanel">
+      <section class="hidden rounded-xl border border-slate-200 bg-slate-50 p-4" id="plot-output">
+        <h3 class="font-semibold text-slate-900">Plots and movies appear here</h3>
+        <p class="hidden" id="ambient-product-status"></p>
+        <p class="hidden" id="product-status"></p>
+        <p class="hidden" id="movie-status"></p>
+        <div class="mt-4 space-y-4" id="plot-history"></div>
+      </section>
+    </section>
+
+  {% if run_id %}
+    <script>
+      const runBase = {{ url_for('index')|tojson }} + "runs/{{ run_id }}";
+      function selectedPlotBodies(selector) {
+        return [...document.querySelectorAll(`${selector}:checked`)]
+          .map(input => input.value).join(",");
+      }
+      function values() {
+        return {
+          time: document.getElementById("plot-time").value,
+          radial_time: document.getElementById("radial-time").value,
+          radial_lon: document.getElementById("radial-lon").value,
+          timeseries_lon: document.getElementById("timeseries-lon").value,
+          observer: document.getElementById("timeseries-observer").value,
+          plot_omni: document.getElementById("timeseries-plot-omni").checked ? "1" : "0",
+          plot_insitu: document.getElementById("timeseries-plot-omni").checked ? "1" : "0",
+          insitu_source: document.getElementById("timeseries-insitu-source").value,
+          radius: document.getElementById("plot-radius").value,
+          minimal: document.getElementById("map-minimal").checked ? "1" : "0",
+          plot_hcs: document.getElementById("map-hcs").checked ? "1" : "0",
+          annotate: document.getElementById("map-annotate").checked ? "1" : "0",
+          show_body_latitudes: document.getElementById("map-body-latitudes").checked ? "1" : "0",
+          bodies: selectedPlotBodies(".map-body"),
+          trace_earth: document.getElementById("map-earth").checked ? "1" : "0",
+          plot_rmax: document.getElementById("map-limit-rmax").checked
+            ? document.getElementById("map-rmax").value : "",
+          show_ambient: document.querySelector('.product-panel.active .show-ambient-solution')?.checked ? "1" : "0"
+        };
+      }
+      function beginTask(button, text) {
+        if (!button) return;
+        button.dataset.idleText = button.textContent;
+        button.disabled = true;
+        button.classList.remove("success-button");
+        button.classList.add("busy-button");
+        button.textContent = text;
+      }
+      function finishTask(button, text) {
+        if (!button) return;
+        button.disabled = false;
+        button.classList.remove("busy-button");
+        button.classList.add("success-button");
+        button.textContent = text;
+        window.setTimeout(() => {
+          button.classList.remove("success-button");
+          button.textContent = button.dataset.idleText || button.textContent;
+        }, 1800);
+      }
+      function failTask(button) {
+        if (!button) return;
+        button.disabled = false;
+        button.classList.remove("busy-button", "success-button");
+        button.textContent = button.dataset.idleText || button.textContent;
+      }
+      function showPlot(kind, button) {
+        const query = new URLSearchParams(values());
+        const outputPanel = document.getElementById("plot-output");
+        const plotHistory = document.getElementById("plot-history");
+        const status = document.getElementById("product-status");
+        const plotCode = buildPlotCode(kind);
+        if (plotCode) recordPlotCode(plotCode);
+        beginTask(button, "Generating plot...");
+        outputPanel.classList.remove("hidden");
+        status.textContent = "Generating plot...";
+        fetch(`${runBase}/plot/${kind}.png?${query}&cache=${Date.now()}`)
+          .then(async response => {
+            if (!response.ok) {
+              const message = (await response.text()).replace(/<[^>]+>/g, " ").trim();
+              throw new Error(message || `HTTP ${response.status}`);
+            }
+            return response.blob();
+          })
+          .then(async blob => {
+            const timestamp = new Date();
+            const entry = {
+              caption: `${kind} plot generated ${timestamp.toLocaleTimeString()}`,
+              alt: `${kind} SURF plot`,
+              filename: `SURF_${kind}_plot_${timestamp.toISOString().replace(/[:.]/g, "-")}.png`,
+              src: await blobToDataUrl(blob)
+            };
+            addPlotOutput(entry);
+            savePlotOutput(entry);
+            status.textContent = "Newest figure is shown first.";
+            markOutputsTabHasNewContent();
+            finishTask(button, "Plot Ready");
+          })
+          .catch(error => {
+            status.textContent = `Plot generation failed: ${error.message}`;
+            failTask(button);
+          });
+      }
+      async function downloadTimeseries(button = null) {
+        const observer = document.getElementById("timeseries-observer").value;
+        const filename = `SURF_${observer}_timeseries.csv`;
+        let fileHandle = null;
+        if (window.showSaveFilePicker) {
+          try {
+            fileHandle = await window.showSaveFilePicker({
+              suggestedName: filename,
+              types: [{
+                description: "CSV time-series data",
+                accept: {"text/csv": [".csv"]}
+              }]
+            });
+          } catch (error) {
+            if (error.name === "AbortError") return;
+            fileHandle = null;
+          }
+        }
+        const csvUrl = `${runBase}/timeseries.csv?${new URLSearchParams(values())}`;
+        beginTask(button, "Exporting CSV...");
+        document.getElementById("product-status").textContent =
+          "Preparing CSV data. The first spacecraft-data download may take a while...";
+        try {
+          const response = await fetch(csvUrl, {cache: "no-store"});
+          if (!response.ok) throw new Error(await response.text());
+          const csvText = await response.text();
+          if (!csvText.trim() || !csvText.includes("SURF_")) {
+            throw new Error("The server returned no SURF time-series values.");
+          }
+          const blob = new Blob([csvText], {type: "text/csv;charset=utf-8"});
+          if (fileHandle) {
+            const writable = await fileHandle.createWritable({keepExistingData: false});
+            await writable.write(csvText);
+            await writable.close();
+          } else {
+            const objectUrl = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = objectUrl;
+            link.download = filename;
+            link.click();
+            URL.revokeObjectURL(objectUrl);
+          }
+          document.getElementById("product-status").textContent =
+            `CSV saved with ${csvText.split(/\r?\n/).filter(Boolean).length - 1} data row(s).`;
+          finishTask(button, "CSV Ready");
+        } catch (error) {
+          document.getElementById("product-status").textContent =
+            `CSV export failed: ${error.message}`;
+          failTask(button);
+        }
+      }
+      function downloadMovie(kind = "map", button = null) {
+        const withTimeseries = kind === "timeseries";
+        const tag = document.getElementById("movie-tag").value || "gui";
+        const movieQuery = new URLSearchParams({
+          tag,
+          duration: document.getElementById("movie-duration").value,
+          fps: document.getElementById("movie-fps").value,
+          plot_hcs: document.getElementById("movie-hcs").checked ? "1" : "0",
+          show_body_latitudes: document.getElementById("movie-body-latitudes").checked ? "1" : "0",
+          bodies: selectedPlotBodies(".movie-body"),
+          plot_rmax: document.getElementById("movie-limit-rmax").checked
+            ? document.getElementById("movie-rmax").value : "",
+          field: document.getElementById("movie-ts-field").value,
+          plot_omni: withTimeseries && document.getElementById("movie-ts-omni").checked ? "1" : "0",
+          show_ambient: withTimeseries && document.getElementById("movie-ts-ambient")?.checked ? "1" : "0",
+          insitu_source: document.getElementById("movie-ts-insitu-source").value,
+          inline: "0"
+        });
+        document.getElementById(withTimeseries ? "movie-ts-output" : "movie-output").value =
+          `SURF_${tag}_movie.mp4`;
+        const movieStatus = document.getElementById("movie-status");
+        beginTask(button, "Rendering movie...");
+        movieStatus.textContent =
+          "Rendering movie frames. This may take several minutes; please wait...";
+        const movieUrl = `${runBase}/movie/${kind}.mp4?${movieQuery}`;
+        document.getElementById("plot-output").classList.remove("hidden");
+        fetch(movieUrl)
+          .then(async response => {
+            if (!response.ok) throw new Error(await response.text());
+            return response.blob();
+          })
+          .then(async blob => {
+            const timestamp = new Date();
+            const isGifFallback = blob.type === "image/gif";
+            const extension = isGifFallback ? "gif" : "mp4";
+            const entry = {
+              caption: `${withTimeseries ? "Time-series" : "2D"} movie generated ${timestamp.toLocaleTimeString()}`,
+              alt: `${withTimeseries ? "Time-series" : "2D"} SURF movie`,
+              filename: `SURF_${tag}_movie.${extension}`,
+              mediaType: isGifFallback ? "image" : "video",
+              src: await blobToDataUrl(blob)
+            };
+            addPlotOutput(entry);
+            saveFigureOutput(entry);
+            movieStatus.textContent = "";
+            markOutputsTabHasNewContent();
+            finishTask(button, "Movie Ready");
+          })
+          .catch(error => {
+            movieStatus.textContent = `Movie generation failed: ${error.message}`;
+            failTask(button);
+          });
+      }
+    </script>
+  {% endif %}
+  <dialog id="generated-code-dialog">
+    <div class="p-5 sm:p-7">
+      <div class="mb-4 flex items-center justify-between gap-3">
+        <h2 class="m-0">Generated Code</h2>
+        <div class="button-group">
+          <button type="button" class="secondary-button" id="copy-generated-code">Copy Code</button>
+          <button type="button" class="secondary-button" onclick="this.closest('dialog').close()">Close</button>
+        </div>
+      </div>
+      <pre>{{ code or "" }}</pre>
+    </div>
+  </dialog>
+  <script>
+    const savedOutputsKey = "surfs-up-output-history";
+
+    function markOutputsTabHasNewContent() {
+      const outputsTab = document.querySelector('[data-tab="outputs"]');
+      const activeTab = document.querySelector("[data-tab].active")?.dataset.tab;
+      if (outputsTab && activeTab !== "outputs") {
+        outputsTab.classList.add("has-new-output");
+      }
+    }
+
+    function readSavedOutputs() {
+      try {
+        return JSON.parse(sessionStorage.getItem(savedOutputsKey) || "{}");
+      } catch (_) {
+        return {};
+      }
+    }
+
+    function writeSavedOutputs(outputs) {
+      try {
+        sessionStorage.setItem(savedOutputsKey, JSON.stringify(outputs));
+      } catch (_) {}
+    }
+
+    function blobToDataUrl(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    function addPlotOutput(entry, prepend = true) {
+      const outputPanel = document.getElementById("plot-output");
+      const plotHistory = document.getElementById("plot-history");
+      if (!outputPanel || !plotHistory) return;
+      const figure = document.createElement("article");
+      figure.className = "rounded-xl border border-slate-200 bg-white p-3 shadow-sm";
+      const header = document.createElement("div");
+      header.className = "mb-3 flex flex-wrap items-center justify-between gap-2";
+      const caption = document.createElement("p");
+      caption.className = "m-0 text-sm font-medium text-slate-700";
+      caption.textContent = entry.caption;
+      const downloadLink = document.createElement("a");
+      downloadLink.className = "rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800";
+      downloadLink.href = entry.src;
+      downloadLink.download = entry.filename || "SURF_plot.png";
+      downloadLink.textContent = "Download";
+      const media = document.createElement(entry.mediaType === "video" ? "video" : "img");
+      media.className = "w-full rounded-lg border border-slate-200 bg-white";
+      if (entry.showMedia === false) media.classList.add("hidden");
+      if (entry.mediaType === "video") {
+        media.controls = true;
+        media.preload = "metadata";
+      } else {
+        media.alt = entry.alt;
+      }
+      media.src = entry.src;
+      header.append(caption, downloadLink);
+      figure.append(header, media);
+      if (prepend) plotHistory.prepend(figure);
+      else plotHistory.append(figure);
+      outputPanel.classList.remove("hidden");
+    }
+
+    function saveFigureOutput(entry) {
+      const outputs = readSavedOutputs();
+      outputs.figures = [entry, ...(outputs.figures || [])].slice(0, 24);
+      writeSavedOutputs(outputs);
+    }
+
+    function savePlotOutput(entry) {
+      saveFigureOutput(entry);
+    }
+
+    function saveAmbientOutput(entry) {
+      saveFigureOutput(entry);
+    }
+
+    function addAmbientOutput(entry, prepend = true) {
+      addPlotOutput(entry, prepend);
+    }
+
+    function restoreSavedOutputs() {
+      const outputs = readSavedOutputs();
+      let figures = outputs.figures;
+      if (!Array.isArray(figures)) {
+        const legacyAmbient = Array.isArray(outputs.ambient)
+          ? outputs.ambient
+          : (outputs.ambient ? [outputs.ambient] : []);
+        figures = [...(outputs.plots || []), ...legacyAmbient];
+      }
+      figures.forEach(entry => addPlotOutput(entry, false));
+      const status = document.getElementById("product-status");
+      if (status && figures.length) {
+        status.textContent = "Newest figure is shown first.";
+      }
+      const ambientStatus = document.getElementById("ambient-product-status");
+      if (figures.length && ambientStatus) ambientStatus.textContent = "";
+    }
+
+    restoreSavedOutputs();
+
+    const terminalOutputButton = document.getElementById("show-terminal-output");
+    const terminalOutputDialog = document.getElementById("terminal-output-dialog");
+    if (terminalOutputButton && terminalOutputDialog) {
+      terminalOutputButton.addEventListener("click", () => terminalOutputDialog.showModal());
+    }
+    const runForm = document.querySelector('form[method="post"]');
+    const generatedCodeDialog = document.getElementById("generated-code-dialog");
+    const generatedCodeButton = document.getElementById("show-generated-code");
+    const copyGeneratedCodeButton = document.getElementById("copy-generated-code");
+    const generatedCodePre = generatedCodeDialog ? generatedCodeDialog.querySelector("pre") : null;
+    let baseGeneratedCodeText = generatedCodePre ? generatedCodePre.textContent : "";
+    let generatedCodeUpdateTimer = null;
+    let generatedCodeRequestId = 0;
+    const plotCodeHistory = [];
+
+    function pyBool(value) {
+      return value ? "True" : "False";
+    }
+
+    function refreshGeneratedCodeDialog() {
+      if (!generatedCodePre) return;
+      let codeText = baseGeneratedCodeText;
+      if (plotCodeHistory.length) {
+        codeText +=
+          "\n\n# Plotting code run from the web interface\n" +
+          "import matplotlib.pyplot as plt\n" +
+          "import surf.surf_analysis as sa\n\n" +
+          plotCodeHistory.join("\n\n") +
+          "\n";
+      }
+      generatedCodePre.textContent = codeText;
+    }
+
+    function recordPlotCode(codeText) {
+      plotCodeHistory.push(codeText.trim());
+      refreshGeneratedCodeDialog();
+    }
+
+    async function updateGeneratedCode(showBusy = false) {
+      if (!generatedCodePre || !runForm) return;
+      const requestId = ++generatedCodeRequestId;
+      if (showBusy) {
+        generatedCodePre.textContent = "Generating code...";
+        if (copyGeneratedCodeButton) copyGeneratedCodeButton.disabled = true;
+      }
+      const formData = new FormData(runForm);
+      formData.set("action", "preview");
+      try {
+        const response = await fetch(`{{ url_for("generated_code") }}`, {
+          method: "POST",
+          body: formData
+        });
+        if (!response.ok) {
+          const message = (await response.text()).replace(/<[^>]+>/g, " ").trim();
+          throw new Error(message || `HTTP ${response.status}`);
+        }
+        const payload = await response.json();
+        if (requestId !== generatedCodeRequestId) return;
+        baseGeneratedCodeText = payload.code || "";
+        refreshGeneratedCodeDialog();
+      } catch (error) {
+        if (requestId !== generatedCodeRequestId) return;
+        baseGeneratedCodeText = `# Could not generate code for the current settings.\n# ${error.message}`;
+        refreshGeneratedCodeDialog();
+      } finally {
+        if (showBusy && requestId === generatedCodeRequestId && copyGeneratedCodeButton) {
+          copyGeneratedCodeButton.disabled = false;
+        }
+      }
+    }
+
+    function scheduleGeneratedCodeUpdate() {
+      if (!generatedCodePre || !runForm) return;
+      window.clearTimeout(generatedCodeUpdateTimer);
+      generatedCodeUpdateTimer = window.setTimeout(() => {
+        updateGeneratedCode(false);
+      }, 350);
+    }
+
+    function resetGeneratedCodeForCurrentState() {
+      plotCodeHistory.length = 0;
+      baseGeneratedCodeText = "";
+      generatedCodeRequestId += 1;
+      if (generatedCodePre) {
+        generatedCodePre.textContent = "";
+      }
+      scheduleGeneratedCodeUpdate();
+    }
+
+    async function copyGeneratedCode() {
+      if (!generatedCodePre || !copyGeneratedCodeButton) return;
+      refreshGeneratedCodeDialog();
+      const codeText = generatedCodePre.textContent;
+      copyGeneratedCodeButton.disabled = true;
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(codeText);
+        } else {
+          const textArea = document.createElement("textarea");
+          textArea.value = codeText;
+          textArea.setAttribute("readonly", "");
+          textArea.style.position = "fixed";
+          textArea.style.left = "-9999px";
+          document.body.appendChild(textArea);
+          textArea.select();
+          document.execCommand("copy");
+          textArea.remove();
+        }
+        copyGeneratedCodeButton.textContent = "Copied";
+        copyGeneratedCodeButton.classList.add("success-button");
+      } catch (_) {
+        copyGeneratedCodeButton.textContent = "Copy Failed";
+        copyGeneratedCodeButton.classList.add("busy-button");
+      } finally {
+        window.setTimeout(() => {
+          copyGeneratedCodeButton.disabled = false;
+          copyGeneratedCodeButton.classList.remove("success-button", "busy-button");
+          copyGeneratedCodeButton.textContent = "Copy Code";
+        }, 1600);
+      }
+    }
+
+    if (copyGeneratedCodeButton) {
+      copyGeneratedCodeButton.addEventListener("click", copyGeneratedCode);
+    }
+
+    function buildPlotCode(kind) {
+      if (kind === "map") {
+        const timeValue = document.getElementById("plot-time").value;
+        const minimal = pyBool(document.getElementById("map-minimal").checked);
+        const plotHcs = pyBool(document.getElementById("map-hcs").checked);
+        const annotate = pyBool(document.getElementById("map-annotate").checked);
+        const showBodyLatitudes = pyBool(document.getElementById("map-body-latitudes").checked);
+        const bodyNames = selectedPlotBodies(".map-body").split(",").filter(Boolean);
+        const bodies = JSON.stringify(bodyNames);
+        const traceEarth = pyBool(document.getElementById("map-earth").checked);
+        const plotRmax = document.getElementById("map-limit-rmax").checked
+          ? document.getElementById("map-rmax").value
+          : "None";
+        const solver = document.querySelector('[name="solver"]').value.trim().toLowerCase();
+        if (solver === "huxt") {
+          return [
+            "# Plot a two-dimensional map at the selected model time.",
+            "sa.plot(",
+            "    model,",
+            `    ${Number(timeValue).toFixed(1)} * u.day,`,
+            `    minimalplot=${minimal},`,
+            `    plotHCS=${plotHcs},`,
+            `    annotateplot=${annotate},`,
+            `    show_body_latitudes=${showBodyLatitudes},`,
+            `    bodies=${bodies},`,
+            `    trace_earth_connection=${traceEarth},`,
+            `    plot_rmax=${plotRmax},`,
+            ")",
+            "plt.show()",
+          ].join("\n");
+        }
+        return [
+          "# Plot a two-dimensional compressible-model map.",
+          "sa.plot_compressible(",
+          "    model,",
+          `    ${Number(timeValue).toFixed(1)} * u.day,`,
+          `    minimalplot=${minimal},`,
+          `    annotateplot=${annotate},`,
+          `    show_body_latitudes=${showBodyLatitudes},`,
+          `    bodies=${bodies},`,
+          `    plot_rmax=${plotRmax},`,
+          `    plotHCS=${plotHcs},`,
+          ")",
+          "plt.show()",
+        ].join("\n");
+      }
+      if (kind === "radial") {
+        const radialTime = document.getElementById("radial-time").value;
+        const radialLon = document.getElementById("radial-lon").value;
+        return [
+          "# Plot variables along a radial line at fixed longitude.",
+          "sa.plot_radial(",
+          "    model,",
+          `    ${Number(radialTime).toFixed(1)} * u.day,`,
+          `    lon=${Number(radialLon).toFixed(1)} * u.deg,`,
+          ")",
+          "plt.show()",
+        ].join("\n");
+      }
+      if (kind === "timeseries") {
+        const observer = document.getElementById("timeseries-observer").value;
+        if (observer === "Earth") {
+          const plotOmni = document.getElementById("timeseries-plot-omni").checked;
+          const insituSource = document.getElementById("timeseries-insitu-source").value;
+          const lines = [
+            `# Plot the SURF Earth time series, optionally overlaid with ${insituSource} observations.`
+          ];
+          if (plotOmni) {
+            lines.push(
+              "try:",
+              `    sa.plot_earth_timeseries(model, plot_omni=True, insitu_source=${JSON.stringify(insituSource)})`,
+              "except Exception:",
+              `    # ${insituSource} may be unavailable for the requested dates.`,
+              "    plt.close('all')",
+              "    sa.plot_earth_timeseries(model, plot_omni=False)",
+            );
+          } else {
+            lines.push("sa.plot_earth_timeseries(model, plot_omni=False)");
+          }
+          lines.push("plt.show()");
+          return lines.join("\n");
+        }
+        if (observer === "custom") {
+          const radius = document.getElementById("plot-radius").value;
+          const lon = document.getElementById("timeseries-lon").value;
+          return [
+            "# Plot a time series at a fixed radius and SURF model longitude.",
+            "# In sidereal runs this is HEEQ/model longitude at run start;",
+            "# in synodic runs this is the corotating model longitude.",
+            "sa.plot_timeseries(",
+            "    model,",
+            `    ${Number(radius).toFixed(1)} * u.AU,`,
+            `    lon=${Number(lon).toFixed(1)} * u.deg,`,
+            ")",
+            "plt.show()",
+          ].join("\n");
+        }
+        const lines = [
+          "# Sample the moving observer and plot the available model variables.",
+        ];
+        if (observer === "Uranus" || observer === "New Horizons") {
+          const horizons = observer === "Uranus"
+            ? {variable: "uranus_pos", code: 799, name: "Uranus"}
+            : {variable: "new_horizons_pos", code: -98, name: "New Horizons"};
+          lines.push(
+            "t_start_astro = model.time_init",
+            "t_stop_astro = model.time_init + model.time_out[-1]",
+            `${horizons.variable} = sa.get_horizons_body_for_SURF(`,
+            `    t_start_astro, t_stop_astro, step='12H', naif_code=${horizons.code}, body_name='${horizons.name}'`,
+            ")",
+            "time_series = sa.get_SURF_at_position_HEEQ(",
+            `    model, ${horizons.variable}['mjd'], ${horizons.variable}['r_rs'], ${horizons.variable}['lon_rad']`,
+            ")",
+          );
+        } else {
+          lines.push(`time_series = sa.get_observer_timeseries(model, observer=${JSON.stringify(observer)})`);
+        }
+        const observationGrabbers = {
+          PSP: "get_psp",
+          SOLO: "get_solo",
+          STA: "get_stereo_a"
+        };
+        const grabber = observationGrabbers[observer];
+        if (grabber && document.getElementById("timeseries-plot-omni").checked) {
+          lines.push(
+            "import surf.surf_insitu as sinsit",
+            `observations = sinsit.${grabber}(time_series['time'].iloc[0], time_series['time'].iloc[-1])`,
+            "# Overlay observations on the corresponding SURF time-series panels.",
+          );
+        }
+        lines.push("plt.show()");
+        return lines.join("\n");
+      }
+      return "";
+    }
+
+    function showGeneratedCodeDialog() {
+      updateGeneratedCode(true);
+      if (generatedCodeDialog) generatedCodeDialog.showModal();
+    }
+
+    if (generatedCodeButton && generatedCodeDialog) {
+      generatedCodeButton.addEventListener("click", showGeneratedCodeDialog);
+    }
+    {% if show_code_dialog %}
+    refreshGeneratedCodeDialog();
+    if (generatedCodeDialog) generatedCodeDialog.showModal();
+    {% endif %}
+
+    const ambientSourceInput = document.getElementById("ambient-source");
+    const sourcePanels = [...document.querySelectorAll("[data-source-panel]")];
+    const ambientTabButtons = [...document.querySelectorAll("[data-ambient-tab]")];
+
+    function clearAmbientPreview() {
+      const status = document.getElementById("ambient-product-status");
+      const history = document.getElementById("plot-history");
+      if (status && (!history || !history.children.length)) {
+        status.textContent = "";
+      }
+    }
+
+    function ambientPanelForSource(source) {
+      if (["wsa", "cortom", "user_specified"].includes(source)) return "user_specified_group";
+      if (["insitu_backmapped", "omni"].includes(source)) return "omni_group";
+      return source;
+    }
+
+    function defaultSourceForPanel(panel) {
+      if (panel === "user_specified_group") return "user_specified";
+      if (panel === "omni_group") return "insitu_backmapped";
+      return panel;
+    }
+
+    function setAmbientSource(source, clearPreview = true) {
+      if (clearPreview) clearAmbientPreview();
+      ambientSourceInput.value = source;
+      document.querySelectorAll('[name="ambient_source_choice"]').forEach(choice => {
+        choice.checked = choice.value === source;
+      });
+      if (["insitu_backmapped", "omni"].includes(source)) {
+        const selectedPanel = source === "omni" ? "omni-outwards" : "omni-backmapped";
+        document.querySelectorAll("[data-omni-source]").forEach(button => {
+          button.classList.toggle("active", button.dataset.omniSource === source);
+        });
+        document.querySelectorAll('[data-source-panel="omni_group"] [data-inner-panel]').forEach(panel => {
+          panel.classList.toggle("active", panel.dataset.innerPanel === selectedPanel);
+        });
+      }
+      if (["wsa", "cortom", "user_specified"].includes(source)) {
+        const selectedPanel = {
+          wsa: "user-wsa",
+          cortom: "user-cortom",
+          user_specified: "user-line"
+        }[source];
+        document.querySelectorAll("[data-user-source]").forEach(button => {
+          button.classList.toggle("active", button.dataset.userSource === source);
+        });
+        document.querySelectorAll('[data-source-panel="user_specified_group"] [data-inner-panel]').forEach(panel => {
+          panel.classList.toggle("active", panel.dataset.innerPanel === selectedPanel);
+        });
+      }
+      disableDonkiForOutwardOmni(source);
+    }
+
+    function showAmbientPanel(source) {
+      const panelName = ambientPanelForSource(source);
+      clearAmbientPreview();
+      setAmbientSource(source, false);
+      sourcePanels.forEach(panel => {
+        panel.classList.toggle("active", panel.dataset.sourcePanel === panelName);
+      });
+      ambientTabButtons.forEach(button => {
+        button.classList.toggle("active", button.dataset.ambientTab === panelName);
+      });
+      if (panelName === "user_specified_group") {
+        requestAnimationFrame(drawSpeedProfile);
+      }
+      if (source === "mas") {
+        applyMasMapTime().catch(console.error);
+      }
+    }
+    ambientTabButtons.forEach(button => {
+      button.addEventListener("click", () => {
+        showAmbientPanel(defaultSourceForPanel(button.dataset.ambientTab));
+        invalidateCompletedRun();
+      });
+    });
+    document.querySelectorAll('[name="ambient_source_choice"]').forEach(choice => {
+      choice.addEventListener("change", () => {
+        if (!choice.checked) return;
+        setAmbientSource(choice.value);
+        invalidateCompletedRun();
+      });
+    });
+    document.querySelectorAll("[data-omni-source]").forEach(button => {
+      button.addEventListener("click", () => {
+        setAmbientSource(button.dataset.omniSource);
+        invalidateCompletedRun();
+      });
+    });
+    document.querySelectorAll("[data-user-source]").forEach(button => {
+      button.addEventListener("click", () => {
+        setAmbientSource(button.dataset.userSource);
+        invalidateCompletedRun();
+      });
+    });
+    showAmbientPanel("wsa_iswa");
+
+    const speedProfileText = document.getElementById("speed-profile");
+    const speedProfileCanvas = document.getElementById("speed-profile-canvas");
+    const speedProfileContext = speedProfileCanvas ? speedProfileCanvas.getContext("2d") : null;
+    let speedProfile = Array(128).fill(400);
+    function renderSpeedProfile() {
+      speedProfileText.value = speedProfile.join(",");
+      speedSliderContainer.innerHTML = "";
+      speedProfile.forEach((speed, index) => {
+        const slider = document.createElement("input");
+        slider.type = "range";
+        slider.min = "250";
+        slider.max = "750";
+        slider.value = String(speed);
+        slider.className = "speed-slider";
+        slider.title = `${Math.round(index * 360 / 128)}°: ${speed} km/s`;
+        slider.addEventListener("input", () => {
+          speedProfile[index] = Number(slider.value);
+          speedProfileText.value = speedProfile.join(",");
+          slider.title = `${Math.round(index * 360 / 128)}°: ${slider.value} km/s`;
+        });
+        speedSliderContainer.appendChild(slider);
+      });
+    }
+    function speedCanvasGeometry() {
+      const rect = speedProfileCanvas.getBoundingClientRect();
+      const scale = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.round(rect.width * scale));
+      const height = Math.max(1, Math.round(rect.height * scale));
+      if (speedProfileCanvas.width !== width || speedProfileCanvas.height !== height) {
+        speedProfileCanvas.width = width;
+        speedProfileCanvas.height = height;
+      }
+      return {
+        scale,
+        width,
+        height,
+        left: 44 * scale,
+        right: 14 * scale,
+        top: 14 * scale,
+        bottom: 30 * scale,
+        minSpeed: 250,
+        maxSpeed: 750
+      };
+    }
+
+    function speedToY(speed, geometry) {
+      const plotHeight = geometry.height - geometry.top - geometry.bottom;
+      return geometry.top + (geometry.maxSpeed - speed) /
+        (geometry.maxSpeed - geometry.minSpeed) * plotHeight;
+    }
+
+    function yToSpeed(y, geometry) {
+      const plotHeight = geometry.height - geometry.top - geometry.bottom;
+      const fraction = (y - geometry.top) / plotHeight;
+      return Math.round(Math.max(
+        geometry.minSpeed,
+        Math.min(geometry.maxSpeed, geometry.maxSpeed - fraction * (geometry.maxSpeed - geometry.minSpeed))
+      ));
+    }
+
+    function indexToX(index, geometry) {
+      const plotWidth = geometry.width - geometry.left - geometry.right;
+      return geometry.left + index / (speedProfile.length - 1) * plotWidth;
+    }
+
+    function xToIndex(x, geometry) {
+      const plotWidth = geometry.width - geometry.left - geometry.right;
+      const fraction = Math.max(0, Math.min(1, (x - geometry.left) / plotWidth));
+      return Math.round(fraction * (speedProfile.length - 1));
+    }
+
+    function drawSpeedProfile() {
+      if (!speedProfileContext || !speedProfileCanvas) return;
+      const g = speedCanvasGeometry();
+      const ctx = speedProfileContext;
+      ctx.clearRect(0, 0, g.width, g.height);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, g.width, g.height);
+      ctx.strokeStyle = "#e2e8f0";
+      ctx.lineWidth = 1 * g.scale;
+      ctx.font = `${11 * g.scale}px Segoe UI, Arial, sans-serif`;
+      ctx.fillStyle = "#64748b";
+      [250, 400, 550, 700].forEach(speed => {
+        const y = speedToY(speed, g);
+        ctx.beginPath();
+        ctx.moveTo(g.left, y);
+        ctx.lineTo(g.width - g.right, y);
+        ctx.stroke();
+        ctx.fillText(String(speed), 6 * g.scale, y + 4 * g.scale);
+      });
+      ctx.strokeStyle = "#0e7490";
+      ctx.lineWidth = 3 * g.scale;
+      ctx.beginPath();
+      speedProfile.forEach((speed, index) => {
+        const x = indexToX(index, g);
+        const y = speedToY(speed, g);
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.fillStyle = "#0e7490";
+      speedProfile.forEach((speed, index) => {
+        if (index % 8 !== 0) return;
+        ctx.beginPath();
+        ctx.arc(indexToX(index, g), speedToY(speed, g), 3.2 * g.scale, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function renderSpeedProfile() {
+      speedProfileText.value = speedProfile.join(",");
+      drawSpeedProfile();
+    }
+
+    function setSpeedFromPointer(event) {
+      if (!speedProfileCanvas) return;
+      const rect = speedProfileCanvas.getBoundingClientRect();
+      const g = speedCanvasGeometry();
+      const x = (event.clientX - rect.left) * g.scale;
+      const y = (event.clientY - rect.top) * g.scale;
+      const center = xToIndex(x, g);
+      const speed = yToSpeed(y, g);
+      for (let offset = -2; offset <= 2; offset += 1) {
+        const index = (center + offset + speedProfile.length) % speedProfile.length;
+        const weight = 1 - Math.abs(offset) / 3;
+        speedProfile[index] = Math.round(speedProfile[index] * (1 - weight) + speed * weight);
+      }
+      renderSpeedProfile();
+    }
+
+    if (speedProfileCanvas) {
+      speedProfileCanvas.addEventListener("pointerdown", event => {
+        speedProfileCanvas.setPointerCapture(event.pointerId);
+        setSpeedFromPointer(event);
+      });
+      speedProfileCanvas.addEventListener("pointermove", event => {
+        if (event.buttons) setSpeedFromPointer(event);
+      });
+      window.addEventListener("resize", drawSpeedProfile);
+    }
+
+    function smoothSpeedProfile() {
+      speedProfile = speedProfile.map((_, index) => {
+        const values = [-2, -1, 0, 1, 2].map(offset =>
+          speedProfile[(index + offset + speedProfile.length) % speedProfile.length]
+        );
+        return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+      });
+      renderSpeedProfile();
+    }
+    document.getElementById("reset-speed-profile").addEventListener("click", () => {
+      speedProfile = Array(128).fill(400);
+      renderSpeedProfile();
+    });
+    document.getElementById("smooth-speed-profile").addEventListener("click", smoothSpeedProfile);
+    document.getElementById("randomise-speed-profile").addEventListener("click", () => {
+      speedProfile = Array.from({length: 128}, () => 250 + Math.round(Math.random() * 500));
+      smoothSpeedProfile();
+    });
+    renderSpeedProfile();
+
+    function selectAmbientSourceAndPlot(source, button) {
+      setAmbientSource(source);
+      showAmbientPlot(button);
+    }
+
+    function showAmbientPlot(button) {
+      const status = document.getElementById("ambient-product-status");
+      const form = document.querySelector('form[method="post"]');
+      if (!form) {
+        status.textContent = "Open the run form before plotting ambient inputs.";
+        return;
+      }
+      if (button) {
+        button.dataset.idleText = button.textContent;
+        button.disabled = true;
+        button.classList.remove("success-button");
+        button.classList.add("busy-button");
+        button.textContent = "Generating plot...";
+      }
+      status.textContent = "Generating plot...";
+      fetch(`{{ url_for("ambient_plot") }}`, {
+        method: "POST",
+        body: new FormData(form)
+      })
+        .then(async response => {
+          if (!response.ok) {
+            const message = (await response.text()).replace(/<[^>]+>/g, " ").trim();
+            throw new Error(message || `HTTP ${response.status}`);
+          }
+          return response.blob();
+        })
+        .then(async blob => {
+          const timestamp = new Date();
+          const source = document.getElementById("ambient-source").value;
+          const sourceLabel = {
+            mas: "MAS",
+            wsa_iswa: "WSA (ISWA)",
+            wsa: "WSA",
+            cortom: "CorTom"
+          }[source] || source;
+          const entry = {
+            caption: `${sourceLabel} ambient preview generated ${timestamp.toLocaleTimeString()}`,
+            alt: `${sourceLabel} ambient input preview`,
+            filename: `SURF_${source}_ambient_${timestamp.toISOString().replace(/[:.]/g, "-")}.png`,
+            src: await blobToDataUrl(blob)
+          };
+          addAmbientOutput(entry);
+          status.textContent = "Newest figure is shown first.";
+          saveAmbientOutput(entry);
+          markOutputsTabHasNewContent();
+          if (button) {
+            button.disabled = false;
+            button.classList.remove("busy-button");
+            button.classList.add("success-button");
+            button.textContent = "Plot Ready";
+            window.setTimeout(() => {
+              button.classList.remove("success-button");
+              button.textContent = button.dataset.idleText || button.textContent;
+            }, 1800);
+          }
+        })
+        .catch(error => {
+          status.textContent = `Plot generation failed: ${error.message}`;
+          if (button) {
+            button.disabled = false;
+            button.classList.remove("busy-button", "success-button");
+            button.textContent = button.dataset.idleText || button.textContent;
+          }
+        });
+    }
+
+    const cmes = [];
+    const cmeJson = document.getElementById("cmes-json");
+    const cmeList = document.getElementById("cme-list");
+    const removeSelectedCme = document.getElementById("remove-selected-cme");
+    const editSelectedCme = document.getElementById("edit-selected-cme");
+    const cmeEditor = document.getElementById("cme-editor");
+    const grabDonkiAtRunStart = document.querySelector(
+      '[name="grab_donki_at_run_start"]'
+    );
+    const modelInnerBoundary = document.getElementById("model-rmin");
+    function disableDonkiForOutwardOmni(source = ambientSourceInput.value) {
+      if (source === "omni") {
+        grabDonkiAtRunStart.checked = false;
+      }
+    }
+    function disableDonkiForNonStandardInnerBoundary() {
+      if (Math.abs(Number(modelInnerBoundary.value) - 21.5) > 1e-9) {
+        grabDonkiAtRunStart.checked = false;
+      }
+    }
+    modelInnerBoundary.addEventListener(
+      "input", disableDonkiForNonStandardInnerBoundary
+    );
+    let selectedCmeIndex = -1;
+    let editingCmeIndex = -1;
+
+    function numberValue(id) {
+      return Number(document.getElementById(id).value);
+    }
+    function cmeDefaults() {
+      return {
+        thickness_rs: numberValue("donki-thickness"),
+        initial_height_rs: numberValue("donki-initial-height"),
+        cme_expansion: document.getElementById("donki-expansion").checked,
+        cme_fixed_duration: document.getElementById("donki-fixed-duration").checked,
+        fixed_duration_hr: numberValue("donki-duration"),
+        profile_type: document.getElementById("donki-profile").value,
+        plasma_mode: document.getElementById("donki-plasma-mode").value,
+        density_fraction: numberValue("donki-density-fraction"),
+        temperature_fraction: numberValue("donki-temperature-fraction"),
+        cme_density_pcc: numberValue("donki-density"),
+        cme_temperature_k: numberValue("donki-temperature")
+      };
+    }
+    function applyDefaultsToAllCmes() {
+      const defaults = cmeDefaults();
+      cmes.forEach(cme => Object.assign(cme, defaults));
+      renderCmes();
+    }
+    function cmeIntersectsEarthAtLaunch(cme) {
+      const longitude = Number(cme.longitude);
+      const latitude = Number(cme.latitude);
+      const width = Number(cme.width);
+      if (![longitude, latitude, width].every(Number.isFinite) || width < 0) return false;
+      const degreesToRadians = Math.PI / 180;
+      const cosineSeparation = Math.cos(latitude * degreesToRadians) *
+        Math.cos(longitude * degreesToRadians);
+      const separation = Math.acos(Math.max(-1, Math.min(1, cosineSeparation))) /
+        degreesToRadians;
+      return separation <= width / 2;
+    }
+    function renderCmes() {
+      cmeJson.value = JSON.stringify(cmes);
+      if (selectedCmeIndex >= cmes.length) selectedCmeIndex = -1;
+      removeSelectedCme.disabled = selectedCmeIndex < 0;
+      editSelectedCme.disabled = selectedCmeIndex < 0;
+      cmeList.innerHTML = cmes.length ? "" : '<p id="empty-cme-list">No CMEs added.</p>';
+      cmes.forEach((cme, index) => {
+        const row = document.createElement("div");
+        row.className = "cursor-pointer rounded-lg border bg-white p-3 transition";
+        row.classList.add(index === selectedCmeIndex ? "border-cyan-500" : "border-slate-200");
+        const outsideRun = Number(cme.t_launch_day) < 0 ||
+          Number(cme.t_launch_day) > Number(document.querySelector('[name="simtime_days"]').value);
+        if (outsideRun) row.classList.add("text-red-700");
+        if (cmeIntersectsEarthAtLaunch(cme)) row.classList.add("font-bold");
+        row.innerHTML = `<span>${String(index + 1).padStart(2, "0")}: t=${cme.t_launch_day} day, ` +
+          `lon=${cme.longitude}°, lat=${cme.latitude}°, v=${cme.speed} km/s, width=${cme.width}°</span>`;
+        row.addEventListener("click", () => {
+          selectedCmeIndex = index === selectedCmeIndex ? -1 : index;
+          renderCmes();
+        });
+        row.addEventListener("dblclick", () => openCmeEditor(index));
+        cmeList.appendChild(row);
+      });
+      scheduleGeneratedCodeUpdate();
+    }
+    function cmeFromEditor() {
+      return {
+        longitude: numberValue("cme-longitude"),
+        latitude: numberValue("cme-latitude"),
+        speed: numberValue("cme-speed"),
+        width: numberValue("cme-width"),
+        t_launch_day: numberValue("cme-launch-day"),
+        t_launch_datetime: document.getElementById("cme-launch-datetime").value.replace("T", " "),
+        thickness_rs: numberValue("cme-thickness"),
+        initial_height_rs: numberValue("cme-initial-height"),
+        cme_expansion: document.getElementById("cme-expansion").checked,
+        cme_fixed_duration: document.getElementById("cme-fixed-duration").checked,
+        fixed_duration_hr: numberValue("cme-duration"),
+        profile_type: document.getElementById("cme-profile").value,
+        plasma_mode: document.getElementById("cme-plasma-mode").value,
+        density_fraction: numberValue("cme-density-fraction"),
+        temperature_fraction: numberValue("cme-temperature-fraction"),
+        cme_density_pcc: numberValue("cme-density"),
+        cme_temperature_k: numberValue("cme-temperature"),
+        source: "manual"
+      };
+    }
+    function openCmeEditor(index = -1) {
+      editingCmeIndex = index;
+      const cme = index >= 0 ? cmes[index] : null;
+      document.getElementById("cme-editor-title").textContent =
+        cme ? "Edit cone CME" : "Manually add cone CME";
+      document.getElementById("add-cme").textContent = cme ? "Save CME" : "Add CME";
+      if (cme) {
+        const values = {
+          "cme-longitude": cme.longitude, "cme-latitude": cme.latitude,
+          "cme-speed": cme.speed, "cme-width": cme.width,
+          "cme-launch-day": cme.t_launch_day,
+          "cme-launch-datetime": String(cme.t_launch_datetime || "").replace(" ", "T"),
+          "cme-thickness": cme.thickness_rs, "cme-initial-height": cme.initial_height_rs,
+          "cme-duration": cme.fixed_duration_hr, "cme-profile": cme.profile_type,
+          "cme-plasma-mode": cme.plasma_mode,
+          "cme-density-fraction": cme.density_fraction,
+          "cme-temperature-fraction": cme.temperature_fraction,
+          "cme-density": cme.cme_density_pcc, "cme-temperature": cme.cme_temperature_k
+        };
+        Object.entries(values).forEach(([id, value]) => {
+          if (value !== undefined && value !== null) document.getElementById(id).value = value;
+        });
+        document.getElementById("cme-expansion").checked = Boolean(cme.cme_expansion);
+        document.getElementById("cme-fixed-duration").checked = Boolean(cme.cme_fixed_duration);
+      } else {
+        const defaults = cmeDefaults();
+        const values = {
+          "cme-thickness": defaults.thickness_rs,
+          "cme-initial-height": defaults.initial_height_rs,
+          "cme-duration": defaults.fixed_duration_hr,
+          "cme-profile": defaults.profile_type,
+          "cme-plasma-mode": defaults.plasma_mode,
+          "cme-density-fraction": defaults.density_fraction,
+          "cme-temperature-fraction": defaults.temperature_fraction,
+          "cme-density": defaults.cme_density_pcc,
+          "cme-temperature": defaults.cme_temperature_k
+        };
+        Object.entries(values).forEach(([id, value]) => document.getElementById(id).value = value);
+        document.getElementById("cme-expansion").checked = defaults.cme_expansion;
+        document.getElementById("cme-fixed-duration").checked = defaults.cme_fixed_duration;
+      }
+      cmeEditor.showModal();
+    }
+    document.getElementById("open-cme-editor").addEventListener("click", () => openCmeEditor());
+    editSelectedCme.addEventListener("click", () => openCmeEditor(selectedCmeIndex));
+    document.getElementById("cancel-cme-editor").addEventListener("click", () => cmeEditor.close());
+    document.getElementById("add-cme").addEventListener("click", () => {
+      const cme = cmeFromEditor();
+      if (editingCmeIndex >= 0) {
+        cmes[editingCmeIndex] = cme;
+        selectedCmeIndex = editingCmeIndex;
+      } else {
+        cmes.push(cme);
+        selectedCmeIndex = cmes.length - 1;
+      }
+      grabDonkiAtRunStart.checked = false;
+      renderCmes();
+      cmeEditor.close();
+      invalidateCompletedRun();
+    });
+    removeSelectedCme.addEventListener("click", () => {
+      if (selectedCmeIndex >= 0) cmes.splice(selectedCmeIndex, 1);
+      selectedCmeIndex = -1;
+      renderCmes();
+      invalidateCompletedRun();
+    });
+    document.getElementById("clear-cmes").addEventListener("click", () => {
+      cmes.length = 0;
+      selectedCmeIndex = -1;
+      renderCmes();
+      invalidateCompletedRun();
+    });
+    document.getElementById("choose-cone-file").addEventListener(
+      "click", () => document.getElementById("cone-file").click()
+    );
+    document.getElementById("cone-file").addEventListener("change", async event => {
+      const file = event.target.files[0];
+      const status = document.getElementById("cone-file-status");
+      if (!file) {
+        status.textContent = "No cone file loaded.";
+        return;
+      }
+      status.textContent = `Loading ${file.name}…`;
+      const data = new FormData();
+      data.set("file", file);
+      data.set("start", modelStartInput.value);
+      try {
+        const response = await fetch({{ url_for("cone_cmes")|tojson }}, {
+          method: "POST",
+          body: data
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const loaded = await response.json();
+        const retained = cmes.filter(cme => cme.source !== "cone_file");
+        const defaults = cmeDefaults();
+        loaded.forEach(cme => Object.assign(cme, defaults));
+        cmes.splice(0, cmes.length, ...retained, ...loaded);
+        selectedCmeIndex = -1;
+        grabDonkiAtRunStart.checked = false;
+        renderCmes();
+        status.textContent = `Loaded ${loaded.length} cone CME(s) from ${file.name}.`;
+        event.target.value = "";
+        invalidateCompletedRun();
+      } catch (error) {
+        status.textContent = `Could not load ${file.name}: ${error.message}`;
+      }
+    });
+    document.getElementById("load-donki").addEventListener("click", async event => {
+      const button = event.currentTarget;
+      const status = document.getElementById("donki-status");
+      let succeeded = false;
+      button.disabled = true;
+      button.classList.add("busy-button");
+      status.textContent = "Downloading CMEs for the current run interval.";
+      button.textContent = "Loading DONKI CMEs…";
+      try {
+        const start = document.querySelector('[name="start_datetime"]').value;
+        const duration = document.querySelector('[name="simtime_days"]').value;
+        const response = await fetch(
+          `{{ url_for("donki_cmes") }}?start=${encodeURIComponent(start)}&duration=${encodeURIComponent(duration)}&solver=${encodeURIComponent(document.querySelector('[name="solver"]').value)}&feature=${encodeURIComponent(document.getElementById("donki-feature").value)}`
+        );
+        if (!response.ok) throw new Error(await response.text());
+        const loaded = await response.json();
+        const retained = cmes.filter(cme => cme.source !== "donki");
+        const defaults = cmeDefaults();
+        loaded.forEach(cme => Object.assign(cme, defaults));
+        cmes.splice(0, cmes.length, ...retained, ...loaded);
+        if (loaded.length) grabDonkiAtRunStart.checked = false;
+        selectedCmeIndex = -1;
+        renderCmes();
+        status.textContent = `Loaded ${loaded.length} DONKI cone CME(s).`;
+        succeeded = true;
+        invalidateCompletedRun();
+      } catch (error) {
+        status.textContent = `Could not load DONKI CMEs: ${error.message}`;
+      } finally {
+        button.disabled = false;
+        button.classList.remove("busy-button");
+        if (succeeded) {
+          button.classList.add("success-button");
+          button.textContent = "DONKI CMEs Loaded";
+          window.setTimeout(() => {
+            button.classList.remove("success-button");
+            button.textContent = "Grab the DONKI CMEs now";
+          }, 1800);
+        } else {
+          button.textContent = "Grab the DONKI CMEs now";
+        }
+      }
+    });
+
+    let runIsCurrent = {{ "true" if run_id else "false" }};
+    function hidePostRunTabs() {
+      ["plots", "movies"].forEach(name => {
+        document.querySelector(`[data-tab="${name}"]`)?.classList.add("hidden");
+        document.querySelector(`[data-panel="${name}"]`)?.classList.remove("active");
+      });
+      document.getElementById("post-run-tab-spacer")?.classList.add("hidden");
+      const activeTab = document.querySelector("[data-tab].active")?.dataset.tab;
+      if (["plots", "movies"].includes(activeTab)) {
+        activateTab("model");
+      }
+    }
+    function invalidateCompletedRun() {
+      if (!runIsCurrent) return;
+      runIsCurrent = false;
+      if (grabDonkiAtRunStart.checked && cmes.length) {
+        cmes.splice(0, cmes.length);
+        selectedCmeIndex = -1;
+        renderCmes();
+      }
+      hidePostRunTabs();
+      resetGeneratedCodeForCurrentState();
+      const runButton = document.getElementById("run-surf-button");
+      runButton.classList.remove("success-button", "busy-button");
+      runButton.textContent = "Run SURF";
+      document.getElementById("workflow-status").textContent =
+        "Configuration changed. Run SURF again.";
+    }
+    runForm.addEventListener("input", invalidateCompletedRun);
+    runForm.addEventListener("change", invalidateCompletedRun);
+    runForm.addEventListener("input", scheduleGeneratedCodeUpdate);
+    runForm.addEventListener("change", scheduleGeneratedCodeUpdate);
+    function captureConfiguration() {
+      const controls = {};
+      runForm.querySelectorAll("input[name]:not([type=file]), select[name], textarea[name]")
+        .forEach(control => {
+          if (control.type === "radio") {
+            if (control.checked) controls[control.name] = control.value;
+          } else if (control.type === "checkbox") {
+            controls[control.name] = control.checked;
+          } else {
+            controls[control.name] = control.value;
+          }
+        });
+      return {format: "surfs-up-web-configuration", version: 1, controls, cmes};
+    }
+    function applyConfiguration(configuration, invalidateRun = true) {
+      if (!configuration || configuration.format !== "surfs-up-web-configuration") {
+        throw new Error("Not a SURFs_UP web configuration file.");
+      }
+      Object.entries(configuration.controls || {}).forEach(([name, value]) => {
+        const matches = [...runForm.querySelectorAll(`[name="${CSS.escape(name)}"]`)];
+        matches.forEach(control => {
+          if (control.type === "radio") control.checked = control.value === value;
+          else if (control.type === "checkbox") control.checked = Boolean(value);
+          else control.value = value;
+        });
+      });
+      cmes.splice(0, cmes.length, ...(configuration.cmes || []));
+      disableDonkiForNonStandardInnerBoundary();
+      renderCmes();
+      const loadedProfile = speedProfileText.value.split(",").map(Number).filter(Number.isFinite);
+      if (loadedProfile.length === 128) {
+        speedProfile = loadedProfile;
+        renderSpeedProfile();
+      }
+      showAmbientPanel(ambientSourceInput.value || "wsa_iswa");
+      if (invalidateRun) invalidateCompletedRun();
+    }
+    let runInProgress = false;
+    runForm.addEventListener("submit", event => {
+      sessionStorage.setItem("surfs-up-current-configuration", JSON.stringify(captureConfiguration()));
+      if (event.submitter?.value === "run") {
+        if (runInProgress) {
+          event.preventDefault();
+          return;
+        }
+        event.preventDefault();
+        plotCodeHistory.length = 0;
+        refreshGeneratedCodeDialog();
+        runInProgress = true;
+        const activeTab = document.querySelector("[data-tab].active")?.dataset.tab;
+        if (activeTab) sessionStorage.setItem("surfs-up-active-tab", activeTab);
+        event.submitter.disabled = true;
+        event.submitter.classList.remove("success-button");
+        event.submitter.classList.add("busy-button");
+        event.submitter.textContent = "Preparing run...";
+        const workflowStatus = document.getElementById("workflow-status");
+        workflowStatus.textContent = "Grabbing and processing input data";
+        const formData = new FormData(runForm);
+        formData.set("action", "run");
+        fetch({{ url_for("index")|tojson }}, {
+          method: "POST",
+          body: formData
+        })
+          .then(async response => {
+            const contentType = response.headers.get("content-type") || "";
+            if (!response.ok) {
+              const detail = contentType.includes("application/json")
+                ? (await response.json()).error
+                : (await response.text()).replace(/<[^>]+>/g, " ").trim();
+              throw new Error(detail || `HTTP ${response.status}`);
+            }
+            if (!contentType.includes("application/json")) {
+              throw new Error(
+                "The server returned an HTML page instead of starting a background job. " +
+                "Restart the web app with background jobs enabled."
+              );
+            }
+            return response.json();
+          })
+          .then(job => {
+            workflowStatus.textContent = "Queued for processing";
+            const poll = window.setInterval(async () => {
+              try {
+                const response = await fetch(job.status_url, {cache: "no-store"});
+                if (!response.ok) throw new Error(`Status request failed (${response.status})`);
+                const progress = await response.json();
+                if (progress.message) workflowStatus.textContent = progress.message;
+                if (progress.message?.startsWith("Running SURF")) {
+                  event.submitter.textContent = progress.message === "Running SURF"
+                    ? "Running SURF..."
+                    : progress.message.replace("Running SURF", "Running") + "...";
+                }
+                if (progress.state === "completed" || progress.state === "failed") {
+                  window.clearInterval(poll);
+                  window.location.assign(progress.result_url);
+                }
+              } catch (error) {
+                window.clearInterval(poll);
+                runInProgress = false;
+                event.submitter.disabled = false;
+                event.submitter.classList.remove("busy-button");
+                event.submitter.textContent = "Run SURF";
+                workflowStatus.textContent = `Unable to check run: ${error.message}`;
+              }
+            }, 1000);
+          })
+          .catch(error => {
+            runInProgress = false;
+            event.submitter.disabled = false;
+            event.submitter.classList.remove("busy-button");
+            event.submitter.textContent = "Run SURF";
+            workflowStatus.textContent = `Unable to start run: ${error.message}`;
+          });
+      }
+    });
+    const retainedConfiguration = sessionStorage.getItem("surfs-up-current-configuration");
+    let restoredPreRunConfiguration = false;
+    if (retainedConfiguration) {
+      try {
+        applyConfiguration(JSON.parse(retainedConfiguration), false);
+        restoredPreRunConfiguration = true;
+      } catch (_) {}
+    }
+    document.getElementById("save-configuration").addEventListener("click", () => {
+      const blob = new Blob([JSON.stringify(captureConfiguration(), null, 2)], {type: "application/json"});
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "surf_configuration.json";
+      link.click();
+      URL.revokeObjectURL(link.href);
+    });
+    const configurationFile = document.getElementById("configuration-file");
+    document.getElementById("load-configuration").addEventListener("click", () => configurationFile.click());
+    configurationFile.addEventListener("change", async () => {
+      try {
+        applyConfiguration(JSON.parse(await configurationFile.files[0].text()));
+        syncSpacecraftIcmeOptions();
+        syncLongitudeControls();
+        updateBodyLongitudeRange().catch(console.error);
+        sessionStorage.removeItem("surfs-up-current-configuration");
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    const modelStartInput = document.getElementById("model-start-datetime");
+    const modelEndInput = document.getElementById("model-end-datetime");
+    const omniForecastDatetime = document.getElementById("omni-forecast-datetime");
+    const insituMode = document.getElementById("insitu-mode");
+    const insituSpacecraft = document.getElementById("insitu-spacecraft");
+    const omniIcmeList = document.getElementById("omni-icme-list");
+    const modelCrNumber = document.getElementById("model-cr-number");
+    const modelCrLongitude = document.getElementById("model-cr-longitude");
+    const modelLatitude = document.getElementById("model-latitude");
+    const averageBodyLatitude = document.getElementById("average-body-latitude");
+    const latitudeBody = document.getElementById("latitude-body");
+    const simulationDuration = document.querySelector('[name="simtime_days"]');
+    const modelIs1D = document.getElementById("model-is-1d");
+    const modelLongitudeRow = document.getElementById("model-longitude-row");
+    const modelLongitudeStart = document.querySelector('[name="lon_min"]');
+    const modelLongitudeStop = document.querySelector('[name="lon_max"]');
+    const modelOuterRadius = document.querySelector('[name="rmax"]');
+    const modelRadialSpacing = document.querySelector('[name="dr_rs"]');
+    const clampLongitudeToBody = document.getElementById("clamp-longitude-to-body");
+    const clampLongitudeBody = document.getElementById("clamp-longitude-body");
+    const clampLongitudeBodyLabel = document.getElementById("clamp-longitude-body-label");
+    const iswaMapDate = document.getElementById("iswa-map-date");
+    const iswaUseModelStart = document.getElementById("iswa-use-model-start");
+    const cmeLaunchDay = document.getElementById("cme-launch-day");
+    const cmeLaunchDatetime = document.getElementById("cme-launch-datetime");
+
+    function utcInputDate(input) {
+      return new Date(`${input.value}Z`);
+    }
+    function syncModelEndFromDuration() {
+      const start = utcInputDate(modelStartInput);
+      const runDays = Number(simulationDuration.value);
+      if (!Number.isFinite(start.getTime()) || !Number.isFinite(runDays) || runDays <= 0) return;
+      modelEndInput.value = new Date(start.getTime() + runDays * 86400000)
+        .toISOString().slice(0, 19);
+      modelEndInput.setCustomValidity("");
+    }
+    function syncDurationFromModelEnd() {
+      const start = utcInputDate(modelStartInput);
+      const end = utcInputDate(modelEndInput);
+      const runDays = (end - start) / 86400000;
+      if (!Number.isFinite(runDays) || runDays <= 0) {
+        modelEndInput.setCustomValidity("Run end date must be after the model start date.");
+        modelEndInput.reportValidity();
+        return;
+      }
+      modelEndInput.setCustomValidity("");
+      simulationDuration.value = runDays.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+      simulationDuration.dispatchEvent(new Event("change", {bubbles: true}));
+    }
+    function syncCmeDatetimeFromDay() {
+      const launch = utcInputDate(modelStartInput);
+      launch.setTime(launch.getTime() + Number(cmeLaunchDay.value) * 86400000);
+      cmeLaunchDatetime.value = launch.toISOString().slice(0, 19);
+    }
+    function syncCmeDayFromDatetime() {
+      const offset = (
+        utcInputDate(cmeLaunchDatetime) - utcInputDate(modelStartInput)
+      ) / 86400000;
+      if (Number.isFinite(offset)) cmeLaunchDay.value = offset.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+    }
+    function syncModelStartFromIswaMapDate() {
+      if (!iswaMapDate || !iswaUseModelStart || !iswaUseModelStart.checked || !iswaMapDate.value) return;
+      const modelStart = utcInputDate(iswaMapDate);
+      modelStart.setUTCDate(modelStart.getUTCDate() - 5);
+      modelStartInput.value = modelStart.toISOString().slice(0, 19);
+      updateCoordinates({datetime: modelStartInput.value}).catch(console.error);
+    }
+    function syncOmniForecastTime() {
+      if (!omniForecastDatetime || !modelStartInput.value) return;
+      const forecast = utcInputDate(modelStartInput);
+      forecast.setUTCDate(forecast.getUTCDate() + 5);
+      omniForecastDatetime.value = forecast.toISOString().slice(0, 19);
+    }
+    function syncModelStartFromOmniForecastTime() {
+      if (!omniForecastDatetime?.value) return;
+      const modelStart = utcInputDate(omniForecastDatetime);
+      if (!Number.isFinite(modelStart.getTime())) return;
+      modelStart.setUTCDate(modelStart.getUTCDate() - 5);
+      modelStartInput.value = modelStart.toISOString().slice(0, 19);
+      modelStartInput.dispatchEvent(new Event("change", {bubbles: true}));
+    }
+    let insituSpacecraftManuallySelected = restoredPreRunConfiguration;
+    function syncDefaultInsituSpacecraft() {
+      if (!insituSpacecraft || insituSpacecraftManuallySelected || !omniForecastDatetime?.value) return;
+      const cutoff = new Date();
+      cutoff.setUTCMonth(cutoff.getUTCMonth() - 3);
+      insituSpacecraft.value = utcInputDate(omniForecastDatetime) >= cutoff ? "SWPC" : "OMNI";
+      syncSpacecraftIcmeOptions(true);
+    }
+    function syncOmniIcmeDefault() {
+      if (!omniIcmeList || !modelStartInput.value) return;
+      const spacecraft = document.getElementById("insitu-spacecraft")?.value;
+      if (spacecraft === "STEREO-A") {
+        omniIcmeList.value = "STEREO-A";
+        syncIcmeBufferState();
+        return;
+      }
+      omniIcmeList.value = utcInputDate(modelStartInput).getUTCFullYear() >= 2026
+        ? "DONKI" : "CaneRichardson";
+      syncIcmeBufferState();
+    }
+    function syncSpacecraftIcmeOptions(useDefault = false) {
+      const spacecraft = document.getElementById("insitu-spacecraft")?.value || "OMNI";
+      const currentValue = omniIcmeList?.value;
+      const choices = spacecraft === "STEREO-A"
+        ? [["STEREO-A", "Jian list"], ["None", "None"]]
+        : [["None", "None"], ["CaneRichardson", "CaneRichardson"], ["DONKI", "DONKI"]];
+      if (!omniIcmeList) return;
+      omniIcmeList.replaceChildren(...choices.map(([value, label]) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        return option;
+      }));
+      const validValues = choices.map(([value]) => value);
+      if (!useDefault && validValues.includes(currentValue)) {
+        omniIcmeList.value = currentValue;
+      } else {
+        syncOmniIcmeDefault();
+      }
+      syncIcmeBufferState();
+    }
+    function syncIcmeBufferState() {
+      const fields = document.getElementById("insitu-icme-buffer-fields");
+      const disabled = omniIcmeList?.value === "None";
+      fields?.querySelectorAll("input").forEach(input => input.disabled = disabled);
+      fields?.classList.toggle("opacity-50", disabled);
+      const qualityField = document.getElementById("donki-icme-quality-field");
+      const qualitySelect = document.getElementById("donki-icme-min-quality");
+      const qualityDisabled = omniIcmeList?.value !== "DONKI";
+      if (qualitySelect) qualitySelect.disabled = qualityDisabled;
+      qualityField?.classList.toggle("opacity-50", qualityDisabled);
+    }
+    function syncOmniForecastTimeState() {
+      if (!omniForecastDatetime || !insituMode) return;
+      omniForecastDatetime.disabled = insituMode.value !== "forecast";
+    }
+    function syncIswaMapDateState() {
+      if (!iswaMapDate || !iswaUseModelStart) return;
+      iswaMapDate.disabled = false;
+      syncModelStartFromIswaMapDate();
+      syncOmniForecastTime();
+    }
+    function syncLongitudeControls() {
+      const disabled = Boolean(modelIs1D && modelIs1D.checked);
+      [modelLongitudeStart, modelLongitudeStop].forEach(input => {
+        if (input) input.disabled = disabled;
+      });
+      if (modelLongitudeRow) {
+        modelLongitudeRow.classList.toggle("opacity-50", disabled);
+        modelLongitudeRow.classList.toggle("pointer-events-none", disabled);
+      }
+    }
+    let longitudeClampRequest = 0;
+    async function updateBodyLongitudeRange() {
+      const enabled = Boolean(clampLongitudeToBody?.checked);
+      if (clampLongitudeBody) clampLongitudeBody.disabled = !enabled;
+      clampLongitudeBodyLabel?.classList.toggle("opacity-50", !enabled);
+      [modelLongitudeStart, modelLongitudeStop, modelOuterRadius].forEach(input => {
+        if (input) input.readOnly = enabled;
+      });
+      if (!enabled) {
+        syncLongitudeControls();
+        return;
+      }
+      modelIs1D.checked = false;
+      frameSelect.value = "sidereal";
+      syncLongitudeControls();
+      if (!modelStartInput.value || !(Number(simulationDuration.value) > 0)) return;
+      const requestNumber = ++longitudeClampRequest;
+      const runButton = document.getElementById("run-surf-button");
+      if (runButton) runButton.disabled = true;
+      const parameters = new URLSearchParams({
+        datetime: modelStartInput.value,
+        duration: simulationDuration.value,
+        body: clampLongitudeBody.value,
+        nlon: document.querySelector('[name="nlon"]').value,
+        dr_rs: modelRadialSpacing.value
+      });
+      try {
+        const response = await fetch(`{{ url_for("body_longitude_range") }}?${parameters}`);
+        if (!response.ok) throw new Error(await response.text());
+        const result = await response.json();
+        if (requestNumber === longitudeClampRequest && clampLongitudeToBody.checked) {
+          modelLongitudeStart.value = result.lon_min.toFixed(2);
+          modelLongitudeStop.value = result.lon_max.toFixed(2);
+          modelOuterRadius.value = result.r_max_rs.toFixed(2);
+        }
+      } finally {
+        if (runButton && requestNumber === longitudeClampRequest && !runInProgress) {
+          runButton.disabled = false;
+        }
+      }
+    }
+    async function updateCoordinates(parameters) {
+      const response = await fetch(`{{ url_for("model_coordinates") }}?${new URLSearchParams(parameters)}`);
+      if (!response.ok) throw new Error(await response.text());
+      const coordinates = await response.json();
+      modelStartInput.value = coordinates.datetime;
+      syncModelEndFromDuration();
+      modelCrNumber.value = coordinates.cr_num;
+      modelCrLongitude.value = coordinates.cr_lon.toFixed(2);
+      if (!averageBodyLatitude.checked) {
+        modelLatitude.value = coordinates.earth_latitude.toFixed(2);
+      } else {
+        await updateAverageBodyLatitude();
+      }
+      syncCmeDatetimeFromDay();
+      syncOmniForecastTime();
+      syncOmniIcmeDefault();
+      clearCmesForStartTimeChange();
+      await updateBodyLongitudeRange();
+    }
+    let averageLatitudeRequest = 0;
+    async function updateLatitudeBodyChoices() {
+      if (!modelStartInput.value || !(Number(simulationDuration.value) > 0)) return;
+      const parameters = new URLSearchParams({
+        datetime: modelStartInput.value,
+        duration: simulationDuration.value
+      });
+      const response = await fetch(`{{ url_for("latitude_body_choices") }}?${parameters}`);
+      if (!response.ok) throw new Error(await response.text());
+      const available = new Set((await response.json()).spacecraft || []);
+      latitudeBody.querySelectorAll('option[data-spacecraft="true"]').forEach(option => {
+        option.disabled = !available.has(option.value);
+      });
+      if (latitudeBody.selectedOptions[0]?.disabled) latitudeBody.value = "Earth";
+    }
+    async function updateAverageBodyLatitude() {
+      const enabled = averageBodyLatitude.checked;
+      latitudeBody.disabled = !enabled;
+      if (!enabled || !modelStartInput.value || !(Number(simulationDuration.value) > 0)) return;
+      const requestNumber = ++averageLatitudeRequest;
+      await updateLatitudeBodyChoices();
+      const parameters = new URLSearchParams({
+        datetime: modelStartInput.value,
+        duration: simulationDuration.value,
+        body: latitudeBody.value
+      });
+      const response = await fetch(`{{ url_for("average_body_latitude") }}?${parameters}`);
+      if (!response.ok) throw new Error(await response.text());
+      const result = await response.json();
+      if (requestNumber === averageLatitudeRequest && averageBodyLatitude.checked) {
+        modelLatitude.value = result.average_latitude.toFixed(2);
+      }
+    }
+    function clearCmesForStartTimeChange() {
+      if (!cmes.length) return;
+      cmes.splice(0, cmes.length);
+      selectedCmeIndex = -1;
+      renderCmes();
+      document.getElementById("donki-status").textContent =
+        "Model start time changed; reload or recreate the CME list.";
+    }
+    modelStartInput.addEventListener("change", () => {
+      syncModelEndFromDuration();
+      clearCmesForStartTimeChange();
+      syncOmniForecastTime();
+      syncDefaultInsituSpacecraft();
+      updateCoordinates({datetime: modelStartInput.value}).catch(console.error);
+    });
+    modelStartInput.addEventListener("input", () => {
+      syncModelEndFromDuration();
+      syncOmniForecastTime();
+      syncDefaultInsituSpacecraft();
+    });
+    modelStartInput.addEventListener("input", syncOmniIcmeDefault);
+    averageBodyLatitude.addEventListener("change", () => updateAverageBodyLatitude().catch(console.error));
+    latitudeBody.addEventListener("change", () => updateAverageBodyLatitude().catch(console.error));
+    simulationDuration.addEventListener("change", () => updateAverageBodyLatitude().catch(console.error));
+    simulationDuration.addEventListener("input", syncModelEndFromDuration);
+    modelEndInput.addEventListener("change", syncDurationFromModelEnd);
+    syncModelEndFromDuration();
+    modelLatitude.addEventListener("input", event => {
+      if (event.isTrusted && averageBodyLatitude.checked) {
+        averageBodyLatitude.checked = false;
+        updateAverageBodyLatitude().catch(console.error);
+      }
+    });
+    updateAverageBodyLatitude().catch(console.error);
+    syncSpacecraftIcmeOptions();
+    if (!restoredPreRunConfiguration) {
+      syncOmniForecastTime();
+      syncDefaultInsituSpacecraft();
+      syncOmniIcmeDefault();
+    }
+    insituSpacecraft?.addEventListener("change", () => {
+      insituSpacecraftManuallySelected = true;
+      syncSpacecraftIcmeOptions(true);
+    });
+    omniIcmeList?.addEventListener("change", syncIcmeBufferState);
+    if (insituMode) {
+      insituMode.addEventListener("change", syncOmniForecastTimeState);
+      syncOmniForecastTimeState();
+    }
+    omniForecastDatetime?.addEventListener("change", syncModelStartFromOmniForecastTime);
+    if (iswaUseModelStart) {
+      iswaUseModelStart.addEventListener("change", syncIswaMapDateState);
+      iswaMapDate.addEventListener("change", syncModelStartFromIswaMapDate);
+      if (!restoredPreRunConfiguration) syncIswaMapDateState();
+    }
+    let coordinateUpdateTimer;
+    function updateCoordinatesFromCarrington() {
+      updateCoordinates({
+        cr_num: modelCrNumber.value,
+        cr_lon: modelCrLongitude.value
+      }).catch(console.error);
+    }
+    [modelCrNumber, modelCrLongitude].forEach(input => {
+      input.addEventListener("input", () => {
+        window.clearTimeout(coordinateUpdateTimer);
+        coordinateUpdateTimer = window.setTimeout(updateCoordinatesFromCarrington, 250);
+      });
+      input.addEventListener("change", () => {
+        window.clearTimeout(coordinateUpdateTimer);
+        updateCoordinatesFromCarrington();
+      });
+    });
+    if (modelIs1D) {
+      modelIs1D.addEventListener("change", syncLongitudeControls);
+      syncLongitudeControls();
+    }
+    cmeLaunchDay.addEventListener("change", syncCmeDatetimeFromDay);
+    cmeLaunchDatetime.addEventListener("change", syncCmeDayFromDatetime);
+    if (!restoredPreRunConfiguration) syncCmeDatetimeFromDay();
+
+    const modelInnerRadius = document.querySelector('[name="rmin"]');
+    const cmeInitialHeight = document.getElementById("cme-initial-height");
+    function syncCmeInitialHeightStyle() {
+      const differs = Math.abs(
+        Number(cmeInitialHeight.value) - Number(modelInnerRadius.value)
+      ) > 1e-6;
+      cmeInitialHeight.classList.toggle("border-red-500", differs);
+      cmeInitialHeight.classList.toggle("text-red-700", differs);
+      cmeInitialHeight.title = differs
+        ? "CME initial height differs from model inner boundary."
+        : "";
+    }
+    modelInnerRadius.addEventListener("change", syncCmeInitialHeightStyle);
+    cmeInitialHeight.addEventListener("change", syncCmeInitialHeightStyle);
+    syncCmeInitialHeightStyle();
+
+    const masCrNumber = document.getElementById("mas-cr-number");
+    const masUseMapTime = document.getElementById("mas-use-map-time");
+    async function applyMasMapTime() {
+      if (!masUseMapTime.checked) return;
+      await updateCoordinates({cr_num: masCrNumber.value, cr_lon: 360});
+      const modelStart = utcInputDate(modelStartInput);
+      modelStart.setUTCDate(modelStart.getUTCDate() - 5);
+      await updateCoordinates({datetime: modelStart.toISOString().slice(0, 19)});
+    }
+    masCrNumber.addEventListener("change", () => applyMasMapTime().catch(console.error));
+    masUseMapTime.addEventListener("change", () => applyMasMapTime().catch(console.error));
+
+    async function syncFileMapTime(source, fileInputId, statusId, useMapTimeId) {
+      const fileInput = document.getElementById(fileInputId);
+      const status = document.getElementById(statusId);
+      const useMapTime = document.getElementById(useMapTimeId);
+      const file = fileInput && fileInput.files && fileInput.files[0];
+      if (!file) {
+        if (status) status.textContent = "No file selected.";
+        return;
+      }
+      if (status) status.textContent = `Reading ${file.name}...`;
+      if (!useMapTime || !useMapTime.checked) {
+        if (status) status.textContent = `Selected ${file.name}; map time not applied to model start.`;
+        return;
+      }
+      const formData = new FormData();
+      formData.append("source", source);
+      formData.append("file", file);
+      const response = await fetch(`{{ url_for("ambient_file_time") }}`, {
+        method: "POST",
+        body: formData
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const payload = await response.json();
+      if (payload.datetime) {
+        const modelStart = new Date(`${payload.datetime}Z`);
+        modelStart.setUTCDate(modelStart.getUTCDate() - 5);
+        modelStartInput.value = modelStart.toISOString().slice(0, 19);
+        modelStartInput.dispatchEvent(new Event("change", {bubbles: true}));
+        if (status) status.textContent = `Selected ${file.name}; run start set to map time - 5 days.`;
+      } else if (status) {
+        status.textContent = `Selected ${file.name}; map time not found.`;
+      }
+    }
+
+    const wsaFileInput = document.getElementById("wsa-file");
+    const wsaUseMapTime = document.getElementById("wsa-use-map-time");
+    if (wsaFileInput) {
+      wsaFileInput.addEventListener("change", () => {
+        syncFileMapTime("wsa", "wsa-file", "wsa-file-status", "wsa-use-map-time")
+          .catch(error => {
+            const status = document.getElementById("wsa-file-status");
+            if (status) status.textContent = `Could not read WSA map time: ${error.message}`;
+          });
+      });
+    }
+    if (wsaUseMapTime) {
+      wsaUseMapTime.addEventListener("change", () => {
+        syncFileMapTime("wsa", "wsa-file", "wsa-file-status", "wsa-use-map-time")
+          .catch(error => {
+            const status = document.getElementById("wsa-file-status");
+            if (status) status.textContent = `Could not read WSA map time: ${error.message}`;
+          });
+      });
+    }
+
+    const cortomFileInput = document.getElementById("cortom-file");
+    const cortomUseMapTime = document.getElementById("cortom-use-map-time");
+    if (cortomFileInput) {
+      cortomFileInput.addEventListener("change", () => {
+        syncFileMapTime("cortom", "cortom-file", "cortom-file-status", "cortom-use-map-time")
+          .catch(error => {
+            const status = document.getElementById("cortom-file-status");
+            if (status) status.textContent = `Could not read CorTom map time: ${error.message}`;
+          });
+      });
+    }
+    if (cortomUseMapTime) {
+      cortomUseMapTime.addEventListener("change", () => {
+        syncFileMapTime("cortom", "cortom-file", "cortom-file-status", "cortom-use-map-time")
+          .catch(error => {
+            const status = document.getElementById("cortom-file-status");
+            if (status) status.textContent = `Could not read CorTom map time: ${error.message}`;
+          });
+      });
+    }
+
+    const simtimeInput = document.querySelector('[name="simtime_days"]');
+    const dtScaleInput = document.querySelector('[name="dt_scale"]');
+    dtScaleInput.addEventListener("input", () => {
+      dtScaleInput.dataset.autoDefault = "false";
+    });
+    simtimeInput.addEventListener("change", () => {
+      if (dtScaleInput.dataset.autoDefault === "true") {
+        const runDays = Number(simtimeInput.value);
+        if (Number.isFinite(runDays) && runDays > 0) {
+          dtScaleInput.value = String(Math.max(1, Math.round(4 * runDays / 10)));
+        }
+      }
+      clearStaleDonkiCmes();
+      renderCmes();
+      updateBodyLongitudeRange().catch(console.error);
+    });
+
+    [
+      ["map-limit-rmax", "map-rmax"],
+      ["movie-limit-rmax", "movie-rmax"]
+    ].forEach(([toggle, field]) => {
+      const checkbox = document.getElementById(toggle);
+      if (checkbox) checkbox.addEventListener("change", () => {
+        document.getElementById(field).disabled = !checkbox.checked;
+      });
+    });
+
+    const timeseriesObserver = document.getElementById("timeseries-observer");
+    const timeseriesInsituOption = document.getElementById("timeseries-insitu-option");
+    const timeseriesInsituLabel = document.getElementById("timeseries-insitu-label");
+    const timeseriesEarthSource = document.getElementById("timeseries-earth-source");
+    const customTimeseriesCoordinates = document.getElementById("timeseries-custom-coordinates");
+    function syncTimeseriesLocation() {
+      const custom = timeseriesObserver && timeseriesObserver.value === "custom";
+      const observationLabels = {
+        Earth: "Plot observations",
+        PSP: "Plot Parker Solar Probe data",
+        SOLO: "Plot Solar Orbiter data",
+        STA: "Plot STEREO-A data"
+      };
+      const observationLabel = observationLabels[timeseriesObserver?.value];
+      if (timeseriesInsituOption) timeseriesInsituOption.classList.toggle("hidden", !observationLabel);
+      if (timeseriesInsituLabel && observationLabel) timeseriesInsituLabel.textContent = observationLabel;
+      if (timeseriesEarthSource) timeseriesEarthSource.classList.toggle(
+        "hidden", timeseriesObserver?.value !== "Earth"
+      );
+      if (customTimeseriesCoordinates) {
+        customTimeseriesCoordinates.classList.toggle("hidden", !custom);
+        customTimeseriesCoordinates.classList.toggle("grid", custom);
+      }
+    }
+    if (timeseriesObserver) {
+      timeseriesObserver.addEventListener("change", syncTimeseriesLocation);
+      syncTimeseriesLocation();
+    }
+    const tabButtons = [...document.querySelectorAll("[data-tab]")];
+    const tabPanels = [...document.querySelectorAll("[data-panel]")];
+
+    function activateTab(name, updateHash = true) {
+      const button = tabButtons.find(item => item.dataset.tab === name);
+      if (!button || button.disabled) return;
+      if (name === "outputs") button.classList.remove("has-new-output");
+
+      tabButtons.forEach(item => {
+        const selected = item.dataset.tab === name;
+        item.classList.toggle("active", selected);
+        item.setAttribute("aria-selected", String(selected));
+      });
+      tabPanels.forEach(panel => {
+        panel.classList.toggle("active", panel.dataset.panel === name);
+      });
+      const simulationForm = document.getElementById("simulation-form");
+      if (simulationForm) {
+        simulationForm.classList.toggle(
+          "hidden",
+          !["model", "ambient", "cme"].includes(name)
+        );
+      }
+      if (updateHash) history.replaceState(null, "", `#${name}`);
+    }
+
+    tabButtons.forEach(button => {
+      button.addEventListener("click", () => activateTab(button.dataset.tab));
+    });
+
+    document.querySelectorAll("[data-inner-tabs]").forEach(tabGroup => {
+      const buttons = [...tabGroup.querySelectorAll("[data-inner-tab]")];
+      const container = tabGroup.parentElement;
+      buttons.forEach(button => {
+        button.addEventListener("click", () => {
+          buttons.forEach(item => item.classList.toggle("active", item === button));
+          container.querySelectorAll("[data-inner-panel]").forEach(panel => {
+            panel.classList.toggle(
+              "active",
+              panel.dataset.innerPanel === button.dataset.innerTab
+            );
+          });
+        });
+      });
+    });
+
+    const requestedTab = window.location.hash.slice(1);
+    const retainedTab = sessionStorage.getItem("surfs-up-active-tab");
+    sessionStorage.removeItem("surfs-up-active-tab");
+    const defaultTab = requestedTab || retainedTab || "model";
+    activateTab(defaultTab, false);
+
+    const oneDimensionalToggle = document.querySelector('[name="is_1d"]');
+    const solverSelect = document.querySelector('[name="solver"]');
+    const includeBpolToggle = document.querySelector('[name="include_bpol"]');
+    const modelGammaRow = document.getElementById("model-gamma-row");
+    const modelGammaInput = document.getElementById("model-gamma");
+    const frameSelect = document.querySelector('[name="frame"]');
+    const streakToggle = document.querySelector('[name="streak_lines_enabled"]');
+    const streakSpacing = document.querySelector('[name="streak_spacing_deg"]');
+    const donkiDefaultControls = document.querySelectorAll('[name^="donki_"]');
+    donkiDefaultControls.forEach(control => {
+      control.addEventListener("change", applyDefaultsToAllCmes);
+    });
+    function syncMovieHcsControls(defaultToChecked = false) {
+      const available = Boolean(includeBpolToggle && includeBpolToggle.checked);
+      ["movie-hcs"].forEach(id => {
+        const checkbox = document.getElementById(id);
+        const label = document.getElementById(`${id}-label`);
+        if (!checkbox) return;
+        checkbox.disabled = !available;
+        if (!available) checkbox.checked = false;
+        else if (defaultToChecked) checkbox.checked = true;
+        if (label) label.classList.toggle("opacity-50", !available);
+      });
+    }
+    function syncModelDependentControls(updateFrame = false) {
+      const mapControls = document.getElementById("map-controls");
+      if (mapControls) mapControls.disabled = oneDimensionalToggle.checked;
+      const mapTabButton = document.querySelector('[data-inner-tab="map-product"]');
+      const radialTabButton = document.querySelector('[data-inner-tab="radial-product"]');
+      if (mapTabButton) mapTabButton.disabled = oneDimensionalToggle.checked;
+      document.querySelector('[name="lon_min"]').disabled = oneDimensionalToggle.checked;
+      document.querySelector('[name="lon_max"]').disabled = oneDimensionalToggle.checked;
+      if (updateFrame) {
+        frameSelect.value = oneDimensionalToggle.checked ? "synodic" : "sidereal";
+      }
+      if (modelGammaRow && modelGammaInput) {
+        const gammaEnabled = !solverSelect.value.startsWith("huxt");
+        modelGammaInput.disabled = !gammaEnabled;
+        modelGammaRow.classList.toggle("hidden", !gammaEnabled);
+      }
+      streakSpacing.disabled = !streakToggle.checked;
+      const fieldSelect = document.getElementById("movie-ts-field");
+      if (fieldSelect) {
+        [...fieldSelect.options].forEach(option => {
+          option.disabled = solverSelect.value.startsWith("huxt") && option.value !== "V";
+        });
+        if (solverSelect.value.startsWith("huxt")) fieldSelect.value = "V";
+      }
+      syncMovieHcsControls();
+    }
+    oneDimensionalToggle.addEventListener("change", () => {
+      if (oneDimensionalToggle.checked && clampLongitudeToBody.checked) {
+        clampLongitudeToBody.checked = false;
+        updateBodyLongitudeRange().catch(console.error);
+      }
+      syncModelDependentControls(true);
+    });
+    clampLongitudeToBody.addEventListener("change", () => {
+      updateBodyLongitudeRange().then(() => syncModelDependentControls()).catch(console.error);
+    });
+    clampLongitudeBody.addEventListener("change", () => updateBodyLongitudeRange().catch(console.error));
+    frameSelect.addEventListener("change", () => {
+      if (clampLongitudeToBody.checked && frameSelect.value !== "sidereal") {
+        frameSelect.value = "sidereal";
+      }
+    });
+    document.querySelector('[name="nlon"]').addEventListener("change", () => updateBodyLongitudeRange().catch(console.error));
+    modelRadialSpacing.addEventListener("change", () => updateBodyLongitudeRange().catch(console.error));
+    solverSelect.addEventListener("change", () => {
+      syncModelDependentControls();
+      document.getElementById("donki-profile").value =
+        ["hydro", "hydro-pui"].includes(document.querySelector('[name="solver"]').value)
+          ? "sinusoidal" : "square";
+      applyDefaultsToAllCmes();
+    });
+    if (includeBpolToggle) {
+      includeBpolToggle.addEventListener("change", () => {
+        syncMovieHcsControls(includeBpolToggle.checked);
+      });
+    }
+    streakToggle.addEventListener("change", syncModelDependentControls);
+    syncModelDependentControls();
+    updateBodyLongitudeRange().catch(console.error);
+  </script>
+  </main>
+</body>
+</html>
