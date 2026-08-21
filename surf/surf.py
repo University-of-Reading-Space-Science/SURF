@@ -1531,7 +1531,7 @@ class SURF:
         )
         
         # Extract particle positions at output times
-        # Compressible solver doesn't track velocity, fill with NaN
+        # Particle positions and velocities are populated from trajectories.
         cme_particles_r_out = np.full((n_cme, self.nt_out, 2), np.nan)
         cme_particles_v_out = np.full((n_cme, self.nt_out, 2), np.nan)
         hcs_particles_r_out = np.full((n_hcs_max, self.nt_out, 2), np.nan)
@@ -1568,9 +1568,13 @@ class SURF:
                         if np.any(valid_mask):
                             r_valid = r_traj[valid_mask]
                             t_valid = t_traj[valid_mask]
-                            r_out = np.interp(time_out_sec, t_valid, r_valid, 
+                            r_out = np.interp(time_out_sec, t_valid, r_valid,
                                              left=np.nan, right=np.nan)
                             cme_particles_r_out[cme_id, :, 0] = r_out
+                            v_traj = groups[leading_key]['v'][valid_mask]
+                            cme_particles_v_out[cme_id, :, 0] = np.interp(
+                                time_out_sec, t_valid, v_traj,
+                                left=np.nan, right=np.nan)
                     
                     if trailing_key in groups:
                         # Compressible solver returns 1D trajectory arrays
@@ -1583,6 +1587,10 @@ class SURF:
                             r_out = np.interp(time_out_sec, t_valid, r_valid,
                                              left=np.nan, right=np.nan)
                             cme_particles_r_out[cme_id, :, 1] = r_out
+                            v_traj = groups[trailing_key]['v'][valid_mask]
+                            cme_particles_v_out[cme_id, :, 1] = np.interp(
+                                time_out_sec, t_valid, v_traj,
+                                left=np.nan, right=np.nan)
             
             # Process HCS particles
             if self.track_b:
@@ -1620,13 +1628,16 @@ class SURF:
                     for ihcs in range(n_hcs_max):
                         hcs_key = f'hcs_{ihcs}'
                         if hcs_key in groups:
+                            # Preserve the monotonically increasing crossing
+                            # index even if this particle left the grid before
+                            # the next saved output. Otherwise a later chunk
+                            # can reuse the slot with the wrong polarity.
+                            final_hcs_count = max(final_hcs_count, ihcs + 1)
                             # Compressible solver returns 1D trajectory arrays
                             r_traj = groups[hcs_key]['r']
                             t_traj = groups[hcs_key]['t']
                             valid_mask = ~np.isnan(r_traj)
                             if np.any(valid_mask):
-                                final_hcs_count = max(
-                                    final_hcs_count, ihcs + 1)
                                 r_valid = r_traj[valid_mask]
                                 t_valid = t_traj[valid_mask]
                                 r_out = np.interp(time_out_sec, t_valid, r_valid,
@@ -2047,8 +2058,15 @@ class SURF:
                 ) * u.rad
 
                 # save the streakline footpoint longitude on the model time step
-                self.streak_lon_r0[:, istreak] = np.interp(self.time_out, self.model_time,
-                                                           streak_lon_t, period=2 * np.pi)
+                # Interpolate on the (non-periodic) time axis, then wrap the
+                # angular result. Passing ``period=2*pi`` to np.interp wraps
+                # the x coordinates, which are seconds, and corrupts chunked
+                # streakline footpoints.
+                streak_lon_unwrapped = np.unwrap(streak_lon_t.to_value(u.rad))
+                self.streak_lon_r0[:, istreak] = zerototwopi(np.interp(
+                    self.time_out.to_value(self.model_time.unit),
+                    self.model_time.to_value(self.model_time.unit),
+                    streak_lon_unwrapped))
 
                 # Handle both scalar and array longitude cases
                 lon_array = [self.lon] if self.lon.size == 1 else self.lon
@@ -3705,6 +3723,7 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
         particle_injection_rate=particle_injection_rate,
         particle_release_rate=particle_release_rate,
         particle_initial_positions=particle_initial_positions_si,
+        particle_step_times=model_time_seconds,
         v_init=v_init_si,
         rho_init=rho_init_si,
         T_init=T_init_si
