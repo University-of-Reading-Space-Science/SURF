@@ -1,0 +1,18 @@
+Update SURF and SURFs_UP on PythonAnywhere
+===========================================
+
+In a PythonAnywhere Bash console, run:
+
+    workon surf-combined
+    cd /home/mathewjowens/SURF
+    git switch dev_PUI
+    git pull --ff-only origin dev_PUI
+    python -m pip install -e .
+
+Then, in the PythonAnywhere dashboard:
+
+1. On the Web tab, press Reload.
+2. On the Tasks tab, restart the surfs-up-worker always-on task.
+
+SURF and SURFs_UP are both updated by these commands because they are now
+installed from the same repository and Python package distribution.

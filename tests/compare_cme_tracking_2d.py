@@ -114,5 +114,5 @@ for ax, (model, title, elapsed) in zip(axes.flat, cases):
     ax.set_title(f"{title}\nsolve time = {elapsed:.2f} s")
 
 fig.tight_layout()
-fig.savefig("cme_tracking_comparison.png", dpi=150)
+#fig.savefig("cme_tracking_comparison.png", dpi=150)
 plt.show()
