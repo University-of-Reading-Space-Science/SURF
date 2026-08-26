@@ -4,6 +4,8 @@ SURF model output.
 """
 
 import astropy.constants as const
+from astropy.coordinates import SkyCoord
+from sunpy.coordinates import frames
 import astropy.units as u
 import matplotlib.pyplot as plt
 import numpy as np
@@ -453,6 +455,10 @@ class SyntheticImager:
             # USE TRACER PARTICLES TO ISOLATE THE CME IN TIME - ELONGATION SPACE.
             flank, extent = self.compute_flank_profile(cme)
 
+            fig, ax = plt.subplots()
+            ax.plot(flank['time'], flank['el'], 'r.', label='flank')
+            plt.show()
+
             cme_mask = np.zeros(djmap.shape, dtype=bool)
             for id_t in extent.index:
                 e_min = extent.loc[id_t, 'e_min']
@@ -471,6 +477,12 @@ class SyntheticImager:
             # Sort regions from largest to smallest (by number of coordinates)
             # This increases the chance the t-e profiles are in the correct order.
             regions = sorted(regions, key=lambda r: r.area, reverse=True)
+
+            fig, ax = plt.subplots(4, 1, figsize=(10, 10))
+            ax[0].imshow(djmap, cmap='gray')
+            ax[1].imshow(cme_mask, cmap='gray')
+            ax[2].imshow(edges, cmap='gray')
+            plt.show()
 
             # For each region convert pixel coords to map coords and average multiple elons at fixed
             # times
@@ -496,34 +508,25 @@ class SyntheticImager:
                                                    'e': e_pix_mean}
 
             cme_profiles.append(profiles)
+        print('Done!')
 
         return cme_profiles
 
-    def compute_flank_profile(self, cme):
-        """
-        Compute the time elongation profile of the flank of a ConeCME in HUXt. The observer
-        longtidue is specified relative to Earth but otherwise matches Earth's coords.
+    def compute_flank_profile(self,model, cme):
 
-        Parameters
-        ----------
-        cme: A ConeCME object from a completed HUXt run (i.e the ConeCME.coords dictionary has
-        been populated).
-        Returns
-        -------
-        obs_profile: Pandas dataframe giving the coordinates of the ConeCME flank from
-                     the observers perspective, including the time, elongation, position angle,
-                     and HEEQ radius and longitude.
-        """
-        times = np.array(
-            [coord['model_time'].to(u.day).value for i, coord in cme.coords.items()]) * u.day
+        times = model.time_out + model.time_init
 
         # Compute observers location using earth ephem, adding on observers longitude offset from Earth
         # and correct for runover 2*pi
-        flank = pd.DataFrame(index=np.arange(times.size), columns=['time', 'el', 'r', 'lon'])
-        flank['time'] = times.to(u.day).value
+        flank = pd.DataFrame(index=np.arange(times.size), columns=['date', 'time', 'el', 'r',
+                                                                   'lon'])
+        flank['date'] = times.to_datetime()
+        flank['time'] = model.time_out.to(u.day).value
 
-        extent = pd.DataFrame(index=np.arange(times.size), columns=['time', 'e_min', 'e_max'])
-        extent['time'] = times.to(u.day).value
+        extent = pd.DataFrame(index=np.arange(times.size), columns=['date', 'time', 'e_min',
+                                                                    'e_max'])
+        extent['date'] = times.to_datetime()
+        extent['time'] = model.time_out.to(u.day).value
 
         # Check that the time arrays match in length
         if self.observer_times.size != len(times):
@@ -576,15 +579,23 @@ class SyntheticImager:
                 lon_cme = lon_cme[id_sub]
                 r_cme = r_cme[id_sub]
 
-            # Find the flank coordinate and update output
-            id_obs_flank = np.argmax(e_obs)
-            flank.loc[i, 'lon'] = lon_cme[id_obs_flank].value
-            flank.loc[i, 'r'] = r_cme[id_obs_flank].value
-            flank.loc[i, 'el'] = np.rad2deg(e_obs[id_obs_flank])
+            if np.any(id_sub):
+                id_obs_flank = np.argmax(e_obs)
+                flank.loc[i, 'lon'] = lon_cme[id_obs_flank].value
+                flank.loc[i, 'r'] = r_cme[id_obs_flank].value
+                flank.loc[i, 'el'] = np.rad2deg(e_obs[id_obs_flank])
 
-            # Find the flank coordinate and update output
-            extent.loc[i, 'e_min'] = np.rad2deg(np.nanmin(e_obs))
-            extent.loc[i, 'e_max'] = np.rad2deg(np.nanmax(e_obs))
+                # Find the flank coordinate and update output
+                extent.loc[i, 'e_min'] = np.rad2deg(np.nanmin(e_obs))
+                extent.loc[i, 'e_max'] = np.rad2deg(np.nanmax(e_obs))
+            else:
+                flank.loc[i, 'lon'] = np.nan
+                flank.loc[i, 'r'] = np.nan
+                flank.loc[i, 'el'] = np.nan
+
+                # Find the flank coordinate and update output
+                extent.loc[i, 'e_min'] = np.nan
+                extent.loc[i, 'e_max'] = np.nan
 
         # Force values to be floats.
         keys = ['time', 'lon', 'r', 'el']
@@ -592,6 +603,73 @@ class SyntheticImager:
 
         keys = ['time', 'e_min', 'e_max']
         extent[keys] = extent[keys].astype(np.float64)
+
+        return flank, extent
+
+    def compute_flank_profile_v2(self, model, cme):
+
+        times = model.time_out + model.time_init
+
+        # Compute observers location using earth ephem, adding on observers longitude offset from Earth
+        # and correct for runover 2*pi
+        flank = pd.DataFrame(index=np.arange(times.size), columns=['date', 'time', 'el', 'r',
+                                                                   'lon', 'pa'])
+        flank['date'] = times.to_datetime()
+        flank['time'] = model.time_out.to(u.day).value
+
+        extent = pd.DataFrame(index=np.arange(times.size), columns=['date', 'time', 'e_min',
+                                                                    'e_max'])
+        extent['date'] = times.to_datetime()
+        extent['time'] = model.time_out.to(u.day).value
+
+        # Check that the time arrays match in length
+        if self.observer_times.size != len(times):
+            raise ValueError(f"The number of times in the ConeCME ({len(times)}) does not match "
+                             f"the  number of times in the observer ({self.observer_times.size}).")
+
+        # Loop over time
+        for i, coord in cme.coords.items():
+
+            if len(coord['r']) == 0:
+                flank.loc[i, ['lon', 'r', 'el']] = np.nan
+                continue
+
+            # Get skycoord obj for the observer.
+            observer = SkyCoord(
+                lon=self.observer_lons[i],
+                lat=self.observer_lats[i],
+                radius=self.observer_rs[i],
+                frame=frames.HeliographicStonyhurst,
+                obstime=times[i]
+            )
+
+            cme_heeq = SkyCoord(
+                lon=coord['lon'],
+                lat=coord['lat'],
+                radius = coord['r'],
+                frame=frames.HeliographicStonyhurst,
+                obstime=times[i]
+            )
+
+            # Convert the HEEQ CME coords to HPR.
+            cme_hpr = cme_heeq.transform_to(
+                frames.HelioprojectiveRadial(
+                    observer=observer,
+                    obstime=cme_heeq.obstime
+                )
+            )
+
+            id_flank = np.argmax(cme_hpr.theta.value)
+
+            flank.loc[i, 'lon'] = cme_heeq.lon[id_flank].to(u.deg).value
+            flank.loc[i, 'r'] = cme_heeq.radius[id_flank].to(u.m).value
+            flank.loc[i, 'el'] = cme_hpr.theta[id_flank].to(u.deg).value
+            flank.loc[i, 'pa'] = cme_hpr.psi[id_flank].to(u.deg).value
+
+            # Find the flank coordinate and update output
+            extent.loc[i, 'e_min'] = np.nanmin(cme_hpr.theta.to(u.deg).value)
+            extent.loc[i, 'e_max'] = np.nanmax(cme_hpr.theta.to(u.deg).value)
+
         return flank, extent
 
     def _density_interpolator(self, model, time_step):
@@ -671,3 +749,112 @@ class SyntheticImager:
         l_outer = self.lon_grid[-1, id_elon].to(u.rad).value
 
         return np.array([r_inner, r_outer]) * u.solRad, np.array([l_inner, l_outer]) * u.rad
+
+
+def compute_target_hpr_coords(observer, target):
+    """
+    Compute the position angle of a target relative to the observer. Both the observer and target
+    must be instances of the Observer class that span the same time range.
+
+    Args:
+        observer: An instance of the Observer class
+        target: An instance of the Observer class
+
+    Returns:
+        psi: The position angle of the target relative to the observer.
+    """
+
+    # Get skycoord obj for the observer.
+    psi = np.zeros(observer.time.size)
+    elon = np.zeros(observer.time.size)
+    for i in range(observer.time.size):
+        observer_heeq = SkyCoord(
+            lon=observer.lon[i],
+            lat=observer.lat[i],
+            radius=observer.r[i],
+            frame=frames.HeliographicStonyhurst,
+            obstime=observer.time[i]
+        )
+
+        target_heeq = SkyCoord(
+            lon=target.lon[i],
+            lat=target.lat[i],
+            radius=target.r[i],
+            frame=frames.HeliographicStonyhurst,
+            obstime=target.time[i]
+        )
+
+        # Convert the HEEQ CME coords to HPR.
+        target_hpr = target_heeq.transform_to(
+            frames.HelioprojectiveRadial(
+                observer=observer_heeq,
+                obstime=target_heeq.obstime
+            )
+        )
+        
+        psi[i] = target_hpr.psi.to(u.deg).value
+        elon[i] = target_hpr.theta.to(u.deg).value
+
+    psi = psi * u.deg
+    elon = elon * u.deg
+    return psi, elon
+
+
+def convert_model_coords_to_hpr(observer, model, timestep=0):
+    """
+    Compute the position angle of a target relative to the observer. Both the observer and target
+    must be instances of the Observer class that span the same time range.
+
+    Args:
+        observer: An instance of the Observer class
+        model: An instance of the SURF class
+
+    Returns:
+        el: The elongation angle of the model coords.
+        psi: The position angle of the model coords.
+    """
+
+    # Get skycoord obj for the observer.
+
+    r = model.r_grid.ravel()
+    lon = model.lon_grid.ravel()
+    lat = np.ones(r.shape) * model.latitude
+
+    observer_heeq = SkyCoord(
+        lon=observer.lon[timestep],
+        lat=observer.lat[timestep],
+        radius=observer.r[timestep],
+        frame=frames.HeliographicStonyhurst,
+        obstime=observer.time[timestep]
+    )
+
+    target_heeq = SkyCoord(
+        lon=lon,
+        lat=lat,
+        radius=r,
+        frame=frames.HeliographicStonyhurst,
+        obstime=observer.time[timestep]
+    )
+
+    # Convert the HEEQ CME coords to HPR.
+    target_hpr = target_heeq.transform_to(
+        frames.HelioprojectiveRadial(
+            observer=observer_heeq,
+            obstime=target_heeq.obstime
+        )
+    )
+
+    psi = target_hpr.psi.reshape(model.r_grid.shape)
+    elon = target_hpr.theta.reshape(model.r_grid.shape)
+
+    return psi, elon
+
+"""
+rewrite this so that the imager fov is define in HPR and then converted into HEEQ by Sunpy.
+Then initialse SURF3D over multiple latitudes, and collate the density fields.
+Then pass these into imager class to do the thomson scattering calcs. 
+Need to decide how to handle interpolation across r/lon/lat.
+Reduce Z grid to 1AU?
+Can we get smart about reducing model domain to be a fn of the FOV? Different longitudes don't 
+need to be simulated so far out - might be a waste of I/O compared to just simulating to 1AU. 
+"""
