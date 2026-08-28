@@ -389,6 +389,114 @@ class SyntheticImager:
         fig.subplots_adjust(left=0.05, bottom=0.08, right=0.98, top=0.98, wspace=0.1)
         return fig, ax
 
+    def plot_jmap_with_cme_profiles(self, model, jmap, djmap):
+        """
+        Plot the plain and differenced jmaps with the automatically tracked CME profiles overlaid.
+        """
+        fig, ax = self.plot_jmap(model, jmap, djmap)
+        cme_profiles = self.track_cmes(model, djmap)
+        for cme in cme_profiles:
+            for key, val in cme.items():
+                if key == 'feature_00':
+                    ax[1].plot(val['t'], val['e'], 'r.', label=key)
+
+        return fig, ax
+
+    def track_cmes(self, model, djmap):
+        """
+        Use image processing techniques to track the CME front in the differenced Jmap.
+        """
+        # Check that the model is compatible with this FoV.
+        self._check_latitude_compatibility(model)
+
+        # Check a ConeCME object exists.
+        if not model.cmes:
+            raise ValueError(
+                "model.cmes is empty. Solve the model with at least one ConeCME before calling "
+                "track_cmes.")
+        if not all(isinstance(cme, s.ConeCME) for cme in model.cmes):
+            raise TypeError(
+                f"All entries in model.cmes must be instances of s.ConeCME. "
+                f"Got types: {[type(cme).__name__ for cme in model.cmes]}."
+            )
+
+        times = model.time_out.to(u.day).value
+        elons = self.e.to(u.deg).value
+
+        # Clip and scale the jmap. Find ridges.
+        djmap = np.nan_to_num(djmap, nan=0.0, posinf=0.0, neginf=0.0)
+        vmin, vmax = np.nanpercentile(np.abs(djmap), [0, 100])
+        djmap_clipped = np.clip(djmap, vmin, vmax)
+        djmap_norm = (djmap_clipped - vmin) / (vmax - vmin)
+        ridge = ski.filters.frangi(djmap_norm, sigmas=[1], black_ridges=False)
+        ridge[ridge > np.percentile(ridge, 95)] = 1
+        ridge[ridge < 1] = 0
+        # Now do edge detection on the ridge.
+        grad_t = ski.filters.sobel_v(djmap_norm)
+        pos_grad = grad_t > 0
+
+        cme_profiles = []
+        for cme in model.cmes:
+
+            # USE TRACER PARTICLES TO ISOLATE THE CME IN TIME - ELONGATION SPACE.
+            flank, extent = self.compute_flank_profile(cme)
+
+            fig, ax = plt.subplots()
+            ax.plot(flank['time'], flank['el'], 'r.', label='flank')
+            plt.show()
+
+            cme_mask = np.zeros(djmap.shape, dtype=bool)
+            for id_t in extent.index:
+                e_min = extent.loc[id_t, 'e_min']
+                e_max = extent.loc[id_t, 'e_max']
+                if np.isnan(e_min):
+                    e_min = 0.0
+                if np.isnan(e_max):
+                    continue
+                else:
+                    id_e = (elons >= e_min) & (elons <= e_max + 5)
+                    cme_mask[id_e, id_t] = True
+
+            edges = ski.feature.canny(ridge, sigma=1, mask=cme_mask) & pos_grad
+            label = ski.measure.label(edges)
+            regions = ski.measure.regionprops(label)
+            # Sort regions from largest to smallest (by number of coordinates)
+            # This increases the chance the t-e profiles are in the correct order.
+            regions = sorted(regions, key=lambda r: r.area, reverse=True)
+
+            fig, ax = plt.subplots(4, 1, figsize=(10, 10))
+            ax[0].imshow(djmap, cmap='gray')
+            ax[1].imshow(cme_mask, cmap='gray')
+            ax[2].imshow(edges, cmap='gray')
+            plt.show()
+
+            # For each region convert pixel coords to map coords and average multiple elons at fixed
+            # times
+            profiles = {}
+            for id_r, region in enumerate(regions):
+
+                if region.area < 5:
+                    continue
+
+                c = np.array(region.coords)
+                # Scale pixel coords to map coords
+                t_pix = times[0] + c[:, 1] * (times[-1] - times[0]) / times.size
+                e_pix = elons[0] + c[:, 0] * (elons[-1] - elons[0]) / (elons.size)
+                # Now average the e_pix values for each unique t_pix value.
+                t_pix_unique = np.unique(t_pix)
+                e_pix_mean = np.zeros(t_pix_unique.shape)
+                for id_tu, tu in enumerate(t_pix_unique):
+                    id_t = np.where(t_pix == tu)[0]
+                    e_pix_mean[id_tu] = np.nanmean(e_pix[id_t])
+
+                t_real = t_pix_unique + model.time_init.jd
+                profiles[f"feature_{id_r:02d}"] = {'t': t_pix_unique, 't_real': t_real,
+                                                   'e': e_pix_mean}
+
+            cme_profiles.append(profiles)
+
+        return cme_profiles
+
 
     def _density_interpolator(self, model, time_step):
         """
@@ -564,18 +672,10 @@ def compute_target_hpr_coords(observer, target):
     elon = elon * u.deg
     return psi, elon
 
-"""
-rewrite this so that the imager fov is define in HPR and then converted into HEEQ by Sunpy.
-Then initialse SURF3D over multiple latitudes, and collate the density fields.
-Then pass these into imager class to do the thomson scattering calcs. 
-Need to decide how to handle interpolation across r/lon/lat.
-Reduce Z grid to 1AU?
-Can we get smart about reducing model domain to be a fn of the FOV? Different longitudes don't 
-need to be simulated so far out - might be a waste of I/O compared to just simulating to 1AU. 
-"""
 
 if __name__ == "__main__":
 
+    ################################################################################################
     # Need to know how many timesteps and ephemeris of the observer. So make a dummy model.
     t_start = datetime(2026,1,1)
     cr, cr_lon_init = sIN.datetime2surfinputs(t_start)
@@ -597,6 +697,8 @@ if __name__ == "__main__":
 
     sta = model.get_observer('STA')
     ert = model.get_observer('EARTH')
+    ################################################################################################
+    # Create SyntheticImager instance along Earth's PA from STA.
 
     # Compute the position angle of Earth from STA.
     psi_ert, elon_ert = compute_target_hpr_coords(sta, ert)
@@ -605,25 +707,18 @@ if __name__ == "__main__":
 
     # Set up the synthetic imager for STA and along Earth's PA.
     imgr = SyntheticImager(sta, pa=psi_ert_avg, elon_min=5.0, elon_max=30.0)
+    ################################################################################################
+    # Now we can initiliase SURF3d
 
-
-    # Compute the range of latitudes nad longitudes spanned by the field of view.
+    # Get the latitude range spanned by the SyntheticImager's field of view.
     # This is to help set up the SURF3d latitudes.
     imgr._compute_fov_geometry(0)
-    r_min = imgr.r_grid.min().to(u.solRad)
-    r_max = imgr.r_grid.max().to(u.solRad)
-    lon_min = imgr.lon_grid.min().to(u.deg)
-    lon_max = imgr.lon_grid.max().to(u.deg)
     lat_min = imgr.lat_grid.min().to(u.deg)
     lat_max = imgr.lat_grid.max().to(u.deg)
-
-    print(f"R lims:{r_min} {r_max}")
-    print(f"Lon lims:{lon_min} {lon_max}")
     print(f"Lat lims:{lat_min} {lat_max}")
 
-    # Set up SURF3d
+    # Set up SURF3d using this latitude range
     dl = 2 * u.deg
-    # Setup SURF 3D.
     model3d = s.SURF3d(v_map=vr_map,
                     v_map_lat=vr_lats, v_map_long=vr_longs,
                     cr_num=cr, cr_lon_init=cr_lon_init,
@@ -639,16 +734,21 @@ if __name__ == "__main__":
                     initial_height=21.5 * u.solRad)
 
     model3d.solve([cme])
-
+    ################################################################################################
     # Find the SURF3d latitude closest to Earth and plot the solution at 1 day.
     id_lat = np.argmin(np.abs(model3d.lat - ert.lat[0]))
     print(ert.lat[0].to(u.deg))
-    print(id_lat)
     print(model3d.lat[id_lat].to(u.deg))
     model = model3d.SURFlat[id_lat]
-    #sA.plot_compressible(model, 1*u.day, save=True, tag='synHI_test')
-
+    sA.plot_compressible(model, 1*u.day, save=True, tag='synHI_test')
+    sA.animate_3d(model3d,lon=0*u.deg, lat=ert.lat[0], tag='synHI_test')
+    ################################################################################################
     # Use the SURF3d solution to make a Jmap.
     jmap, djmap = imgr.compute_jmap(model3d)
     fig, ax = imgr.plot_jmap(model3d, jmap, djmap)
     plt.show()
+
+# Compute the t-e profiles for each model latitude. How much do they vary?
+# Can I reasonably isolate a chunk of t-e space with the CME launch time and fixed-phi geometry
+# with high and low end speeds?
+# Or we track all the CMEs and convert the coords to HPR and get the mean t-e profile from there?
