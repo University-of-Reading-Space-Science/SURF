@@ -2206,7 +2206,7 @@ class SURF3d:
                  r_max=240 * u.solRad, lon_out=np.nan * u.rad, lon_start=np.nan * u.rad,
                  lon_stop=np.nan * u.rad, simtime=5.0 * u.day, dt_scale=1.0,
                  nlon=128, nlat=45, dr=1.5 * u.solRad,
-                 v_max=3000 * (u.km / u.s), gamma=1.5):
+                 v_max=3000 * (u.km / u.s), gamma=1.5, solver='huxt'):
         """
         Initialise the SURF3D instance.
 
@@ -2273,7 +2273,7 @@ class SURF3d:
                                      r_min=r_min, r_max=r_max,
                                      lon_out=lon_out, lon_start=lon_start, lon_stop=lon_stop,
                                      simtime=simtime, dt_scale=dt_scale,
-                                     nlon=nlon, dr=dr, v_max=v_max, gamma=gamma))
+                                     nlon=nlon, dr=dr, v_max=v_max, gamma=gamma, solver=solver))
         return
 
     def solve(self, cme_list):

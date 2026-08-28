@@ -2056,7 +2056,7 @@ def plot3d_radial_lat_slice(model3d, time, lon=np.nan * u.deg, save=False, tag='
 
 def animate_3d(model3d, lon=0.0 * u.deg, tag='', duration=10, fps=20, outputfilepath=''):
     """
-    Animate the model solution, and save as an MP4.
+    Animate the model solution and save as an MP4.
     Args:
         model3d: An instance of SURF3d
         lon: The longitude along which to render the latitudinal slice.
