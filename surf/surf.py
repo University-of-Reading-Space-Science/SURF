@@ -2206,7 +2206,8 @@ class SURF3d:
                  r_max=240 * u.solRad, lon_out=np.nan * u.rad, lon_start=np.nan * u.rad,
                  lon_stop=np.nan * u.rad, simtime=5.0 * u.day, dt_scale=1.0,
                  nlon=128, nlat=45, dr=1.5 * u.solRad,
-                 v_max=3000 * (u.km / u.s), gamma=1.5, solver='huxt'):
+                 v_max=3000 * (u.km / u.s), gamma=1.5, solver='huxt',
+                 track_cmes=True):
         """
         Initialise the SURF3D instance.
 
@@ -2237,8 +2238,8 @@ class SURF3d:
             dr: Radial grid spacing.
             v_max: Maximum model speed, used with dr to set the CFL time step.
             gamma: Effective adiabatic index passed to each SURF model. Defaults to 1.5.
-            cme_expansion: Boolean, whether CMEs have a declining velocity profile at the inner
-                           boundary
+            solver: SURF solver to use. Defaults to 'huxt'.
+            track_cmes: Boolean, whether to track CMEs in the simulation.
         """
 
         # Define latitude grid
@@ -2246,6 +2247,7 @@ class SURF3d:
         self.latitude_max = latitude_max.to(u.rad)
         self.lat, self.nlat = latitude_grid(
             self.latitude_min, self.latitude_max, nlat=nlat)
+        self.track_cmes = track_cmes
 
         assert len(v_map_lat) == len(v_map[:, 1])
         assert len(v_map_long) == len(v_map[1, :])
@@ -2273,7 +2275,8 @@ class SURF3d:
                                      r_min=r_min, r_max=r_max,
                                      lon_out=lon_out, lon_start=lon_start, lon_stop=lon_stop,
                                      simtime=simtime, dt_scale=dt_scale,
-                                     nlon=nlon, dr=dr, v_max=v_max, gamma=gamma, solver=solver))
+                                     nlon=nlon, dr=dr, v_max=v_max, gamma=gamma, solver=solver,
+                                     track_cmes=self.track_cmes))
         return
 
     def solve(self, cme_list):

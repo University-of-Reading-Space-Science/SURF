@@ -11,6 +11,7 @@ from astropy.coordinates import SkyCoord, cartesian_to_spherical, spherical_to_c
 from sunpy.coordinates import frames
 from astropy.time import Time
 import astropy.units as u
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -277,6 +278,7 @@ class SyntheticImager:
         pol_fov = np.zeros(self.z_grid.shape) * np.nan
 
         interpolator = self._density_interpolator(model, time_step)
+        fov_mask = self._fov_mask(model)
 
         # Minimum elongation permitted by the model inner boundary
         elon_min_model = np.arcsin(
@@ -291,8 +293,9 @@ class SyntheticImager:
             if elon.to(u.rad).value < elon_min_model:
                 continue
 
+            mask = fov_mask[:, i]
             n_e_los = self.get_los_density(interpolator, elon, replace_nans=True)
-
+            n_e_los[mask] = 0.0
             I, Ir, It, Ip, polarisation = self.compute_los_intensity_profile(n_e_los, elon)
             I_fov[:, i] = I
             It_fov[:, i] = It
@@ -395,10 +398,11 @@ class SyntheticImager:
         """
         fig, ax = self.plot_jmap(model, jmap, djmap)
         cme_profiles = self.track_cmes(model, djmap)
+        print(cme_profiles)
         for cme in cme_profiles:
+            print(cme)
             for key, val in cme.items():
-                if key == 'feature_00':
-                    ax[1].plot(val['t'], val['e'], 'r.', label=key)
+                ax[1].plot(val['t'], val['e'], 'r.', label=key)
 
         return fig, ax
 
@@ -410,17 +414,17 @@ class SyntheticImager:
         self._check_latitude_compatibility(model)
 
         # Check a ConeCME object exists.
-        if not model.cmes:
+        if not model.SURFlat[0].cmes:
             raise ValueError(
                 "model.cmes is empty. Solve the model with at least one ConeCME before calling "
                 "track_cmes.")
-        if not all(isinstance(cme, s.ConeCME) for cme in model.cmes):
+        if not all(isinstance(cme, s.ConeCME) for cme in model.SURFlat[0].cmes):
             raise TypeError(
                 f"All entries in model.cmes must be instances of s.ConeCME. "
-                f"Got types: {[type(cme).__name__ for cme in model.cmes]}."
+                f"Got types: {[type(cme).__name__ for cme in model.SURFlat[0].cmes]}."
             )
 
-        times = model.time_out.to(u.day).value
+        times = model.SURFlat[0].time_out.to(u.day).value
         elons = self.e.to(u.deg).value
 
         # Clip and scale the jmap. Find ridges.
@@ -435,27 +439,38 @@ class SyntheticImager:
         grad_t = ski.filters.sobel_v(djmap_norm)
         pos_grad = grad_t > 0
 
+        # Build a mask to limit the search region for this CMEs t-e profile.
+        # Base this on max/min elongation from propagating along the plane of the sky at v +/- dv
         cme_profiles = []
-        for cme in model.cmes:
-
-            # USE TRACER PARTICLES TO ISOLATE THE CME IN TIME - ELONGATION SPACE.
-            flank, extent = self.compute_flank_profile(cme)
-
-            fig, ax = plt.subplots()
-            ax.plot(flank['time'], flank['el'], 'r.', label='flank')
-            plt.show()
-
+        for cme in model.SURFlat[0].cmes:
+            # Only look for features that begin during CME injection
+            t_launch = cme.t_launch.to(u.day).value
+            r_min = cme.initial_height.to(u.m).value
             cme_mask = np.zeros(djmap.shape, dtype=bool)
-            for id_t in extent.index:
-                e_min = extent.loc[id_t, 'e_min']
-                e_max = extent.loc[id_t, 'e_max']
-                if np.isnan(e_min):
-                    e_min = 0.0
-                if np.isnan(e_max):
+            dt_pad = (2 * u.hour).to_value(u.s)
+            for id_t, t in enumerate(times):
+                travel_time = (t - t_launch) * 86400
+                if travel_time < -dt_pad:
                     continue
-                else:
-                    id_e = (elons >= e_min) & (elons <= e_max + 5)
-                    cme_mask[id_e, id_t] = True
+
+                r_obs = self.position.r[id_t].to(u.m).value
+                r_nose_fast = r_min + 1.25 * cme.v.to(u.m/u.s).value * (travel_time + dt_pad)
+                r_nose_slow = r_min + 0.75 * cme.v.to(u.m / u.s).value * (travel_time - dt_pad)
+
+                e_fast = np.rad2deg(np.arctan(r_nose_fast / r_obs))
+                e_slow = np.rad2deg(np.arctan(r_nose_slow / r_obs))
+                if e_fast > self.e_max.to(u.deg).value:
+                    e_fast = self.e_max.to(u.deg).value
+
+                if e_slow > self.e_max.to(u.deg).value:
+                    e_slow = self.e_max.to(u.deg).value
+
+                if e_slow == e_fast:
+                    # Leave this loop, as CME has almost certainly left the field of view.
+                    break
+
+                id_good = (elons > e_slow) & (elons < e_fast)
+                cme_mask[id_good, id_t] = True
 
             edges = ski.feature.canny(ridge, sigma=1, mask=cme_mask) & pos_grad
             label = ski.measure.label(edges)
@@ -463,12 +478,6 @@ class SyntheticImager:
             # Sort regions from largest to smallest (by number of coordinates)
             # This increases the chance the t-e profiles are in the correct order.
             regions = sorted(regions, key=lambda r: r.area, reverse=True)
-
-            fig, ax = plt.subplots(4, 1, figsize=(10, 10))
-            ax[0].imshow(djmap, cmap='gray')
-            ax[1].imshow(cme_mask, cmap='gray')
-            ax[2].imshow(edges, cmap='gray')
-            plt.show()
 
             # For each region convert pixel coords to map coords and average multiple elons at fixed
             # times
@@ -489,7 +498,7 @@ class SyntheticImager:
                     id_t = np.where(t_pix == tu)[0]
                     e_pix_mean[id_tu] = np.nanmean(e_pix[id_t])
 
-                t_real = t_pix_unique + model.time_init.jd
+                t_real = t_pix_unique + model.SURFlat[0].time_init.jd
                 profiles[f"feature_{id_r:02d}"] = {'t': t_pix_unique, 't_real': t_real,
                                                    'e': e_pix_mean}
 
@@ -544,6 +553,52 @@ class SyntheticImager:
 
         return interpolator
 
+    def _fov_mask(self, model):
+        """
+        Return a mask for the imager field of view, with points outside the model domain set True
+        """
+        fov_mask = np.full_like(self.e_grid.value, False, dtype=bool)
+        r = model.SURFlat[0].r.to(u.solRad).value.copy()
+        lon = model.SURFlat[0].lon.to(u.rad).value.copy()
+        lat = model.lat.to(u.rad).value.copy()
+
+        # Find bad radii
+        r_img = self.r_grid.to(u.solRad).value.copy()
+        id_bad_r = (r_img < r.min()) | (r_img > r.max())
+
+        # A limited SURF longitude grid may straddle zero.  Infer the solved
+        # arc from the largest circular gap between its grid points, rather
+        # than moving the longitude discontinuity to an imager-dependent
+        # location.
+        lon = np.sort(np.mod(lon, 2.0 * np.pi))
+        lon_imgr = self.lon_grid.to_value(u.rad)
+        if lon.size < 2:
+            # A one-longitude model has support only at its sampled longitude.
+            id_bad_lon = ~np.isclose(
+                np.mod(lon_imgr - lon[0], 2.0 * np.pi), 0.0,
+            )
+        else:
+            gaps = np.diff(np.concatenate((lon, [lon[0] + 2.0 * np.pi])))
+            if np.allclose(gaps, gaps[0]):
+                # Uniform gaps mean that the grid spans the full circle.
+                id_bad_lon = np.zeros(self.lon_grid.shape, dtype=bool)
+            else:
+                gap_index = np.argmax(gaps)
+                lon_start = lon[(gap_index + 1) % lon.size]
+                lon_stop = lon[gap_index]
+                span = np.mod(lon_stop - lon_start, 2.0 * np.pi)
+                offset = np.mod(lon_imgr - lon_start, 2.0 * np.pi)
+                id_bad_lon = offset > span
+
+        # Find bad latitudes.
+        lat_img = self.lat_grid.to(u.rad).value.copy()
+        id_bad_lat = (lat_img < lat.min()) | (lat_img > lat.max())
+
+        # Join the bad values.
+        fov_mask[id_bad_r | id_bad_lon | id_bad_lat] = True
+
+        return fov_mask
+
     def _check_latitude_compatibility(self, model):
         """Ensure the 3D model latitude range covers the imager FOV."""
         if not isinstance(model, s.SURF3d):
@@ -593,15 +648,12 @@ class SyntheticImager:
         y_e = y_e.to(u.solRad)
         z_e = z_e.to(u.solRad)
 
-
-
         fig = plt.figure(figsize=(10, 10))
         ax = fig.add_subplot(111, projection="3d")
 
         ax.scatter([0], [0], [0], color="gold", edgecolor="black", s=80, label="Sun")
         ax.scatter(x_o, y_o, z_o, color="tab:red", s=50, label="Observer")
         ax.scatter(x_e, y_e, z_e, color="tab:blue", s=50, label="Earth")
-
 
         # LOS Cartesian coords
         x, y, z = spherical_to_cartesian(self.r_grid[::20, ::10],
@@ -617,9 +669,12 @@ class SyntheticImager:
         ax.set_xlabel("x [R$_\\odot$]")
         ax.set_ylabel("y [R$_\\odot$]")
         ax.set_zlabel("z [R$_\\odot$]")
+        ax.set_xlim(-260, 260)
+        ax.set_ylim(-260, 260)
+        ax.set_zlim(-30, 30)
         ax.legend()
         ax.view_init(azim=0, elev=90, roll=0)
-        return fig, ax
+        return (fig, ax)
 
 
 def compute_target_hpr_coords(observer, target):
@@ -692,8 +747,7 @@ if __name__ == "__main__":
                    r_min=21.5 * u.solRad, r_max=240 * u.solRad,
                    lon_start=270 * u.deg, lon_stop=90 * u.deg,
                    simtime=3.0 * u.day, dt_scale=4.0,
-                   solver='hydro')
-
+                   solver='hydro', track_cmes=False)
 
     sta = model.get_observer('STA')
     ert = model.get_observer('EARTH')
@@ -707,6 +761,7 @@ if __name__ == "__main__":
 
     # Set up the synthetic imager for STA and along Earth's PA.
     imgr = SyntheticImager(sta, pa=psi_ert_avg, elon_min=5.0, elon_max=30.0)
+
     ################################################################################################
     # Now we can initiliase SURF3d
 
@@ -720,35 +775,29 @@ if __name__ == "__main__":
     # Set up SURF3d using this latitude range
     dl = 2 * u.deg
     model3d = s.SURF3d(v_map=vr_map,
-                    v_map_lat=vr_lats, v_map_long=vr_longs,
-                    cr_num=cr, cr_lon_init=cr_lon_init,
-                    latitude_max=lat_max + dl, latitude_min=lat_min - dl,
-                    r_min=21.5 * u.solRad, r_max=240 * u.solRad,
-                    lon_start=270 * u.deg, lon_stop=90*u.deg,
-                    simtime=3.0 * u.day, dt_scale=4.0,
-                    solver='hydro')
+                       v_map_lat=vr_lats, v_map_long=vr_longs,
+                       cr_num=cr, cr_lon_init=cr_lon_init,
+                       latitude_max=lat_max + dl, latitude_min=lat_min - dl,
+                       r_min=21.5 * u.solRad, r_max=240 * u.solRad,
+                       lon_start=270 * u.deg, lon_stop=90 * u.deg,
+                       simtime=3.0 * u.day, dt_scale=4.0,
+                       solver='hydro', track_cmes=False)
 
     # Run the model with a CME
     cme = s.ConeCME(t_launch=0.25 * u.day, longitude=0.0 * u.deg, latitude=0 * u.deg,
                     width=50 * u.deg, v=800 * (u.km / u.s), thickness=0 * u.solRad,
                     initial_height=21.5 * u.solRad)
 
-    model3d.solve([cme])
-    ################################################################################################
-    # Find the SURF3d latitude closest to Earth and plot the solution at 1 day.
-    id_lat = np.argmin(np.abs(model3d.lat - ert.lat[0]))
-    print(ert.lat[0].to(u.deg))
-    print(model3d.lat[id_lat].to(u.deg))
-    model = model3d.SURFlat[id_lat]
-    sA.plot_compressible(model, 1*u.day, save=True, tag='synHI_test')
-    sA.animate_3d(model3d,lon=0*u.deg, lat=ert.lat[0], tag='synHI_test')
-    ################################################################################################
+    cme2 = s.ConeCME(t_launch=1 * u.day, longitude=-30.0 * u.deg, latitude=10 * u.deg,
+                    width=50 * u.deg, v=600 * (u.km / u.s), thickness=0 * u.solRad,
+                    initial_height=21.5 * u.solRad)
+
+    model3d.solve([cme, cme2])
+
     # Use the SURF3d solution to make a Jmap.
     jmap, djmap = imgr.compute_jmap(model3d)
     fig, ax = imgr.plot_jmap(model3d, jmap, djmap)
     plt.show()
 
-# Compute the t-e profiles for each model latitude. How much do they vary?
-# Can I reasonably isolate a chunk of t-e space with the CME launch time and fixed-phi geometry
-# with high and low end speeds?
-# Or we track all the CMEs and convert the coords to HPR and get the mean t-e profile from there?
+    fig, ax = imgr.plot_jmap_with_cme_profiles(model3d, jmap, djmap)
+    plt.show()
