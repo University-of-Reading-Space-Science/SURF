@@ -3,25 +3,18 @@ This module contains the SyntheticImager class, which generates synthetic helios
 SURF model output.
 """
 import copy
-from datetime import datetime
-import os
 
 import astropy.constants as const
-from astropy.coordinates import SkyCoord, cartesian_to_spherical, spherical_to_cartesian
+from astropy.coordinates import SkyCoord, spherical_to_cartesian
 from sunpy.coordinates import frames
-from astropy.time import Time
 import astropy.units as u
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 from scipy.interpolate import RegularGridInterpolator
 from scipy.integrate import trapezoid
 import skimage as ski
 
 from surf import surf as s
-from surf import surf_inputs as sIN
-from surf import surf_analysis as sA
 
 
 class SyntheticImager:
@@ -40,8 +33,6 @@ class SyntheticImager:
             0,360].
         elon_min : float, optional
             Minimum elongation of the field of view, in degrees. Default is 5.0.
-            May be negative to indicate a field of view on the opposite side of the
-            observer (i.e. looking in the retrograde direction).
         elon_max : float, optional
             Maximum elongation of the field of view, in degrees. Default is 30.0.
             Must be greater than elon_min, and both values must have the same sign.
@@ -49,19 +40,17 @@ class SyntheticImager:
         if elon_min <= 0:
             raise ValueError(
                 f"elon_min ({elon_min}) must be positive. "
-                f"Use elon_sign=-1 to select the retrograde field of view."
             )
         if elon_max <= 0:
             raise ValueError(
                 f"elon_max ({elon_max}) must be positive. "
-                f"Use elon_sign=-1 to select the retrograde field of view."
             )
         if elon_min >= elon_max:
             raise ValueError(
                 f"elon_min ({elon_min}) must be less than elon_max ({elon_max})."
             )
 
-        if (pa <= 0) | (pa >= 360):
+        if (pa < 0) | (pa > 360):
             raise ValueError(
                 f"pa ({pa}) must be in the range of 0 to 360. "
             )
@@ -76,7 +65,7 @@ class SyntheticImager:
         self.position = copy.deepcopy(observer)
         self.position.r = self.position.r.to(u.m)
         self.position.lon = self.position.lon.to(u.rad)
-        self.position.lats = self.position.lat.to(u.rad)
+        self.position.lat = self.position.lat.to(u.rad)
 
         # Set up elongation arrays (time-independent)
         self.e_min, self.e_max, self.e, self.de = self.elon_grid(elon_min, elon_max)
@@ -97,6 +86,8 @@ class SyntheticImager:
         # Initialise FOV geometry using the first time step
         self._compute_fov_geometry(0)
 
+        # Create flag for whether imager compatability with a SURF3D instance has been checked.
+        self._latitude_compatible_check = False
 
     def _compute_fov_geometry(self, time_step):
         """
@@ -138,7 +129,8 @@ class SyntheticImager:
         r_o = self.position.r[time_step]
         r_p = self.r_grid
         r_op = self.z_grid
-        self.chi_grid = np.arccos((r_op ** 2 + r_p ** 2 - r_o ** 2) / (2.0 * r_p * r_op))
+        cos_chi = (r_op ** 2 + r_p ** 2 - r_o ** 2) / (2.0 * r_p * r_op)
+        self.chi_grid = np.arccos(np.clip(cos_chi, -1.0, 1.0))
 
         # Compute the angular halfwidth of the Sun from the observer's position
         self.omega = self.compute_omega(time_step)
@@ -149,15 +141,11 @@ class SyntheticImager:
     def elon_grid(self, elon_min=5.0, elon_max=30.0):
         """
         Set up the elongation grid for the synthetic imager.
-
-        The grid is always built from absolute-value elongations so that the
-        triangle geometry remains valid. The sign (prograde vs retrograde) is
-        handled separately in _compute_fov_geometry via self._elon_sign.
         """
 
         # Define field of view using absolute elongation values
-        elon_min = np.deg2rad(abs(elon_min)) * u.rad
-        elon_max = np.deg2rad(abs(elon_max)) * u.rad
+        elon_min = np.deg2rad(elon_min) * u.rad
+        elon_max = np.deg2rad(elon_max) * u.rad
         de = np.deg2rad(0.1) * u.rad
         elon = np.arange(elon_min.value, elon_max.value + de.value, de.value) * de.unit
 
@@ -398,9 +386,7 @@ class SyntheticImager:
         """
         fig, ax = self.plot_jmap(model, jmap, djmap)
         cme_profiles = self.track_cmes(model, djmap)
-        print(cme_profiles)
         for cme in cme_profiles:
-            print(cme)
             for key, val in cme.items():
                 ax[1].plot(val['t'], val['e'], 'r.', label=key)
 
@@ -429,6 +415,11 @@ class SyntheticImager:
 
         # Clip and scale the jmap. Find ridges.
         djmap = np.nan_to_num(djmap, nan=0.0, posinf=0.0, neginf=0.0)
+        # If there is no structure in the djamp, all elements will be close to zero.
+        if np.allclose(djmap, 0.0):
+            print('No structure in the jmap. Returning empty list of profiles.')
+            return []
+
         vmin, vmax = np.nanpercentile(np.abs(djmap), [0, 100])
         djmap_clipped = np.clip(djmap, vmin, vmax)
         djmap_norm = (djmap_clipped - vmin) / (vmax - vmin)
@@ -484,13 +475,14 @@ class SyntheticImager:
             profiles = {}
             for id_r, region in enumerate(regions):
 
+                # Do not include small regions
                 if region.area < 5:
                     continue
 
                 c = np.array(region.coords)
-                # Scale pixel coords to map coords
-                t_pix = times[0] + c[:, 1] * (times[-1] - times[0]) / times.size
-                e_pix = elons[0] + c[:, 0] * (elons[-1] - elons[0]) / (elons.size)
+                # Get map coords from pixel coords.
+                t_pix = times[c[:, 1]]
+                e_pix = elons[c[:, 0]]
                 # Now average the e_pix values for each unique t_pix value.
                 t_pix_unique = np.unique(t_pix)
                 e_pix_mean = np.zeros(t_pix_unique.shape)
@@ -542,6 +534,7 @@ class SyntheticImager:
         density = (density / const.m_p).to_value(u.m ** -3)
 
         # Pad longitude axis with wrap-around ghost cells to stop edge effects
+        # ToDo: Padding might be unnecessary for a wedge solution.
         lon_pad = np.concatenate([[lon[-1] - 2.0 * np.pi], lon, [lon[0] + 2.0 * np.pi]])
         density_pad = np.concatenate([density[:, -1:, :], density, density[:, :1, :]], axis=1)
 
@@ -600,14 +593,30 @@ class SyntheticImager:
         return fov_mask
 
     def _check_latitude_compatibility(self, model):
-        """Ensure the 3D model latitude range covers the imager FOV."""
+        """
+        Ensure the 3D model latitude range covers the imager FOV.
+
+        It's expensive to check at every time step, so this only checks at the beginning,
+        middle and end of the time steps.
+
+        For short runs (~ a week or so) for observers like STEREO, this will be fine, as latitude
+        varies slowly with time. For other craft e.g. SolO and PSP, this might be insufficient.
+        """
+
         if not isinstance(model, s.SURF3d):
             raise TypeError("model must be an instance of SURF3d")
-        self._compute_fov_geometry(0)
-        if (self.lat_grid.min() < model.lat.min() or
-                self.lat_grid.max() > model.lat.max()):
-            raise ValueError("SURF3d latitude range does not cover the imager FOV")
 
+        if not self._latitude_compatible_check:
+            n_t = self.position.time.size
+            steps = [0, n_t //2, n_t - 1]
+            for time_step in steps:
+                self._compute_fov_geometry(time_step)
+                if (self.lat_grid.min() < model.lat.min() or
+                        self.lat_grid.max() > model.lat.max()):
+                    raise ValueError("SURF3d latitude range does not cover the imager FOV")
+
+            # Update the latitude check flag
+            self._latitude_compatible_check = True
 
 
     def plot_los_3d(self, time_step, ert):
@@ -726,78 +735,3 @@ def compute_target_hpr_coords(observer, target):
     psi = psi * u.deg
     elon = elon * u.deg
     return psi, elon
-
-
-if __name__ == "__main__":
-
-    ################################################################################################
-    # Need to know how many timesteps and ephemeris of the observer. So make a dummy model.
-    t_start = datetime(2026,1,1)
-    cr, cr_lon_init = sIN.datetime2surfinputs(t_start)
-    print(cr, cr_lon_init)
-
-    demo_dir = s._setup_dirs_()['example_inputs']
-    wsafilepath = os.path.join(demo_dir, '2022-02-24T22Z.wsa.gong.fits')
-    vr_map, vr_longs, vr_lats, _, _, _, _ = sIN.get_WSA_maps(wsafilepath)
-
-    # Setup SURF
-    v_in = np.ones(128) * 400 * u.km / u.s
-    model = s.SURF(v_boundary=v_in,
-                   cr_num=cr, cr_lon_init=cr_lon_init,
-                   r_min=21.5 * u.solRad, r_max=240 * u.solRad,
-                   lon_start=270 * u.deg, lon_stop=90 * u.deg,
-                   simtime=3.0 * u.day, dt_scale=4.0,
-                   solver='hydro', track_cmes=False)
-
-    sta = model.get_observer('STA')
-    ert = model.get_observer('EARTH')
-    ################################################################################################
-    # Create SyntheticImager instance along Earth's PA from STA.
-
-    # Compute the position angle of Earth from STA.
-    psi_ert, elon_ert = compute_target_hpr_coords(sta, ert)
-    psi_ert_avg = np.mean(psi_ert.to(u.deg).value)
-    print(f"Earth position angle: {psi_ert_avg}")
-
-    # Set up the synthetic imager for STA and along Earth's PA.
-    imgr = SyntheticImager(sta, pa=psi_ert_avg, elon_min=5.0, elon_max=30.0)
-
-    ################################################################################################
-    # Now we can initiliase SURF3d
-
-    # Get the latitude range spanned by the SyntheticImager's field of view.
-    # This is to help set up the SURF3d latitudes.
-    imgr._compute_fov_geometry(0)
-    lat_min = imgr.lat_grid.min().to(u.deg)
-    lat_max = imgr.lat_grid.max().to(u.deg)
-    print(f"Lat lims:{lat_min} {lat_max}")
-
-    # Set up SURF3d using this latitude range
-    dl = 2 * u.deg
-    model3d = s.SURF3d(v_map=vr_map,
-                       v_map_lat=vr_lats, v_map_long=vr_longs,
-                       cr_num=cr, cr_lon_init=cr_lon_init,
-                       latitude_max=lat_max + dl, latitude_min=lat_min - dl,
-                       r_min=21.5 * u.solRad, r_max=240 * u.solRad,
-                       lon_start=270 * u.deg, lon_stop=90 * u.deg,
-                       simtime=3.0 * u.day, dt_scale=4.0,
-                       solver='hydro', track_cmes=False)
-
-    # Run the model with a CME
-    cme = s.ConeCME(t_launch=0.25 * u.day, longitude=0.0 * u.deg, latitude=0 * u.deg,
-                    width=50 * u.deg, v=800 * (u.km / u.s), thickness=0 * u.solRad,
-                    initial_height=21.5 * u.solRad)
-
-    cme2 = s.ConeCME(t_launch=1 * u.day, longitude=-30.0 * u.deg, latitude=10 * u.deg,
-                    width=50 * u.deg, v=600 * (u.km / u.s), thickness=0 * u.solRad,
-                    initial_height=21.5 * u.solRad)
-
-    model3d.solve([cme, cme2])
-
-    # Use the SURF3d solution to make a Jmap.
-    jmap, djmap = imgr.compute_jmap(model3d)
-    fig, ax = imgr.plot_jmap(model3d, jmap, djmap)
-    plt.show()
-
-    fig, ax = imgr.plot_jmap_with_cme_profiles(model3d, jmap, djmap)
-    plt.show()
