@@ -800,10 +800,10 @@ class SURF:
         
         # Validate and store solver choice
         validate_solver_name(solver)
-        if solver == 'hydro':
+        """if solver == 'hydro':
             print("[OK] Compressible solver (hydro: HLLC+PLM) available")
         elif solver == 'hydro-pcm':
-            print("[OK] Compressible solver (hydro-pcm: HLLC+PCM) available")
+            print("[OK] Compressible solver (hydro-pcm: HLLC+PCM) available")"""
         
         self.solver = solver
         
@@ -859,7 +859,8 @@ class SURF:
         self.simtime = simtime.to('s')  # number of days to simulate (in seconds)
         self.dt_scale = dt_scale * u.dimensionless_unscaled
         time_grid_dict = time_grid(
-            self.simtime, self.dt_scale, dr=self.dr, v_max=self.v_max)
+            self.simtime, self.dt_scale, dr=self.dr, v_max=self.v_max
+        )
         self.dtdr = time_grid_dict['dtdr']
         self.Nt = time_grid_dict['Nt']
         self.dt = time_grid_dict['dt']
@@ -1918,7 +1919,7 @@ class SURF:
             solve_start = time.time()
             compressible_method = _compressible_method_from_solver(self.solver)
             
-            print("\n" + "="*70)
+            """print("\n" + "="*70)
             print(f"USING COMPRESSIBLE SOLVER: {self.solver.upper()}")
             print("="*70)
             print(f"Method: {compressible_method}")
@@ -1928,7 +1929,7 @@ class SURF:
                 print(f"\nWARNING: Parallel execution for compressible solver is typically"
                       f" SLOWER than serial")
                 print(f"Recommended: Set parallel=False for better performance")
-            print("="*70 + "\n")
+            print("="*70 + "\n")"""
         
         # ======================================================================
         # Solve the time series at each longitude (HUXT and COMPRESSIBLE SOLVERS)

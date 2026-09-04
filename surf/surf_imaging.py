@@ -2,7 +2,7 @@
 This module contains the SyntheticImager class, which generates synthetic heliospheric images from
 SURF model output.
 """
-
+import datetime
 import astropy.constants as const
 import astropy.units as u
 import matplotlib.pyplot as plt
@@ -67,6 +67,7 @@ class SyntheticImager:
         self.observer_rs = observer.r.to(u.m)
         self.observer_lons = observer.lon.to(u.rad)
         self.observer_lats = observer.lat.to(u.rad)
+        self.n_obs = len(self.observer_times)
 
         # Set up elongation arrays (time-independent)
         self.e_min, self.e_max, self.e, self.de = self.elon_grid(elon_min, elon_max)
@@ -79,6 +80,7 @@ class SyntheticImager:
 
         # Initialise FOV geometry using the first time step
         self._compute_fov_geometry(0)
+
 
     def _check_latitude_compatibility(self, model, lat_tolerance_deg=3.0):
         """
@@ -102,7 +104,8 @@ class SyntheticImager:
                 f"model share the same latitudinal plane."
             )
 
-    def _compute_fov_geometry(self, time_step):
+
+    def _compute_fov_geometry(self, obs_no):
         """
         Compute all field-of-view geometry quantities for the observer position
         at the given time step index.
@@ -113,10 +116,10 @@ class SyntheticImager:
         """
 
         # Observer position at this time step
-        self.observer_time = self.observer_times[time_step]
-        self.observer_lon = self.observer_lons[time_step]
-        self.observer_lat = self.observer_lats[time_step]
-        self.observer_r = self.observer_rs[time_step]
+        self.observer_time = self.observer_times[obs_no]
+        self.observer_lon = self.observer_lons[obs_no]
+        self.observer_lat = self.observer_lats[obs_no]
+        self.observer_r = self.observer_rs[obs_no]
         self.observer_x = self.observer_r * np.cos(self.observer_lon)
         self.observer_y = self.observer_r * np.sin(self.observer_lon)
 
@@ -164,6 +167,7 @@ class SyntheticImager:
         # Compute the geometric factor for each LOS element
         self.g, self.gr, self.gt, self.gp = self.compute_ts_intensity_factors()
 
+
     def compute_omega(self):
         """
         Compute the angular halfwidth of the Sun from the observer's position.
@@ -171,10 +175,10 @@ class SyntheticImager:
             omega: astropy.units.Quantity with units of radians, giving the angular halfwidth of
                    the Sun from the observer's position.
         """
-
         # Sun center to observer vector:
         omega = np.arcsin(const.R_sun / self.observer_r)
         return omega
+
 
     def elon_grid(self, elon_min=5.0, elon_max=30.0):
         """
@@ -184,7 +188,6 @@ class SyntheticImager:
         triangle geometry remains valid. The sign (prograde vs retrograde) is
         handled separately in _compute_fov_geometry via self._elon_sign.
         """
-
         # Define field of view using absolute elongation values
         elon_min = np.deg2rad(abs(elon_min)) * u.rad
         elon_max = np.deg2rad(abs(elon_max)) * u.rad
@@ -192,6 +195,7 @@ class SyntheticImager:
         elon = np.arange(elon_min.value, elon_max.value + de.value, de.value) * de.unit
 
         return elon_min, elon_max, elon, de
+
 
     def los_distance_grid(self):
         """
@@ -204,6 +208,7 @@ class SyntheticImager:
         z = np.arange(z_min.value, z_max.value + dz.value, dz.value) * dz.unit
 
         return z_min, z_max, z, dz
+
 
     def van_de_hulst_coeffs(self):
         """
@@ -232,6 +237,7 @@ class SyntheticImager:
 
         return a, b, c, d
 
+
     def compute_ts_intensity_factors(self):
         """
         Compute Thomson Scattering intensity factors for this FoV. Following equations in Xiong et
@@ -257,6 +263,7 @@ class SyntheticImager:
 
         return g, gr, gt, gp
 
+
     def compute_los_intensity_profile(self, density, elon):
         """
         Compute the total, radial, tangential and polarized intensity for a given density field.
@@ -280,15 +287,30 @@ class SyntheticImager:
 
         return I, Ir, It, Ip, polarisation
 
-    def compute_all_los_intensity_profile(self, model, time_step):
+
+    def get_model_timestep(self, model, obs_no):
+        model_obs_time_diff = (model.time_out - self.observer_times[obs_no])
+
+        time_step = np.argmin(
+            np.abs(model_obs_time_diff)
+        )
+        #print(f"time_step: {time_step}")
+
+        return time_step
+
+
+    def compute_all_los_intensity_profile(self, model, obs_no):
         """
         Compute the total, radial, tangential and polarized intensity profiles for each LoS.
         """
+        time_step = self.get_model_timestep(model, obs_no)
+
         # Check that the model is compatible with this FoV.
         self._check_latitude_compatibility(model)
 
         # Update FOV geometry for the observer position at this time step
-        self._compute_fov_geometry(time_step)
+        self._compute_fov_geometry(obs_no)
+
 
         I_fov = np.zeros(self.z_grid.shape) * np.nan
         It_fov = np.zeros(self.z_grid.shape) * np.nan
@@ -321,6 +343,7 @@ class SyntheticImager:
 
         return I_fov, It_fov, Ir_fov, Ip_fov, pol_fov
 
+
     def get_los_density(self, interpolator, elon, replace_nans=True):
         """
         Use the density interpolator to compute the density along a single line of sight.
@@ -337,16 +360,19 @@ class SyntheticImager:
 
         return n_e_los
 
-    def compute_total_intensity(self, model, time_step):
+
+    def compute_total_intensity(self, model, obs_no):
         """
         Compute the total intensity as a function of elongation, e.g. the total intensity along
         each line of sight.
         """
+        time_step = self.get_model_timestep(model, obs_no)
 
-        I_fov, _, _, _, _ = self.compute_all_los_intensity_profile(model, time_step)
+        I_fov, _, _, _, _ = self.compute_all_los_intensity_profile(model, obs_no)#, time_step)
         I_fov = np.nan_to_num(I_fov, nan=0.0, posinf=0.0, neginf=0.0)
         I = trapezoid(I_fov, self.z.value, axis=0)
         return I
+
 
     def compute_jmap(self, model):
         """
@@ -356,31 +382,44 @@ class SyntheticImager:
         # Check that the model is compatible with this FoV.
         self._check_latitude_compatibility(model)
 
-        jmap = np.full((self.e.size, model.time_out.size), np.nan)
+        jmap = np.full((self.e.size, self.observer_times.size), np.nan)
 
-        for time_step in range(model.time_out.size):
+        #for time_step in range(model.time_out.size):
+        for obs_no in range(self.n_obs):
             # compute_total_intensity -> compute_all_los_intensity_profile ->
             # _compute_fov_geometry updates geometry for this time step
-            I = self.compute_total_intensity(model, time_step)
-            jmap[:, time_step] = I
+            I = self.compute_total_intensity(model, obs_no)#, time_step)
+            #jmap[:, time_step] = I
+            jmap[:, obs_no] = I
 
             # Mask elongations that cross the model inner boundary
             elon_min_model = np.arcsin(
-                model.r[0].to(u.solRad).value / self.observer_r.to(u.solRad).value)
+                model.r[0].to(u.solRad).value / self.observer_r.to(u.solRad).value
+            )
             invalid = self.e.to(u.rad).value < elon_min_model
-            jmap[invalid, time_step] = np.nan
+            jmap[invalid, obs_no] = np.nan
 
         djmap = np.diff(jmap, axis=1, prepend=jmap[:, :1])
 
         return jmap, djmap
+
 
     def plot_jmap(self, model, jmap, djmap):
         """
         Make a 2-panel plot of the normal and difference image jmaps
         """
 
-        times = model.time_out.to(u.day).value
+        #times = model.time_out.to(u.day).value
+        times = self.observer_times.to(u.day).value
+        print(f"times={times}")
+        # ind_req = [
+        #     self.get_model_timestep(model, obs_no)
+        #     for obs_no in range(self.n_obs)
+        # ]
         elons = self.e.to(u.deg).value
+
+        #jmap_plot = jmap[:, ind_req]
+        #djmap_plot = djmap[:, ind_req]
 
         cmap = plt.cm.gray.copy()
         cmap.set_bad(color='midnightblue')
@@ -401,6 +440,7 @@ class SyntheticImager:
         fig.subplots_adjust(left=0.05, bottom=0.08, right=0.98, top=0.98, wspace=0.1)
         return fig, ax
 
+
     def plot_jmap_with_cme_profiles(self, model, jmap, djmap):
         """
         Plot the plain and differenced jmaps with the automatically tracked CME profiles overlaid.
@@ -410,9 +450,11 @@ class SyntheticImager:
         for cme in cme_profiles:
             for key, val in cme.items():
                 if key == 'feature_00':
+                    print(f"val['t']={val['t']}, \n val['e']={val['e']}")
                     ax[1].plot(val['t'], val['e'], 'r.', label=key)
 
         return fig, ax
+
 
     def track_cmes(self, model, djmap):
         """
@@ -432,7 +474,8 @@ class SyntheticImager:
                 f"Got types: {[type(cme).__name__ for cme in model.cmes]}."
             )
 
-        times = model.time_out.to(u.day).value
+        #times = model.time_out.to(u.day).value
+        times = self.observer_times.to(u.day).value
         elons = self.e.to(u.deg).value
 
         # Clip and scale the jmap. Find ridges.
@@ -449,10 +492,9 @@ class SyntheticImager:
 
         cme_profiles = []
         for cme in model.cmes:
-
             # USE TRACER PARTICLES TO ISOLATE THE CME IN TIME - ELONGATION SPACE.
             flank, extent = self.compute_flank_profile(cme)
-
+            #print(f"flank = {flank},\n extent = {extent}")
             cme_mask = np.zeros(djmap.shape, dtype=bool)
             for id_t in extent.index:
                 e_min = extent.loc[id_t, 'e_min']
@@ -497,7 +539,9 @@ class SyntheticImager:
 
             cme_profiles.append(profiles)
 
+
         return cme_profiles
+
 
     def compute_flank_profile(self, cme):
         """
@@ -514,27 +558,45 @@ class SyntheticImager:
                      the observers perspective, including the time, elongation, position angle,
                      and HEEQ radius and longitude.
         """
-        times = np.array(
-            [coord['model_time'].to(u.day).value for i, coord in cme.coords.items()]) * u.day
-
+        model_times = np.array(
+            [coord['model_time'].to(u.day).value for i, coord in cme.coords.items()]
+        ) * u.day
+        model_lons = {
+                i: np.array(coord['lon'].to(u.deg).value) * u.deg for i, coord in cme.coords.items()
+        }
+        model_lats = {
+            i: np.array(coord['lat'].to(u.deg).value) * u.deg for i, coord in cme.coords.items()
+        }
+        model_rs = {
+            i: np.array(coord['r'].to(u.m).value) * u.m for i, coord in cme.coords.items()
+        }
+        obs_times = np.array(self.observer_times.to(u.day).value) * u.day
+        #print(f"cme_coords = {cme.coords}")
+        #print(f"cme_coords.items() = {cme.coords.items()[0]}")
         # Compute observers location using earth ephem, adding on observers longitude offset from Earth
         # and correct for runover 2*pi
-        flank = pd.DataFrame(index=np.arange(times.size), columns=['time', 'el', 'r', 'lon'])
-        flank['time'] = times.to(u.day).value
+        flank = pd.DataFrame(index=np.arange(obs_times.size), columns=['time', 'el', 'r', 'lon'])
+        flank['time'] = obs_times.to(u.day).value
 
-        extent = pd.DataFrame(index=np.arange(times.size), columns=['time', 'e_min', 'e_max'])
-        extent['time'] = times.to(u.day).value
+        extent = pd.DataFrame(index=np.arange(obs_times.size), columns=['time', 'e_min', 'e_max'])
+        extent['time'] = obs_times.to(u.day).value
 
         # Check that the time arrays match in length
+        """
         if self.observer_times.size != len(times):
             raise ValueError(f"The number of times in the ConeCME ({len(times)}) does not match "
                              f"the  number of times in the observer ({self.observer_times.size}).")
+        """
+        # print(f"model_time = {model_times}")
+        for i, obs_time in enumerate(obs_times):#i, coord in cme.coords.items():
 
-        for i, coord in cme.coords.items():
-
-            if len(coord['r']) == 0:
+            # print(f"obs_time = {obs_time}")
+            model_ind_req = np.argmin(np.abs(model_times.value - obs_time.value))
+            # print(f"model_ind_req = {model_ind_req}")
+            if len(model_rs) == 0:
                 flank.loc[i, ['lon', 'r', 'el']] = np.nan
                 continue
+
 
             r_obs = self.observer_rs[i].to(u.m)
             lon_obs = self.observer_lons[i].to(u.rad)
@@ -543,16 +605,16 @@ class SyntheticImager:
             y_obs = r_obs * np.cos(lat_obs) * np.sin(lon_obs)
             z_obs = r_obs * np.sin(lat_obs)
 
-            lon_cme = coord['lon'].to(u.rad)
-            lat_cme = coord['lat'].to(u.rad)
-            r_cme = coord['r'].to(u.m)
+            lon_cme = model_lons[model_ind_req].to(u.rad)
+            lat_cme = model_lats[model_ind_req].to(u.rad)
+            r_cme = model_rs[model_ind_req].to(u.m)
 
             x_cme = r_cme * np.cos(lat_cme) * np.cos(lon_cme)
             y_cme = r_cme * np.cos(lat_cme) * np.sin(lon_cme)
             z_cme = r_cme * np.sin(lat_cme)
+
             #############
             # Compute the observer CME distance, S, and elongation
-
             x_cme_s = x_cme - x_obs
             y_cme_s = y_cme - y_obs
             z_cme_s = z_cme - z_obs
@@ -565,6 +627,7 @@ class SyntheticImager:
             # Restrict those CME points to those in FOV
             # For those ahead of Earth, this is negative y_cme_s
             # For those behind Earth, this is positive y_cme_s
+            # print(f"e_obs = {e_obs}")
             if self.observer_lons[i] < np.pi * u.rad:
                 id_sub = y_cme_s.value < 0
                 e_obs = e_obs[id_sub]
@@ -575,16 +638,25 @@ class SyntheticImager:
                 e_obs = e_obs[id_sub]
                 lon_cme = lon_cme[id_sub]
                 r_cme = r_cme[id_sub]
-
+            # print(f"e_obs = {e_obs}")
             # Find the flank coordinate and update output
-            id_obs_flank = np.argmax(e_obs)
-            flank.loc[i, 'lon'] = lon_cme[id_obs_flank].value
-            flank.loc[i, 'r'] = r_cme[id_obs_flank].value
-            flank.loc[i, 'el'] = np.rad2deg(e_obs[id_obs_flank])
+            if len(e_obs) < 1:
+                flank.loc[i, 'lon'] = np.nan
+                flank.loc[i, 'r'] = np.nan
+                flank.loc[i, 'el'] = np.nan
 
-            # Find the flank coordinate and update output
-            extent.loc[i, 'e_min'] = np.rad2deg(np.nanmin(e_obs))
-            extent.loc[i, 'e_max'] = np.rad2deg(np.nanmax(e_obs))
+                # Find the flank coordinate and update output
+                extent.loc[i, 'e_min'] = np.nan
+                extent.loc[i, 'e_max'] = np.nan
+            else:
+                id_obs_flank = np.argmax(e_obs)
+                flank.loc[i, 'lon'] = lon_cme[id_obs_flank].value
+                flank.loc[i, 'r'] = r_cme[id_obs_flank].value
+                flank.loc[i, 'el'] = np.rad2deg(e_obs[id_obs_flank])
+
+                # Find the flank coordinate and update output
+                extent.loc[i, 'e_min'] = np.rad2deg(np.nanmin(e_obs))
+                extent.loc[i, 'e_max'] = np.rad2deg(np.nanmax(e_obs))
 
         # Force values to be floats.
         keys = ['time', 'lon', 'r', 'el']
@@ -592,7 +664,9 @@ class SyntheticImager:
 
         keys = ['time', 'e_min', 'e_max']
         extent[keys] = extent[keys].astype(np.float64)
+
         return flank, extent
+
 
     def _density_interpolator(self, model, time_step):
         """
@@ -621,6 +695,7 @@ class SyntheticImager:
                                                fill_value=np.nan)
 
         return interpolator
+
 
     def compute_fov_patch(self, time_step):
         """Compute a patch showing the synthetic imager field of view for overlaying on plots"""
