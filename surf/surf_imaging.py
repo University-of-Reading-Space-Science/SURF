@@ -2,85 +2,103 @@
 This module contains the SyntheticImager class, which generates synthetic heliospheric images from
 SURF model output.
 """
+<<<<<<< HEAD
 import datetime
+=======
+import copy
+
+>>>>>>> fe0c5896f858f3011947c7f2dd7811882995ed3b
 import astropy.constants as const
+from astropy.coordinates import SkyCoord, spherical_to_cartesian
+from sunpy.coordinates import frames
 import astropy.units as u
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 from scipy.interpolate import RegularGridInterpolator
 from scipy.integrate import trapezoid
 import skimage as ski
 
 from surf import surf as s
 
+
 class SyntheticImager:
     """
     Class to generate synthetic heliospheric images from SURF model output.
     """
 
-    def __init__(self, observer, elon_min=5.0, elon_max=30.0, elon_sign=1):
+    def __init__(self, observer, pa=90.0, elon_min=5.0, elon_max=30.0):
         """
         Parameters
         ----------
         observer : Observer
             The observer ephemeris object.
+        pa : float, optional
+            Position angle of the field of view, in degrees. Default is 90.0. Must be in range [
+            0,360].
         elon_min : float, optional
             Minimum elongation of the field of view, in degrees. Default is 5.0.
-            May be negative to indicate a field of view on the opposite side of the
-            observer (i.e. looking in the retrograde direction).
         elon_max : float, optional
             Maximum elongation of the field of view, in degrees. Default is 30.0.
             Must be greater than elon_min, and both values must have the same sign.
-        elon_sign : int, optional
-            Sign of the elongation, controlling which side of the observer the FOV
-            is on. Use +1 (default) for the prograde (forward-looking) FOV, or -1
-            for the retrograde (backward-looking) FOV.
         """
         if elon_min <= 0:
             raise ValueError(
                 f"elon_min ({elon_min}) must be positive. "
-                f"Use elon_sign=-1 to select the retrograde field of view."
             )
         if elon_max <= 0:
             raise ValueError(
                 f"elon_max ({elon_max}) must be positive. "
-                f"Use elon_sign=-1 to select the retrograde field of view."
             )
         if elon_min >= elon_max:
             raise ValueError(
                 f"elon_min ({elon_min}) must be less than elon_max ({elon_max})."
             )
-        if elon_sign not in (1, -1):
+
+        if (pa < 0) | (pa > 360):
             raise ValueError(
-                f"elon_sign ({elon_sign}) must be either +1 (prograde) or -1 (retrograde)."
+                f"pa ({pa}) must be in the range of 0 to 360. "
             )
 
         self.sigma_e = 7.95 * 10 ** (-30) * u.m ** 2 / u.steradian
         self.u_ld = 0.63  # Limb darkening coefficient. For 5500 angstroms.
 
-        # Store the sign so geometry routines know which side to look
-        self._elon_sign = elon_sign
+        # Store the pa.
+        self.pa = pa * u.deg
 
         # Store full observer ephemeris
+<<<<<<< HEAD
         self.observer_times = observer.time
         self.observer_rs = observer.r.to(u.m)
         self.observer_lons = observer.lon.to(u.rad)
         self.observer_lats = observer.lat.to(u.rad)
         self.n_obs = len(self.observer_times)
+=======
+        self.position = copy.deepcopy(observer)
+        self.position.r = self.position.r.to(u.m)
+        self.position.lon = self.position.lon.to(u.rad)
+        self.position.lat = self.position.lat.to(u.rad)
+>>>>>>> fe0c5896f858f3011947c7f2dd7811882995ed3b
 
         # Set up elongation arrays (time-independent)
         self.e_min, self.e_max, self.e, self.de = self.elon_grid(elon_min, elon_max)
 
         # Set up LOS distance arrays (time-independent)
+        # Note - if you want to look at TS theory, it helps to have Z(elon), so you can define Z
+        # to be on the TS and vary as distance away from the TS. Not necessary for this though.
         self.z_min, self.z_max, self.z, self.dz = self.los_distance_grid()
 
         # Create mesh grid as these don't change with time
         self.e_grid, self.z_grid = np.meshgrid(self.e, self.z)
 
+        # Astropy/Sunpy HPR needs delta not elon.
+        self.delta_grid = self.e_grid - 90*u.deg
+
+        self.pa_grid = np.full_like(self.e_grid, self.pa)
+
         # Initialise FOV geometry using the first time step
         self._compute_fov_geometry(0)
 
+<<<<<<< HEAD
 
     def _check_latitude_compatibility(self, model, lat_tolerance_deg=3.0):
         """
@@ -103,6 +121,10 @@ class SyntheticImager:
                 f"{lat_tolerance_deg:.2f} deg. The SyntheticImager assumes the observer and "
                 f"model share the same latitudinal plane."
             )
+=======
+        # Create flag for whether imager compatability with a SURF3D instance has been checked.
+        self._latitude_compatible_check = False
+>>>>>>> fe0c5896f858f3011947c7f2dd7811882995ed3b
 
 
     def _compute_fov_geometry(self, obs_no):
@@ -115,6 +137,7 @@ class SyntheticImager:
         lon_grid, x_grid, y_grid, g, gr, gt, gp.
         """
 
+<<<<<<< HEAD
         # Observer position at this time step
         self.observer_time = self.observer_times[obs_no]
         self.observer_lon = self.observer_lons[obs_no]
@@ -122,51 +145,48 @@ class SyntheticImager:
         self.observer_r = self.observer_rs[obs_no]
         self.observer_x = self.observer_r * np.cos(self.observer_lon)
         self.observer_y = self.observer_r * np.sin(self.observer_lon)
+=======
+        observer_heeq = SkyCoord(
+            lon=self.position.lon[time_step],
+            lat=self.position.lat[time_step],
+            radius=self.position.r[time_step],
+            obstime=self.position.time[time_step],
+            frame=frames.HeliographicStonyhurst
+        )
+>>>>>>> fe0c5896f858f3011947c7f2dd7811882995ed3b
 
-        # Compute the angular halfwidth of the Sun from the observer's position
-        self.omega = self.compute_omega()
+        los_hpr = SkyCoord(
+            psi=self.pa_grid,
+            delta=self.delta_grid,
+            distance=self.z_grid,
+            observer=observer_heeq,
+            obstime=observer_heeq.obstime,
+            frame=frames.HelioprojectiveRadial
+        )
 
-        # Heliocentric radius of each LOS element - using cosine rule
-        B = self.observer_r.to(u.m)
-        C = self.z_grid.to(u.m)
-        self.r_grid = np.sqrt(B ** 2 + C ** 2 - (2.0 * B * C * np.cos(self.e_grid)))
+        los_heeq = los_hpr.transform_to(
+            frames.HeliographicStonyhurst(obstime=los_hpr.obstime)
+            )
+
+        self.r_grid = los_heeq.radius.to(u.m)
+        # Normalise longitudes to 0-360, as it plays nicer with SURF
+        self.lon_grid = np.rad2deg(np.mod(los_heeq.lon.to_value(u.rad), 2.0 * np.pi)) * u.deg
+        self.lat_grid = los_heeq.lat.to(u.deg)
 
         # Scattering angle of radial illumination at each LOS - using cosine rule
-        self.chi_grid = np.arccos((C ** 2 + self.r_grid ** 2 - B ** 2) / (2.0 * C * self.r_grid))
+        r_o = self.position.r[time_step]
+        r_p = self.r_grid
+        r_op = self.z_grid
+        cos_chi = (r_op ** 2 + r_p ** 2 - r_o ** 2) / (2.0 * r_p * r_op)
+        self.chi_grid = np.arccos(np.clip(cos_chi, -1.0, 1.0))
 
-        # Find the angle that completes the observer-scattering site-sun triangle
-        theta_ls = np.pi * u.rad - self.e_grid - self.chi_grid
-
-        # Compute heliolongitude of each LOS element.
-        # For a prograde FOV (elon_sign = +1) the LOS fans out ahead of the observer,
-        # so longitude decreases (for observer_lon < pi) or increases (for observer_lon > pi).
-        # For a retrograde FOV (elon_sign = -1) the LOS fans out behind the observer,
-        # so the longitude offset is flipped.
-        if self._elon_sign > 0:
-            # Prograde: forward-looking FOV (original behaviour)
-            if self.observer_lon < np.pi * u.rad:
-                self.lon_grid = self.observer_lon - theta_ls
-            else:
-                self.lon_grid = theta_ls - (2 * np.pi * u.rad - self.observer_lon)
-        else:
-            # Retrograde: backward-looking FOV — flip the longitude offset
-            if self.observer_lon < np.pi * u.rad:
-                self.lon_grid = self.observer_lon + theta_ls
-            else:
-                self.lon_grid = (2 * np.pi * u.rad - self.observer_lon) - theta_ls
-
-        # Make sure longitudes are between 0 and 2pi
-        self.lon_grid = np.where(self.lon_grid.value < 0, self.lon_grid.value + 2 * np.pi,
-                                 self.lon_grid.value)
-        self.lon_grid = self.lon_grid * u.rad
-
-        # Get the Heliocentric Cartesian coordinates of each LOS element
-        self.x_grid = self.r_grid * np.cos(self.lon_grid)
-        self.y_grid = self.r_grid * np.sin(self.lon_grid)
+        # Compute the angular halfwidth of the Sun from the observer's position
+        self.omega = self.compute_omega(time_step)
 
         # Compute the geometric factor for each LOS element
         self.g, self.gr, self.gt, self.gp = self.compute_ts_intensity_factors()
 
+<<<<<<< HEAD
 
     def compute_omega(self):
         """
@@ -180,17 +200,15 @@ class SyntheticImager:
         return omega
 
 
+=======
+>>>>>>> fe0c5896f858f3011947c7f2dd7811882995ed3b
     def elon_grid(self, elon_min=5.0, elon_max=30.0):
         """
         Set up the elongation grid for the synthetic imager.
-
-        The grid is always built from absolute-value elongations so that the
-        triangle geometry remains valid. The sign (prograde vs retrograde) is
-        handled separately in _compute_fov_geometry via self._elon_sign.
         """
         # Define field of view using absolute elongation values
-        elon_min = np.deg2rad(abs(elon_min)) * u.rad
-        elon_max = np.deg2rad(abs(elon_max)) * u.rad
+        elon_min = np.deg2rad(elon_min) * u.rad
+        elon_max = np.deg2rad(elon_max) * u.rad
         de = np.deg2rad(0.1) * u.rad
         elon = np.arange(elon_min.value, elon_max.value + de.value, de.value) * de.unit
 
@@ -201,14 +219,27 @@ class SyntheticImager:
         """
         Set up the line of sight distance grid for the synthetic imager.
         """
-        dz = 0.1 * u.solRad.to(u.m) * u.m
-        z_min = dz.copy()
+        z_min = 0.01 * u.solRad.to(u.m) * u.m
         z_max = 2.0 * u.AU.to(u.m) * u.m
         dz = 0.35 * u.solRad.to(u.m) * u.m
         z = np.arange(z_min.value, z_max.value + dz.value, dz.value) * dz.unit
 
         return z_min, z_max, z, dz
 
+<<<<<<< HEAD
+=======
+    def compute_omega(self, time_step):
+        """
+        Compute the angular halfwidth of the Sun from the observer's position.
+        Returns:
+            omega: astropy.units.Quantity with units of radians, giving the angular halfwidth of
+                   the Sun from the observer's position.
+        """
+
+        # Sun center to observer vector:
+        omega = np.arcsin(const.R_sun / self.position.r[time_step])
+        return omega
+>>>>>>> fe0c5896f858f3011947c7f2dd7811882995ed3b
 
     def van_de_hulst_coeffs(self):
         """
@@ -319,10 +350,12 @@ class SyntheticImager:
         pol_fov = np.zeros(self.z_grid.shape) * np.nan
 
         interpolator = self._density_interpolator(model, time_step)
+        fov_mask = self._fov_mask(model)
 
         # Minimum elongation permitted by the model inner boundary
         elon_min_model = np.arcsin(
-            model.r[0].to(u.solRad).value / self.observer_r.to(u.solRad).value)
+            model.SURFlat[0].r[0].to(u.solRad).value /
+            self.position.r[time_step].to(u.solRad).value)
 
         for i in range(I_fov.shape[1]):
 
@@ -332,8 +365,9 @@ class SyntheticImager:
             if elon.to(u.rad).value < elon_min_model:
                 continue
 
+            mask = fov_mask[:, i]
             n_e_los = self.get_los_density(interpolator, elon, replace_nans=True)
-
+            n_e_los[mask] = 0.0
             I, Ir, It, Ip, polarisation = self.compute_los_intensity_profile(n_e_los, elon)
             I_fov[:, i] = I
             It_fov[:, i] = It
@@ -350,7 +384,12 @@ class SyntheticImager:
         """
         id_elon = np.argmin(np.abs(self.e - elon))
         # Get interpolated density along this LOS.
-        coords = [self.r_grid[:, id_elon].value.ravel(), self.lon_grid[:, id_elon].value.ravel()]
+        # SURF longitudes are on [0, 2*pi); normalise transformed HEEQ
+        # longitudes before querying the periodic padded axis.
+        lon = np.mod(self.lon_grid[:, id_elon].to_value(u.rad), 2.0 * np.pi)
+        coords = [self.r_grid[:, id_elon].to_value(u.m).ravel(),
+                  lon.ravel(),
+                  self.lat_grid[:, id_elon].to_value(u.rad).ravel()]
         coords = np.column_stack(coords)
         n_e_los = interpolator(coords).reshape(self.z.shape)  # * (1.0 / u.m ** 3)
 
@@ -382,10 +421,17 @@ class SyntheticImager:
         # Check that the model is compatible with this FoV.
         self._check_latitude_compatibility(model)
 
+<<<<<<< HEAD
         jmap = np.full((self.e.size, self.observer_times.size), np.nan)
 
         #for time_step in range(model.time_out.size):
         for obs_no in range(self.n_obs):
+=======
+        time_out = model.SURFlat[0].time_out
+        jmap = np.full((self.e.size, time_out.size), np.nan)
+
+        for time_step in range(time_out.size):
+>>>>>>> fe0c5896f858f3011947c7f2dd7811882995ed3b
             # compute_total_intensity -> compute_all_los_intensity_profile ->
             # _compute_fov_geometry updates geometry for this time step
             I = self.compute_total_intensity(model, obs_no)#, time_step)
@@ -394,8 +440,13 @@ class SyntheticImager:
 
             # Mask elongations that cross the model inner boundary
             elon_min_model = np.arcsin(
+<<<<<<< HEAD
                 model.r[0].to(u.solRad).value / self.observer_r.to(u.solRad).value
             )
+=======
+                model.SURFlat[0].r[0].to(u.solRad).value /
+                self.position.r[time_step].to(u.solRad).value)
+>>>>>>> fe0c5896f858f3011947c7f2dd7811882995ed3b
             invalid = self.e.to(u.rad).value < elon_min_model
             jmap[invalid, obs_no] = np.nan
 
@@ -409,6 +460,7 @@ class SyntheticImager:
         Make a 2-panel plot of the normal and difference image jmaps
         """
 
+<<<<<<< HEAD
         #times = model.time_out.to(u.day).value
         times = self.observer_times.to(u.day).value
         print(f"times={times}")
@@ -416,6 +468,9 @@ class SyntheticImager:
         #     self.get_model_timestep(model, obs_no)
         #     for obs_no in range(self.n_obs)
         # ]
+=======
+        times = model.SURFlat[0].time_out.to(u.day).value
+>>>>>>> fe0c5896f858f3011947c7f2dd7811882995ed3b
         elons = self.e.to(u.deg).value
 
         #jmap_plot = jmap[:, ind_req]
@@ -449,9 +504,13 @@ class SyntheticImager:
         cme_profiles = self.track_cmes(model, djmap)
         for cme in cme_profiles:
             for key, val in cme.items():
+<<<<<<< HEAD
                 if key == 'feature_00':
                     print(f"val['t']={val['t']}, \n val['e']={val['e']}")
                     ax[1].plot(val['t'], val['e'], 'r.', label=key)
+=======
+                ax[1].plot(val['t'], val['e'], 'r.', label=key)
+>>>>>>> fe0c5896f858f3011947c7f2dd7811882995ed3b
 
         return fig, ax
 
@@ -464,22 +523,31 @@ class SyntheticImager:
         self._check_latitude_compatibility(model)
 
         # Check a ConeCME object exists.
-        if not model.cmes:
+        if not model.SURFlat[0].cmes:
             raise ValueError(
                 "model.cmes is empty. Solve the model with at least one ConeCME before calling "
                 "track_cmes.")
-        if not all(isinstance(cme, s.ConeCME) for cme in model.cmes):
+        if not all(isinstance(cme, s.ConeCME) for cme in model.SURFlat[0].cmes):
             raise TypeError(
                 f"All entries in model.cmes must be instances of s.ConeCME. "
-                f"Got types: {[type(cme).__name__ for cme in model.cmes]}."
+                f"Got types: {[type(cme).__name__ for cme in model.SURFlat[0].cmes]}."
             )
 
+<<<<<<< HEAD
         #times = model.time_out.to(u.day).value
         times = self.observer_times.to(u.day).value
+=======
+        times = model.SURFlat[0].time_out.to(u.day).value
+>>>>>>> fe0c5896f858f3011947c7f2dd7811882995ed3b
         elons = self.e.to(u.deg).value
 
         # Clip and scale the jmap. Find ridges.
         djmap = np.nan_to_num(djmap, nan=0.0, posinf=0.0, neginf=0.0)
+        # If there is no structure in the djamp, all elements will be close to zero.
+        if np.allclose(djmap, 0.0):
+            print('No structure in the jmap. Returning empty list of profiles.')
+            return []
+
         vmin, vmax = np.nanpercentile(np.abs(djmap), [0, 100])
         djmap_clipped = np.clip(djmap, vmin, vmax)
         djmap_norm = (djmap_clipped - vmin) / (vmax - vmin)
@@ -490,22 +558,45 @@ class SyntheticImager:
         grad_t = ski.filters.sobel_v(djmap_norm)
         pos_grad = grad_t > 0
 
+        # Build a mask to limit the search region for this CMEs t-e profile.
+        # Base this on max/min elongation from propagating along the plane of the sky at v +/- dv
         cme_profiles = []
+<<<<<<< HEAD
         for cme in model.cmes:
             # USE TRACER PARTICLES TO ISOLATE THE CME IN TIME - ELONGATION SPACE.
             flank, extent = self.compute_flank_profile(cme)
             #print(f"flank = {flank},\n extent = {extent}")
+=======
+        for cme in model.SURFlat[0].cmes:
+            # Only look for features that begin during CME injection
+            t_launch = cme.t_launch.to(u.day).value
+            r_min = cme.initial_height.to(u.m).value
+>>>>>>> fe0c5896f858f3011947c7f2dd7811882995ed3b
             cme_mask = np.zeros(djmap.shape, dtype=bool)
-            for id_t in extent.index:
-                e_min = extent.loc[id_t, 'e_min']
-                e_max = extent.loc[id_t, 'e_max']
-                if np.isnan(e_min):
-                    e_min = 0.0
-                if np.isnan(e_max):
+            dt_pad = (2 * u.hour).to_value(u.s)
+            for id_t, t in enumerate(times):
+                travel_time = (t - t_launch) * 86400
+                if travel_time < -dt_pad:
                     continue
-                else:
-                    id_e = (elons >= e_min) & (elons <= e_max + 5)
-                    cme_mask[id_e, id_t] = True
+
+                r_obs = self.position.r[id_t].to(u.m).value
+                r_nose_fast = r_min + 1.25 * cme.v.to(u.m/u.s).value * (travel_time + dt_pad)
+                r_nose_slow = r_min + 0.75 * cme.v.to(u.m / u.s).value * (travel_time - dt_pad)
+
+                e_fast = np.rad2deg(np.arctan(r_nose_fast / r_obs))
+                e_slow = np.rad2deg(np.arctan(r_nose_slow / r_obs))
+                if e_fast > self.e_max.to(u.deg).value:
+                    e_fast = self.e_max.to(u.deg).value
+
+                if e_slow > self.e_max.to(u.deg).value:
+                    e_slow = self.e_max.to(u.deg).value
+
+                if e_slow == e_fast:
+                    # Leave this loop, as CME has almost certainly left the field of view.
+                    break
+
+                id_good = (elons > e_slow) & (elons < e_fast)
+                cme_mask[id_good, id_t] = True
 
             edges = ski.feature.canny(ridge, sigma=1, mask=cme_mask) & pos_grad
             label = ski.measure.label(edges)
@@ -519,13 +610,14 @@ class SyntheticImager:
             profiles = {}
             for id_r, region in enumerate(regions):
 
+                # Do not include small regions
                 if region.area < 5:
                     continue
 
                 c = np.array(region.coords)
-                # Scale pixel coords to map coords
-                t_pix = times[0] + c[:, 1] * (times[-1] - times[0]) / times.size
-                e_pix = elons[0] + c[:, 0] * (elons[-1] - elons[0]) / (elons.size)
+                # Get map coords from pixel coords.
+                t_pix = times[c[:, 1]]
+                e_pix = elons[c[:, 0]]
                 # Now average the e_pix values for each unique t_pix value.
                 t_pix_unique = np.unique(t_pix)
                 e_pix_mean = np.zeros(t_pix_unique.shape)
@@ -533,7 +625,7 @@ class SyntheticImager:
                     id_t = np.where(t_pix == tu)[0]
                     e_pix_mean[id_tu] = np.nanmean(e_pix[id_t])
 
-                t_real = t_pix_unique + model.time_init.jd
+                t_real = t_pix_unique + model.SURFlat[0].time_init.jd
                 profiles[f"feature_{id_r:02d}"] = {'t': t_pix_unique, 't_real': t_real,
                                                    'e': e_pix_mean}
 
@@ -542,6 +634,7 @@ class SyntheticImager:
 
         return cme_profiles
 
+<<<<<<< HEAD
 
     def compute_flank_profile(self, cme):
         """
@@ -666,29 +759,50 @@ class SyntheticImager:
         extent[keys] = extent[keys].astype(np.float64)
 
         return flank, extent
+=======
+>>>>>>> fe0c5896f858f3011947c7f2dd7811882995ed3b
 
 
     def _density_interpolator(self, model, time_step):
         """
-        Construct and return a RegularGridInterpolator object for the density field.
+        Construct a 3D density interpolator from a :class:`SURF3d` model.
+
+        The individual SURF runs in ``model.SURFlat`` are collated into a
+        ``(radius, longitude, latitude)`` field.  Coordinates passed to the
+        returned interpolator must have that same order and use SI/radian
+        units (metres, radians, radians).
         """
 
-        # Interpolate the model density field into the FOV coordinates.
-        # Extract electron density from SURF model at a specific time index
+        if not isinstance(model, s.SURF3d):
+            raise TypeError("model must be an instance of SURF3d")
+        if not model.SURFlat or any(not hasattr(run, "rho_grid") for run in model.SURFlat):
+            raise ValueError("SURF3d must contain solved compressible SURF runs")
 
-        r = model.r.to(u.m).value
-        lon = model.lon.to(u.rad).value
+        reference = model.SURFlat[0]
+        r = reference.r.to_value(u.m)
+        lon = reference.lon.to_value(u.rad)
+        lat = model.lat.to_value(u.rad)
 
-        # Convert proton mass density to electron number density
-        # Assuming quasi-neutrality: n_e = n_p = rho / m_p
-        density = model.rho_grid[time_step, :, :]
-        density = (density / const.m_p).value  # electrons per m^3
+        # Stack the latitude-plane fields. The resulting shape is
+        # (latitude, radius, longitude).
+        density = np.stack(
+            [run.rho_grid[time_step] for run in model.SURFlat], axis=0
+        )
+
+        # Reorder the axes to (radius, longitude, latitude), as expected by
+        # RegularGridInterpolator.
+        density = density.transpose(1, 2, 0)
+
+        # Convert proton mass density to electron number density, assuming
+        # quasi-neutrality: n_e = n_p = rho / m_p.
+        density = (density / const.m_p).to_value(u.m ** -3)
 
         # Pad longitude axis with wrap-around ghost cells to stop edge effects
+        # ToDo: Padding might be unnecessary for a wedge solution.
         lon_pad = np.concatenate([[lon[-1] - 2.0 * np.pi], lon, [lon[0] + 2.0 * np.pi]])
-        density_pad = np.concatenate([density[:, -1:], density, density[:, :1]], axis=1)
+        density_pad = np.concatenate([density[:, -1:, :], density, density[:, :1, :]], axis=1)
 
-        interpolator = RegularGridInterpolator((r, lon_pad),
+        interpolator = RegularGridInterpolator((r, lon_pad, lat),
                                                density_pad,
                                                method='linear',
                                                bounds_error=False,
@@ -696,53 +810,198 @@ class SyntheticImager:
 
         return interpolator
 
+<<<<<<< HEAD
 
     def compute_fov_patch(self, time_step):
         """Compute a patch showing the synthetic imager field of view for overlaying on plots"""
+=======
+    def _fov_mask(self, model):
+        """
+        Return a mask for the imager field of view, with points outside the model domain set True
+        """
+        fov_mask = np.full_like(self.e_grid.value, False, dtype=bool)
+        r = model.SURFlat[0].r.to(u.solRad).value.copy()
+        lon = model.SURFlat[0].lon.to(u.rad).value.copy()
+        lat = model.lat.to(u.rad).value.copy()
+>>>>>>> fe0c5896f858f3011947c7f2dd7811882995ed3b
 
+        # Find bad radii
+        r_img = self.r_grid.to(u.solRad).value.copy()
+        id_bad_r = (r_img < r.min()) | (r_img > r.max())
+
+        # A limited SURF longitude grid may straddle zero.  Infer the solved
+        # arc from the largest circular gap between its grid points, rather
+        # than moving the longitude discontinuity to an imager-dependent
+        # location.
+        lon = np.sort(np.mod(lon, 2.0 * np.pi))
+        lon_imgr = self.lon_grid.to_value(u.rad)
+        if lon.size < 2:
+            # A one-longitude model has support only at its sampled longitude.
+            id_bad_lon = ~np.isclose(
+                np.mod(lon_imgr - lon[0], 2.0 * np.pi), 0.0,
+            )
+        else:
+            gaps = np.diff(np.concatenate((lon, [lon[0] + 2.0 * np.pi])))
+            if np.allclose(gaps, gaps[0]):
+                # Uniform gaps mean that the grid spans the full circle.
+                id_bad_lon = np.zeros(self.lon_grid.shape, dtype=bool)
+            else:
+                gap_index = np.argmax(gaps)
+                lon_start = lon[(gap_index + 1) % lon.size]
+                lon_stop = lon[gap_index]
+                span = np.mod(lon_stop - lon_start, 2.0 * np.pi)
+                offset = np.mod(lon_imgr - lon_start, 2.0 * np.pi)
+                id_bad_lon = offset > span
+
+        # Find bad latitudes.
+        lat_img = self.lat_grid.to(u.rad).value.copy()
+        id_bad_lat = (lat_img < lat.min()) | (lat_img > lat.max())
+
+        # Join the bad values.
+        fov_mask[id_bad_r | id_bad_lon | id_bad_lat] = True
+
+        return fov_mask
+
+    def _check_latitude_compatibility(self, model):
+        """
+        Ensure the 3D model latitude range covers the imager FOV.
+
+        It's expensive to check at every time step, so this only checks at the beginning,
+        middle and end of the time steps.
+
+        For short runs (~ a week or so) for observers like STEREO, this will be fine, as latitude
+        varies slowly with time. For other craft e.g. SolO and PSP, this might be insufficient.
+        """
+
+        if not isinstance(model, s.SURF3d):
+            raise TypeError("model must be an instance of SURF3d")
+
+        if not self._latitude_compatible_check:
+            n_t = self.position.time.size
+            steps = [0, n_t //2, n_t - 1]
+            for time_step in steps:
+                self._compute_fov_geometry(time_step)
+                if (self.lat_grid.min() < model.lat.min() or
+                        self.lat_grid.max() > model.lat.max()):
+                    raise ValueError("SURF3d latitude range does not cover the imager FOV")
+
+            # Update the latitude check flag
+            self._latitude_compatible_check = True
+
+
+    def plot_los_3d(self, time_step, ert):
+        """Plot a line of sight in heliocentric spherical-polar coordinates.
+
+        The LOS is calculated in Helioprojective Radial coordinates and transformed
+        to Heliographic Stonyhurst by :meth:`_compute_fov_geometry`.  The returned
+        Matplotlib axes use heliocentric Cartesian coordinates in solar radii; the
+        spherical-polar coordinates are ``(r, longitude, latitude)``.
+
+        Parameters
+        ----------
+        time_step : int
+            Observer ephemeris index.
+
+        Returns
+        -------
+        tuple
+            ``(fig, ax)`` containing the plot.
+        """
         self._compute_fov_geometry(time_step)
 
-        # Build the patch boundary by sampling along all four edges of the FOV grid.
-        # Edge indices: inner arc (col 0), outer arc (col -1), and the two sides (rows 0 and -1).
-        # All values are converted to solar radii for plotting.
+        # Observer Cartesian coords
+        x_o, y_o, z_o = spherical_to_cartesian(self.position.r[time_step],
+                                               self.position.lat[time_step],
+                                               self.position.lon[time_step])
 
-        # Inner arc: first elongation column, all z rows (near boundary)
-        r_inner_arc = self.r_grid[:, 0].to(u.solRad).value
-        l_inner_arc = self.lon_grid[:, 0].to(u.rad).value
+        x_o = x_o.to(u.solRad)
+        y_o = y_o.to(u.solRad)
+        z_o = z_o.to(u.solRad)
 
-        # Outer arc: last elongation column, all z rows (far boundary), reversed
-        r_outer_arc = self.r_grid[:, -1].to(u.solRad).value[::-1]
-        l_outer_arc = self.lon_grid[:, -1].to(u.rad).value[::-1]
+        # Observer Cartesian coords
+        x_e, y_e, z_e = spherical_to_cartesian(ert.r[time_step],
+                                               ert.lat[time_step],
+                                               ert.lon[time_step])
 
-        # Side 1: first z row (smallest elongation side), inner to outer
-        r_side1 = self.r_grid[0, :].to(u.solRad).value
-        l_side1 = self.lon_grid[0, :].to(u.rad).value
+        x_e = x_e.to(u.solRad)
+        y_e = y_e.to(u.solRad)
+        z_e = z_e.to(u.solRad)
 
-        # Side 2: last z row (largest elongation side), outer to inner, reversed
-        r_side2 = self.r_grid[-1, :].to(u.solRad).value[::-1]
-        l_side2 = self.lon_grid[-1, :].to(u.rad).value[::-1]
+        fig = plt.figure(figsize=(10, 10))
+        ax = fig.add_subplot(111, projection="3d")
 
-        # Concatenate all edges into a closed polygon boundary
-        r_patch = np.concatenate([r_inner_arc, r_side1, r_outer_arc, r_side2])
-        l_patch = np.concatenate([l_inner_arc, l_side1, l_outer_arc, l_side2])
+        ax.scatter([0], [0], [0], color="gold", edgecolor="black", s=80, label="Sun")
+        ax.scatter(x_o, y_o, z_o, color="tab:red", s=50, label="Observer")
+        ax.scatter(x_e, y_e, z_e, color="tab:blue", s=50, label="Earth")
 
-        # For a polar plot, vertices are (theta, r) = (longitude, radius)
-        vertices = np.column_stack([l_patch, r_patch])
-        patch = plt.Polygon(vertices, closed=True, fill=True,
-                            edgecolor='white', linewidth=1.5, linestyle='-', alpha=0.25)
-        return patch
+        # LOS Cartesian coords
+        x, y, z = spherical_to_cartesian(self.r_grid[::20, ::10],
+                                         self.lat_grid[::20, ::10],
+                                         self.lon_grid[::20, ::10])
 
-    def compute_los_coords(self, time_step, elon):
-        """Compute the longitude and radius coords of the line of sight at a given elongation."""
+        x = x.to(u.solRad)
+        y = y.to(u.solRad)
+        z = z.to(u.solRad)
 
-        self._compute_fov_geometry(time_step)
+        ax.plot(x, y, z, "k.", markersize=0.3)
 
-        id_elon = np.argmin(np.abs(self.e - elon))
+        ax.set_xlabel("x [R$_\\odot$]")
+        ax.set_ylabel("y [R$_\\odot$]")
+        ax.set_zlabel("z [R$_\\odot$]")
+        ax.set_xlim(-260, 260)
+        ax.set_ylim(-260, 260)
+        ax.set_zlim(-30, 30)
+        ax.legend()
+        ax.view_init(azim=0, elev=90, roll=0)
+        return (fig, ax)
 
-        r_inner = self.r_grid[0, id_elon].to(u.solRad).value
-        l_inner = self.lon_grid[0, id_elon].to(u.rad).value
 
-        r_outer = self.r_grid[-1, id_elon].to(u.solRad).value
-        l_outer = self.lon_grid[-1, id_elon].to(u.rad).value
+def compute_target_hpr_coords(observer, target):
+    """
+    Compute the position angle of a target relative to the observer. Both the observer and target
+    must be instances of the Observer class that span the same time range.
 
-        return np.array([r_inner, r_outer]) * u.solRad, np.array([l_inner, l_outer]) * u.rad
+    Args:
+        observer: An instance of the Observer class
+        target: An instance of the Observer class
+
+    Returns:
+        psi: The position angle of the target relative to the observer.
+    """
+
+    # Get skycoord obj for the observer.
+    psi = np.zeros(observer.time.size)
+    elon = np.zeros(observer.time.size)
+
+    for i in range(observer.time.size):
+
+        observer_heeq = SkyCoord(
+            lon=observer.lon[i],
+            lat=observer.lat[i],
+            radius=observer.r[i],
+            obstime=observer.time[i],
+            frame=frames.HeliographicStonyhurst
+        )
+
+        target_heeq = SkyCoord(
+            lon=target.lon[i],
+            lat=target.lat[i],
+            radius=target.r[i],
+            obstime=target.time[i],
+            frame=frames.HeliographicStonyhurst
+        )
+
+        # Convert the HEEQ CME coords to HPR.
+        target_hpr = target_heeq.transform_to(
+            frames.HelioprojectiveRadial(
+                observer=observer_heeq,
+                obstime=target_heeq.obstime
+            )
+        )
+        
+        psi[i] = target_hpr.psi.to(u.deg).value
+        elon[i] = target_hpr.theta.to(u.deg).value
+
+    psi = psi * u.deg
+    elon = elon * u.deg
+    return psi, elon

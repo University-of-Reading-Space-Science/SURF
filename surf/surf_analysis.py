@@ -1878,7 +1878,8 @@ def plot_earth_timeseries(model, plot_omni=True, save=False, tag='', timefromrun
     return fig, axs
 
 
-def plot3d_radial_lat_slice(model3d, time, lon=np.nan * u.deg, save=False, tag='',
+def plot3d_radial_lat_slice(model3d, time, lon=np.nan * u.deg,
+                            lat=0.0 * u.deg, save=False, tag='',
                             fighandle=np.nan, axhandle=np.nan):
     """
     Make a contour plot on polar axis of a radial-latitudinal plane of the solar wind solution at
@@ -1895,6 +1896,123 @@ def plot3d_radial_lat_slice(model3d, time, lon=np.nan * u.deg, save=False, tag='
         fig: Figure handle.
         ax: Axes handle.
     """
+    # The 3-D solution is stored as one SURF object per latitude.  Render
+    # both planes from that common representation.  Keep this branch before
+    # the original single-plane implementation below for backwards
+    # compatibility with callers that pass figure/axes handles.
+    model = model3d.SURFlat[0]
+    solver = str(getattr(model, 'solver', 'huxt')).lower()
+    is_hydro = solver == 'hydro'
+    id_t = np.argmin(np.abs(model.time_out - time))
+    id_lon = 0 if model.lon.size == 1 else np.argmin(np.abs(model.lon - lon))
+    id_lat = np.argmin(np.abs(model3d.lat - lat))
+
+    def values(variable):
+        out = np.empty((model.nr, model3d.nlat, model.lon.size))
+        for ilat, slice_model in enumerate(model3d.SURFlat):
+            if variable == 'V':
+                field = slice_model.v_grid
+            elif variable == 'n':
+                field = slice_model.rho_grid / (1.6726e-27 * u.kg) / 1e6
+            else:
+                field = slice_model.temp_grid
+            out[:, ilat, :] = field[id_t].value
+        return out
+
+    # Match the variable scaling used by plot_compressible.  Density and
+    # temperature are logarithmic because their radial ranges span orders of
+    # magnitude.
+    variables = [('V', r'$V_{SW}$ [km/s]', mpl.cm.viridis,
+                  200, 810, 10, False, np.arange(200, 801, 200))]
+    if is_hydro:
+        variables += [('n', r'$\log_{10}(n)$ [protons/cm$^3$]', mpl.cm.plasma,
+                       -1, 3, 0.1, True, np.arange(-1, 3, 1)),
+                      ('T', r'$\log_{10}(T)$ [K]', mpl.cm.inferno,
+                       4, 6, 0.05, True, np.arange(4, 6, 0.5))]
+
+    if isinstance(fighandle, float):
+        # Polar axes are square; use a figure aspect ratio that matches the
+        # 3-column by 2-row grid instead of leaving wide unused margins.
+        fig, axes = plt.subplots(2, len(variables), figsize=(6 * len(variables), 12),
+                                 squeeze=False, subplot_kw={'projection': 'polar'})
+    else:
+        fig = fighandle
+        axes = np.asarray(axhandle).reshape(2, len(variables))
+
+    # Reserve space below the lower polar row for one colourbar per column.
+    # tight_layout does not account reliably for polar axes plus manually
+    # shared colourbars, which previously caused both to overlap.
+    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.12, top=0.91,
+                        wspace=0.02, hspace=0.14)
+
+    r = model.r.to_value(u.solRad)
+    lat_theta, lat_r = np.meshgrid(model3d.lat.to_value(u.rad), r)
+    # Expand partial-longitude runs onto the full angular grid, retaining NaN
+    # outside the modelled sector.  Passing the compact sector directly to a
+    # polar contour lets Matplotlib bridge its endpoints across the unmodelled
+    # half of the heliosphere.
+    nlon_full = getattr(model, 'nlon_full', s.surf_constants()['nlon'])
+    full_lon, _, nlon = s.longitude_grid(nlon=nlon_full)
+    lon_theta, lon_r = np.meshgrid(full_lon.to_value(u.rad), r)
+    lon_theta = np.concatenate((lon_theta, lon_theta[:, :1] + 2 * np.pi), axis=1)
+    lon_r = np.concatenate((lon_r, lon_r[:, :1]), axis=1)
+    for column, (variable, label, cmap, vmin, vmax, dv, logarithmic, ticks) in enumerate(variables):
+        data = values(variable)
+        if logarithmic:
+            data = np.log10(data)
+        if full_lon.size == model.lon.size:
+            lon_data = data[:, id_lat, :]
+        else:
+            lon_data = np.full((model.nr, nlon), np.nan)
+            for model_lon_index, model_lon in enumerate(model.lon):
+                full_lon_index = np.argmin(np.abs(full_lon - model_lon))
+                lon_data[:, full_lon_index] = data[:, id_lat, model_lon_index]
+        # Repeat longitude zero at 2pi to close only the valid data at the
+        # polar seam; unmodelled longitudes remain NaN.
+        lon_data = np.concatenate((lon_data, lon_data[:, :1]), axis=1)
+        levels = np.arange(vmin, vmax + dv, dv)
+        cmap = cmap.copy()
+        cmap.set_over('lightgrey' if variable == 'V' else 'white')
+        cmap.set_under([0, 0, 0])
+        # Left: radius-latitude at the requested longitude.  Latitude is the
+        # polar angle, so this is a meridional wedge centred on the Sun.
+        ax_lat, ax_lon = axes[0, column], axes[1, column]
+        cnt_lat = ax_lat.contourf(lat_theta, lat_r, data[:, :, id_lon], levels=levels,
+                               cmap=cmap, extend='both')
+        cnt_lon = ax_lon.contourf(lon_theta, lon_r, lon_data, levels=levels,
+                                  cmap=cmap, extend='both')
+        # Both planes for a variable must use one common colour scale.
+        cnt_lat.set_clim(vmin, vmax)
+        cnt_lon.set_clim(vmin, vmax)
+        for axis, cnt in ((ax_lat, cnt_lat), (ax_lon, cnt_lon)):
+            cnt.set_edgecolor('face')
+            axis.set_ylim(0, r.max())
+            axis.set_yticklabels([])
+            axis.set_xticklabels([])
+            axis.patch.set_facecolor('slategrey')
+            axis.plot(0, 0, 'o', color=[1.0, 0.5, 0.25], markersize=12)
+        ax_lat.set_title(f'Radial-latitude: lon={model.lon[id_lon].to_value(u.deg):.1f}°')
+        ax_lon.set_title(f'Radial-longitude: lat={model3d.lat[id_lat].to_value(u.deg):.1f}°')
+        # Place the colourbar in its own axes, spanning this column only.
+        # Using the polar axes' actual positions keeps it aligned after their
+        # square aspect ratio has been applied.
+        top_pos = ax_lat.get_position()
+        bottom_pos = ax_lon.get_position()
+        cbar_left = min(top_pos.x0, bottom_pos.x0)
+        cbar_right = max(top_pos.x1, bottom_pos.x1)
+        cbar_bottom = bottom_pos.y0 - 0.055
+        cbar_ax = fig.add_axes([cbar_left, cbar_bottom, cbar_right - cbar_left, 0.018])
+        cbar = fig.colorbar(cnt_lat, cax=cbar_ax, orientation='horizontal')
+        cbar.set_label(label)
+        cbar.set_ticks(ticks)
+
+    fig.suptitle(f'SURF3D - {solver} | {model.time_out[id_t].to(u.day).value:.2f} days')
+    if save:
+        cr_num = np.int32(model.cr_num.value)
+        filepath = get_figure_dir().joinpath(f"SURF_CR{cr_num:03d}_{tag}_3D_frame_{id_t:03d}.png")
+        fig.savefig(filepath)
+    return fig, axes.ravel()
+
     plotvmin = 200
     plotvmax = 810
     dv = 10
@@ -2054,12 +2172,14 @@ def plot3d_radial_lat_slice(model3d, time, lon=np.nan * u.deg, save=False, tag='
     return fig, ax
 
 
-def animate_3d(model3d, lon=0.0 * u.deg, tag='', duration=10, fps=20, outputfilepath=''):
+def animate_3d(model3d, lon=0.0 * u.deg, lat=0.0 * u.deg, tag='', duration=10, fps=20,
+               outputfilepath=''):
     """
-    Animate the model solution, and save as an MP4.
+    Animate the model solution and save as an MP4.
     Args:
         model3d: An instance of SURF3d
-        lon: The longitude along which to render the latitudinal slice.
+        lon: The longitude along which to render the radial-latitude slice.
+        lat: The latitude along which to render the radial-longitude slice.
         tag: String to append to filename when saving the animation.
         duration: the movie duration, in seconds
         fps: frames per second
@@ -2070,6 +2190,9 @@ def animate_3d(model3d, lon=0.0 * u.deg, tag='', duration=10, fps=20, outputfile
     """
     model = model3d.SURFlat[0]
     
+    is_hydro = str(getattr(model, 'solver', 'huxt')).lower() == 'hydro'
+    nrows = 2
+    ncols = 3 if is_hydro else 1
     interval = (1/fps)*1000
     nframes = int(duration*1000/interval)
     
@@ -2084,16 +2207,21 @@ def animate_3d(model3d, lon=0.0 * u.deg, tag='', duration=10, fps=20, outputfile
         Returns:
             frame: An image array for rendering to movie clip.
         """
-        plt.clf()  # Clear the previous frame
-        ax = fig.add_subplot(111, projection='polar')
-        
+        fig.clear()
+        frame_axes = fig.subplots(nrows, ncols, squeeze=False,
+                                  subplot_kw={'projection': 'polar'})
         # Get the time index closest to this fraction of movie duration
         i = np.int32((model.nt_out - 1) * frame / nframes)
-        plot3d_radial_lat_slice(model3d, model.time_out[i], lon, fighandle=fig, axhandle=ax)
-        return frame
+        plot3d_radial_lat_slice(model3d, model.time_out[i], lon, lat,
+                                fighandle=fig, axhandle=frame_axes.ravel())
+        # FuncAnimation renders the figure through its writer.  Returning a
+        # pixel buffer here accesses the interactive canvas before it has a
+        # renderer; return the artists instead (blitting is disabled).
+        return fig.axes
     
     # Create a new figure
-    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw={"projection": "polar"})
+    fig, _ = plt.subplots(nrows, ncols, figsize=(6 * ncols, 12), squeeze=False,
+                          subplot_kw={'projection': 'polar'})
     
     # Create the animation
     ani = FuncAnimation(fig, make_frame3d, frames=range(nframes), interval=interval)
