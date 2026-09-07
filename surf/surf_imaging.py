@@ -1329,7 +1329,7 @@ class SyntheticImager3D:
         model_rs = {
             i: np.array(coord['r'].to(u.m).value) * u.m for i, coord in cme.coords.items()
         }
-        obs_times = np.array(self.observer_times.to(u.day).value) * u.day
+        obs_times = np.array(self.position.times.to(u.day).value) * u.day
 
         # Compute observers location using earth ephem, adding on observers longitude offset from Earth
         # and correct for runover 2*pi
