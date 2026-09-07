@@ -2269,6 +2269,7 @@ class SURF3d:
 
         # Set up the model at each latitude
         self.SURFlat = []
+        self.SURFlat = []
         for i in range(0, self.nlat):
             self.SURFlat.append(SURF(v_boundary=self.v_in[i],
                                      latitude=self.lat[i],
