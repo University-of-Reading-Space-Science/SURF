@@ -413,16 +413,25 @@ class SyntheticImager:
         times = model.SURFlat[0].time_out.to(u.day).value
         elons = self.e.to(u.deg).value
 
+        cmap = plt.cm.gray.copy()
+        cmap.set_bad(color='midnightblue')
+
+        fig, ax = plt.subplots(figsize=(10, 10))
+        vmin, vmax = np.nanpercentile(djmap, [1, 99])
+        ax.pcolormesh(times, elons, djmap, cmap=cmap, vmin=vmin, vmax=vmax)
+
         # Clip and scale the jmap. Find ridges.
         djmap = np.nan_to_num(djmap, nan=0.0, posinf=0.0, neginf=0.0)
-        # If there is no structure in the djamp, all elements will be close to zero.
-        if np.allclose(djmap, 0.0):
-            print('No structure in the jmap. Returning empty list of profiles.')
-            return []
+
+        # This test is shit and needs fixing.
+        #if np.allclose(djmap, 0.0):
+        #    print('No structure in the jmap. Returning empty list of profiles.')
+        #    return []
 
         vmin, vmax = np.nanpercentile(np.abs(djmap), [0, 100])
         djmap_clipped = np.clip(djmap, vmin, vmax)
         djmap_norm = (djmap_clipped - vmin) / (vmax - vmin)
+
         ridge = ski.filters.frangi(djmap_norm, sigmas=[1], black_ridges=False)
         ridge[ridge > np.percentile(ridge, 95)] = 1
         ridge[ridge < 1] = 0
