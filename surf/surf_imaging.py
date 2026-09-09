@@ -214,7 +214,8 @@ class SyntheticImager:
         a, b, c, d = self.van_de_hulst_coeffs()
         sc2 = np.sin(self.chi_grid.to(u.rad).value) ** 2
 
-        gt = np.zeros(sc2.shape) + scatter_coeff * ((1 - self.u_ld) * c + self.u_ld * d)  # EQ 1(
+        gt = (np.zeros(sc2.shape) * scatter_coeff.unit) + scatter_coeff * ((1 - self.u_ld) * c +
+                                                                     self.u_ld * d)  # EQ 1(
         # C) # in Xiong et al. 2013
 
         gp = scatter_coeff * sc2 * ((1 - self.u_ld) * a + self.u_ld * b)  # EQ 1(D) in Xiong et al.
