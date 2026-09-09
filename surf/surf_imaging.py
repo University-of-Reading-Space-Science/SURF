@@ -249,7 +249,7 @@ class SyntheticImager2D:
             tuple: Total, Radial and Tangential geometry factors (g, gr, gt)
         """
 
-        scatter_coeff = np.pi * self.sigma_e / 2
+        scatter_coeff = np.pi * self.sigma_e.value / 2
 
         a, b, c, d = self.van_de_hulst_coeffs()
         sc2 = np.sin(self.chi_grid.to(u.rad).value) ** 2
