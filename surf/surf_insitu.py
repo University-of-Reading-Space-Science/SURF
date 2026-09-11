@@ -16,6 +16,7 @@ import tqdm
 import os
 import re
 import h5py
+import warnings
 
 from sunpy.net import Fido
 from sunpy.net import attrs
@@ -23,6 +24,7 @@ from sunpy.timeseries import TimeSeries
 from sunpy.coordinates import sun
 from dtaidistance import dtw
 
+from urllib.parse import urlencode
 from urllib.request import urlopen
 import json
 
@@ -34,7 +36,7 @@ from surf import surf_inputs as sin
 
 
 def _is_compressible_solver(solver):
-    return solver in ("hydro", "hydro-pcm")
+    return solver in ("hydro", "hydro-pui", "hydro-pcm", "hydro-pcm-pui")
 
 
 def get_omni(starttime, endtime):
@@ -80,6 +82,94 @@ def get_omni(starttime, endtime):
     omni = omni.reset_index()
 
     return omni
+
+
+_ISWA_HAPI_URL = 'https://iswa.ccmc.gsfc.nasa.gov/hapi/data'
+
+
+def _get_iswa_hapi(dataset_id, starttime, endtime, timeout=60):
+    """Download an ISWA HAPI JSON dataset into a DataFrame."""
+    start = pd.Timestamp(starttime)
+    end = pd.Timestamp(endtime)
+    if start >= end:
+        raise ValueError('starttime must be before endtime')
+
+    def hapi_time(value):
+        if value.tzinfo is not None:
+            value = value.tz_convert('UTC').tz_localize(None)
+        return value.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    query = urlencode({
+        'id': dataset_id,
+        'time.min': hapi_time(start),
+        'time.max': hapi_time(end),
+        'format': 'json',
+    })
+    with urlopen(f'{_ISWA_HAPI_URL}?{query}', timeout=timeout) as response:
+        payload = json.load(response)
+    if payload.get('status', {}).get('code') != 1200:
+        message = payload.get('status', {}).get('message', 'unknown HAPI error')
+        raise RuntimeError(f'ISWA HAPI request failed: {message}')
+    records = payload.get('data', [])
+    if not records:
+        raise ValueError(f'No {dataset_id} data are available from {start} through {end}')
+    columns = [parameter['name'] for parameter in payload['parameters']]
+    frame = pd.DataFrame(records, columns=columns)
+    frame['datetime'] = pd.to_datetime(frame.pop('Time'), utc=True).dt.tz_localize(None)
+    for parameter in payload['parameters'][1:]:
+        name = parameter['name']
+        if parameter.get('type') in {'double', 'float', 'integer'} and name in frame:
+            frame[name] = pd.to_numeric(frame[name], errors='coerce')
+            fill = parameter.get('fill')
+            if fill not in {None, 'null'}:
+                frame.loc[frame[name] == float(fill), name] = np.nan
+    if 'isPrimary' in frame and (frame['isPrimary'] == 1).any():
+        frame = frame.loc[frame['isPrimary'] == 1]
+    return frame.sort_values('datetime').drop_duplicates('datetime', keep='last')
+
+
+def get_SWPC_realtime(starttime, endtime, include_mag=True, timeout=60):
+    """Download NOAA/SWPC real-time L1 solar-wind data from NASA ISWA HAPI.
+
+    The returned DataFrame follows :func:`get_omni` conventions so it can be
+    supplied as ``omni_input`` to the SURF forecast and reconstruction helpers.
+    Plasma is read from ``swpc_rtsw_plasma_P1M``. The companion magnetic feed
+    ``swpc_rtsw_mag_P1M`` is merged by one-minute timestamp when requested.
+    """
+    plasma = _get_iswa_hapi(
+        'swpc_rtsw_plasma_P1M', starttime, endtime, timeout=timeout
+    ).rename(columns={
+        'BulkSpeed': 'V',
+        'ProtonDensity': 'N',
+        'IonTemperature': 'T',
+        'source': 'plasma_source',
+        'isPrimary': 'plasma_isPrimary',
+    })
+
+    combined = plasma
+    if include_mag:
+        try:
+            magnetic = _get_iswa_hapi(
+                'swpc_rtsw_mag_P1M', starttime, endtime, timeout=timeout
+            ).rename(columns={
+                'source': 'mag_source',
+                'isPrimary': 'mag_isPrimary',
+            })
+            combined = pd.merge(plasma, magnetic, on='datetime', how='left')
+        except Exception as error:
+            warnings.warn(
+                f'SWPC magnetic data could not be loaded ({error}); returning plasma only.',
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    combined['BX_GSE'] = combined['B_x'] if 'B_x' in combined else np.nan
+    combined['BR'] = -combined['BX_GSE']
+    combined['B'] = combined['B_t'] if 'B_t' in combined else np.nan
+    combined['mjd'] = Time(combined['datetime'].to_numpy()).mjd
+    if not np.isfinite(combined['V']).any():
+        raise ValueError('The SWPC real-time feed contains no usable solar-wind speeds.')
+    return combined.sort_values('datetime').reset_index(drop=True)
 
 
 def get_stereo_a(starttime, endtime):
@@ -995,7 +1085,8 @@ def remove_ICMEs(data_df, icmes, interpolate=True, icme_buffer=0.1 * u.day, inte
     return data
 
 
-def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.day):
+def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.day,
+                    min_quality=1):
     """
     Scrape the DONKI database of interplanetary shocks at Earth or STEREO, to create a pseudo-ICME
     list in the same format as the Cane and Richardson list.
@@ -1004,12 +1095,19 @@ def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.
         enddate: Datetime of the end of the window
         location: Earth or STEREO A/B
         ICME_duration: Timespan of the assumed ICME duration. Should have units of days.
+        min_quality: Minimum DONKI ``quality`` rating to include. Valid values
+                     are -1 (all), 0 (weak or better), 1 (some signatures or
+                     better; default), and 2 (clear signatures only).
 
     Returns:
         icmes: A dataframe of ICMEs
     """
     # scrape the DONKI database of interplanetary shocks at Earth or STEREO. Create
     # a pseudo-ICME list in the same format as Cane and Richardson
+
+    min_quality = int(min_quality)
+    if min_quality not in (-1, 0, 1, 2):
+        raise ValueError('min_quality must be -1, 0, 1, or 2')
 
     # construct the url
     startdate_str = startdate.strftime('%Y-%m-%d')
@@ -1026,16 +1124,21 @@ def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.
         # convert to DataFrame
         df = pd.DataFrame(data)
 
-        # only include ICMEs at given location
-        mask = df['location'] == location
-        icmes = df[mask]
-        icmes = icmes.reset_index()
+        # Only include ICMEs at the requested location and quality. Treat a
+        # missing quality as DONKI's -1 (unspecified) rating.
+        quality_values = (
+            df['quality'] if 'quality' in df else pd.Series(-1, index=df.index)
+        )
+        quality = pd.to_numeric(quality_values, errors='coerce').fillna(-1)
+        mask = (df['location'] == location) & (quality >= min_quality)
+        icmes = df[mask].reset_index()
 
-        # put it in the same format as the Cane&Richardson ICME list
-        L = len(icmes)
-        for i in range(0, L):
-            icmes.loc[i, 'Shock_time'] = datetime.datetime.strptime(icmes.loc[i, 'eventTime'],
-                                                                    '%Y-%m-%dT%H:%MZ')
+        # Put it in the same format as the Cane & Richardson ICME list. Assign
+        # the full column so an empty filtered result still has the schema that
+        # removeICMEs expects.
+        icmes['Shock_time'] = pd.to_datetime(
+            icmes['eventTime'], format='%Y-%m-%dT%H:%MZ'
+        )
 
         # add a guess at the ICME end time
         icmes['ICME_end'] = icmes['Shock_time'] + datetime.timedelta(days=ICME_duration.value)
@@ -1205,7 +1308,7 @@ def get_STEREO_ICMEs(
 
 
 def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme_buffer=1,
-                interp_gaps=True):
+                interp_gaps=True, donki_min_quality=1):
     """
     Remove ICME periods from OMNI solar wind data.
     
@@ -1232,6 +1335,9 @@ def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme
         If True, interpolate through the data gaps created by ICME removal
         using time-weighted interpolation with forward/backward fill for edges.
         Default is True.
+    donki_min_quality : {-1, 0, 1, 2}, optional
+        Minimum DONKI ICME quality to remove when ``icme_list='DONKI'``.
+        The default, 1, includes ratings 1 and 2.
     
     Returns
     -------
@@ -1245,6 +1351,11 @@ def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme
     are modified. Other columns remain unchanged.
     """
     # create a copy of the OMNI data for ICME removal
+    pre_icme_buffer = float(pre_icme_buffer)
+    post_icme_buffer = float(post_icme_buffer)
+    if pre_icme_buffer < 0 or post_icme_buffer < 0:
+        raise ValueError('ICME buffers must be non-negative')
+
     omni_noicmes = omni.copy()
     
     dl_starttime = omni.loc[0]['datetime'] - datetime.timedelta(days=27)
@@ -1252,7 +1363,9 @@ def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme
     
     # load the ICME list
     if icme_list == 'DONKI':
-        icmes = get_DONKI_ICMEs(dl_starttime, dl_endtime)
+        icmes = get_DONKI_ICMEs(
+            dl_starttime, dl_endtime, min_quality=donki_min_quality
+        )
     elif icme_list == 'CaneRichardson':
         icmes = ICMElist()
     elif icme_list in ('STEREO-A', 'STEREOA', 'STA'):
@@ -1261,6 +1374,9 @@ def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme
         raise ValueError(
             "icme_list must be 'CaneRichardson', 'DONKI', or 'STEREO-A'"
         )
+
+    if icmes.empty:
+        return omni_noicmes
     
     params = ['V', 'BX_GSE']
     # first remove all ICMEs and add NaNs to the required parameters
@@ -1431,9 +1547,9 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       dt_scale=4, omni_input=None, buffertime=5*u.day, run_2d=False,
                       solver='huxt', nlon=128, dr=1.5*u.solRad,
                       v_max=3000*u.km/u.s, lon_start=0*u.rad,
-                      lon_stop=2*np.pi*u.rad, cnn_smoothing_width=7, track_cmes=False,
+                      lon_stop=2*np.pi*u.rad, cnn_smoothing_width=5, track_cmes=False,
                       gamma=1.5, include_b_boundary=True, icme_list='CaneRichardson',
-                      observer='Earth'):
+                      observer='Earth', pre_icme_buffer=0.2, post_icme_buffer=1):
     """
     Create a SURF solar wind forecast initialized from in-situ OMNI observations.
     
@@ -1491,8 +1607,9 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     v_max : astropy.units.Quantity, optional
         Maximum speed used with dr to set the CFL time step.
     cnn_smoothing_width : int, optional
-        Odd-width periodic running mean applied to CNN-corrected velocity for
-        compressible solvers. Use 1 to disable smoothing. Default is 5.
+        Odd-width periodic running mean applied to CNN-corrected velocity and
+        the radial magnetic field for compressible solvers. Use 1 to disable
+        smoothing. Default is 3.
     gamma : float, optional
         Effective adiabatic index used for Parker mapping and by SURF. Default is 1.5.
     include_b_boundary : bool, optional
@@ -1550,11 +1667,34 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
         if icme_list is None or icme_list == 'None':
             omni_input = omni
         else:
-            omni_input = removeICMEs(omni, icme_list=icme_list)
+            omni_input = removeICMEs(
+                omni, icme_list=icme_list,
+                pre_icme_buffer=pre_icme_buffer,
+                post_icme_buffer=post_icme_buffer
+            )
     
     # cut out the precise bit of the OMNI data that is required
     mask = (omni_input['datetime'] <= ftime)
     omni_input = omni_input.loc[mask].copy()
+
+    # A forecast boundary requires measured solar-wind speed from the preceding
+    # Carrington rotation. Do not let an empty or all-fill-value download proceed
+    # into interpolation/backmapping as a boundary full of NaNs.
+    lookback_start = ftime - datetime.timedelta(days=27.27)
+    recent_mask = (
+        (omni_input['datetime'] >= lookback_start)
+        & (omni_input['datetime'] <= ftime)
+        & np.isfinite(omni_input['V'])
+    )
+    if not recent_mask.any():
+        raise ValueError(
+            "No usable OMNI solar-wind speed data are available in the 27 days "
+            f"before the forecast time {ftime:%Y-%m-%d %H:%M}."
+        )
+    omni_input = omni_input.loc[
+        (omni_input['datetime'] >= lookback_start)
+        & (omni_input['datetime'] <= ftime)
+    ].copy()
     
     
     # add the carrington longitude to the omni data
@@ -1600,19 +1740,27 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
         observer_r = observer_at_ftime.r[0]
     
     # Backmap to the inner boundary with solver-dependent acceleration profile.
-    if solver == 'huxt':
-        vcarr_rmin_back, bcarr_rmin_back = sin.map_v_boundary_inwards(
-                                                omni_lon['V'].to_numpy()*u.km/u.s,
-                                                observer_r.to(u.solRad), rmin,
-                                                acc_profile='huxt',
-                                                b_orig=-omni_lon['BX_GSE'].to_numpy())
+    if solver in ('huxt', 'huxt-pui'):
+        mapped_boundary = sin.map_v_boundary_inwards(
+                                omni_lon['V'].to_numpy()*u.km/u.s,
+                                observer_r.to(u.solRad), rmin,
+                                acc_profile='huxt',
+                                b_orig=-omni_lon['BX_GSE'].to_numpy())
     else:
-        vcarr_rmin_back, bcarr_rmin_back = sin.map_v_boundary_inwards(
-                                                omni_lon['V'].to_numpy()*u.km/u.s,
-                                                observer_r.to(u.solRad), rmin,
-                                                acc_profile='parker',
-                                                b_orig=-omni_lon['BX_GSE'].to_numpy(),
-                                                gamma=gamma)
+        mapped_boundary = sin.map_v_boundary_inwards(
+                                omni_lon['V'].to_numpy()*u.km/u.s,
+                                observer_r.to(u.solRad), rmin,
+                                acc_profile='parker',
+                                b_orig=-omni_lon['BX_GSE'].to_numpy(),
+                                gamma=gamma)
+
+    # The mapper returns velocity alone when the input magnetic field contains no
+    # finite samples, and a (velocity, polarity) tuple otherwise.
+    if isinstance(mapped_boundary, tuple):
+        vcarr_rmin_back, bcarr_rmin_back = mapped_boundary
+    else:
+        vcarr_rmin_back = mapped_boundary
+        bcarr_rmin_back = None
     
     
     # interp to typical SURF resolution
@@ -1628,16 +1776,25 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
     vcarr_rmin_back_cnn = _resample_longitude_grid(vcarr_rmin_back_cnn, nlon)
     if blon is not None:
         blon = _resample_longitude_grid(blon, nlon)
-    b_boundary = blon if include_b_boundary else np.nan
 
     #apply some smoothing to the CNN output
     if _is_compressible_solver(solver):
         #vcarr_rmin_back_cnn = vcarr_rmin_back_cnn * 1.0
         #smooth the series, periodic at the edges
         vcarr_rmin_back_cnn = _periodic_running_mean(vcarr_rmin_back_cnn, cnn_smoothing_width)
-        
+        if blon is not None:
+            blon = _periodic_running_mean(blon, cnn_smoothing_width)
+
         #ensure no speeds below 250
         vcarr_rmin_back_cnn[vcarr_rmin_back_cnn <250] = 250
+
+    if not np.any(np.isfinite(vcarr_rmin_back_cnn)):
+        raise ValueError(
+            f"No finite {observer} speed boundary could be constructed for "
+            f"{ftime:%Y-%m-%d %H:%M}."
+        )
+
+    b_boundary = blon if include_b_boundary else np.nan
     
     # set up the model run to start 5 days before the forecast time, to allow for CMEs
     cr, cr_lon_init = sin.datetime2surfinputs(ftime - datetime.timedelta(days=buffertime.value))
@@ -1649,12 +1806,16 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
         Elat = observer_at_ftime.lat_c[0]
 
     
+    # A 1-D radial is fixed relative to Earth; a 2-D heliospheric domain is
+    # fixed relative to the Sun so that Earth moves through model longitude.
+    frame = 'sidereal' if run_2d else 'synodic'
+
     if run_2d:
         model = s.SURF(v_boundary=vcarr_rmin_back_cnn.flatten() * u.km/u.s,
                       b_boundary=b_boundary,
                       cr_num=cr, cr_lon_init=cr_lon_init,
                       simtime=simtime, r_min=rmin, r_max=rmax,
-                      dt_scale=dt_scale, latitude=Elat, frame='synodic',
+                      dt_scale=dt_scale, latitude=Elat, frame=frame,
                       solver=solver, nlon=nlon,
                       lon_start=lon_start, lon_stop=lon_stop, dr=dr,
                       v_max=v_max, track_cmes=track_cmes, gamma=gamma)
@@ -1663,7 +1824,7 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                       b_boundary=b_boundary,
                       cr_num=cr, cr_lon_init=cr_lon_init,
                       simtime=simtime, r_min=rmin, r_max=rmax,
-                      dt_scale=dt_scale, latitude=Elat, frame='synodic',
+                      dt_scale=dt_scale, latitude=Elat, frame=frame,
                       lon_out=0*u.rad, solver=solver,
                       nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes,
                       gamma=gamma)
@@ -1675,9 +1836,9 @@ def staSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad,
                      buffertime=5*u.day, run_2d=False, solver='huxt', nlon=128,
                      dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                      lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
-                     cnn_smoothing_width=7, track_cmes=False, gamma=1.5,
+                     cnn_smoothing_width=5, track_cmes=False, gamma=1.5,
                      include_b_boundary=True, icme_list='STEREO-A',
-                     icme_buffer=2*u.day):
+                     pre_icme_buffer=0.2, post_icme_buffer=1):
     """Create a SURF forecast initialized from STEREO-A observations.
 
     This is the STEREO-A equivalent of :func:`omniSURF_forecast`.  It uses
@@ -1689,9 +1850,9 @@ def staSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad,
     Parameters are the same as for :func:`omniSURF_forecast`, except that
     ``sta_input`` follows the column convention returned by
     :func:`get_stereo_a`. ``icme_list`` may be ``'STEREO-A'`` (the default),
-    None, or ``'None'``. ``icme_buffer`` is the interval removed on either
-    side of each catalogue ICME and may be a time quantity or a number of
-    days.
+    None, or ``'None'``. ``pre_icme_buffer`` and ``post_icme_buffer`` are the
+    intervals removed before and after each catalogue ICME, in days, matching
+    :func:`removeICMEs`.
 
     Returns
     -------
@@ -1705,17 +1866,15 @@ def staSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad,
         )
 
     if icme_list is not None and icme_list != 'None':
-        if isinstance(icme_buffer, u.Quantity):
-            icme_buffer_days = icme_buffer.to_value(u.day)
-        else:
-            icme_buffer_days = float(icme_buffer)
-        if icme_buffer_days < 0:
-            raise ValueError('icme_buffer must be non-negative')
+        pre_icme_buffer = float(pre_icme_buffer)
+        post_icme_buffer = float(post_icme_buffer)
+        if pre_icme_buffer < 0 or post_icme_buffer < 0:
+            raise ValueError('ICME buffers must be non-negative')
         sta_input = removeICMEs(
             sta_input,
             icme_list=icme_list,
-            pre_icme_buffer=icme_buffer_days,
-            post_icme_buffer=icme_buffer_days
+            pre_icme_buffer=pre_icme_buffer,
+            post_icme_buffer=post_icme_buffer
         )
 
     return omniSURF_forecast(
@@ -1738,7 +1897,9 @@ def staSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad,
         gamma=gamma,
         include_b_boundary=include_b_boundary,
         icme_list=None,
-        observer='STA'
+        observer='STA',
+        pre_icme_buffer=pre_icme_buffer,
+        post_icme_buffer=post_icme_buffer
     )
 
 
@@ -1747,9 +1908,10 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                             rho_source='speed', temp_source='speed', nlon=128,
                             dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                             lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
-                            cnn_smoothing_width=7, track_cmes=False, gamma=1.5,
+                            cnn_smoothing_width=5, track_cmes=False, gamma=1.5,
                             include_b_boundary=True, icme_list='CaneRichardson',
-                            observer='Earth'):
+                            observer='Earth', pre_icme_buffer=0.2,
+                            post_icme_buffer=1):
     """
     Create a SURF solar wind reconstruction using OMNI observations over a time interval.
     
@@ -1871,7 +2033,11 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
         if icme_list is None or icme_list == 'None':
             omni_input = omni
         else:
-            omni_input = removeICMEs(omni, icme_list=icme_list)
+            omni_input = removeICMEs(
+                omni, icme_list=icme_list,
+                pre_icme_buffer=pre_icme_buffer,
+                post_icme_buffer=post_icme_buffer
+            )
     
     # Determine if we need density and temperature from OMNI
     need_compressible = _is_compressible_solver(solver)
@@ -1906,7 +2072,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
     vcarr_rmin = np.zeros_like(vcarr_215.value)
     bcarr_rmin = np.zeros_like(bcarr_215)
     
-    if solver == 'huxt':
+    if solver in ('huxt', 'huxt-pui'):
         for t in range(nt):
             mapped = sin.map_v_boundary_inwards(
                 vcarr_215[:, t],
@@ -2027,6 +2193,10 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
         source_pos = s.Observer(observer, Time([start_time]))
         Elat = source_pos.lat_c[0]
     
+    # A 1-D radial is fixed relative to Earth; a 2-D heliospheric domain is
+    # fixed relative to the Sun so that Earth moves through model longitude.
+    frame = 'sidereal' if run_2d else 'synodic'
+
     # Create SURF model with time-dependent boundary
     if run_2d:
         model = sin.set_time_dependent_boundary(
@@ -2041,7 +2211,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
             r_max=rmax,
             dt_scale=dt_scale,
             latitude=Elat,
-            frame='synodic',
+            frame=frame,
             lon_start=lon_start,
             lon_stop=lon_stop,
             solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes,
@@ -2060,7 +2230,7 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
             r_max=rmax,
             dt_scale=dt_scale,
             latitude=Elat,
-            frame='synodic',
+            frame=frame,
             lon_out=0*u.rad,
             solver=solver, nlon=nlon, dr=dr, v_max=v_max, track_cmes=track_cmes,
             gamma=gamma
@@ -2075,9 +2245,9 @@ def staSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad,
                            rho_source='speed', temp_source='speed', nlon=128,
                            dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                            lon_start=0*u.rad, lon_stop=2*np.pi*u.rad,
-                           cnn_smoothing_width=7, track_cmes=False, gamma=1.5,
+                           cnn_smoothing_width=5, track_cmes=False, gamma=1.5,
                            include_b_boundary=True, icme_list='STEREO-A',
-                           icme_buffer=2*u.day):
+                           pre_icme_buffer=0.2, post_icme_buffer=1):
     """Create a SURF reconstruction using STEREO-A in-situ observations.
 
     STEREO-A's merged hourly PLASTIC/IMPACT product is downloaded from CDAWeb
@@ -2128,9 +2298,9 @@ def staSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad,
         ICME catalogue used to remove and interpolate across STEREO-A ICME
         intervals. Defaults to ``'STEREO-A'``. Set to None or ``'None'`` to
         retain the original measurements.
-    icme_buffer : astropy.units.Quantity or float, optional
-        Time removed both before each ICME start and after each ICME end. A
-        float is interpreted as days. Default is two days.
+    pre_icme_buffer, post_icme_buffer : float, optional
+        Time removed before each ICME start and after each ICME end, in days.
+        Defaults are 0.2 and 1 day, matching :func:`removeICMEs`.
 
     Returns
     -------
@@ -2143,17 +2313,15 @@ def staSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad,
             end_time + datetime.timedelta(days=28)
         )
     if icme_list is not None and icme_list != 'None':
-        if isinstance(icme_buffer, u.Quantity):
-            icme_buffer_days = icme_buffer.to_value(u.day)
-        else:
-            icme_buffer_days = float(icme_buffer)
-        if icme_buffer_days < 0:
-            raise ValueError('icme_buffer must be non-negative')
+        pre_icme_buffer = float(pre_icme_buffer)
+        post_icme_buffer = float(post_icme_buffer)
+        if pre_icme_buffer < 0 or post_icme_buffer < 0:
+            raise ValueError('ICME buffers must be non-negative')
         sta_input = removeICMEs(
             sta_input,
             icme_list=icme_list,
-            pre_icme_buffer=icme_buffer_days,
-            post_icme_buffer=icme_buffer_days
+            pre_icme_buffer=pre_icme_buffer,
+            post_icme_buffer=post_icme_buffer
         )
 
     return omniSURF_reconstruction(
@@ -2178,7 +2346,9 @@ def staSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad,
         gamma=gamma,
         include_b_boundary=include_b_boundary,
         icme_list=None,
-        observer='STA'
+        observer='STA',
+        pre_icme_buffer=pre_icme_buffer,
+        post_icme_buffer=post_icme_buffer
     )
 
 
@@ -2186,7 +2356,8 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
                      omni_input=None, run_2d=False, solver='hydro', nlon=128,
                      dr=1.5*u.solRad, v_max=3000*u.km/u.s,
                      lon_start=0*u.rad, lon_stop=2*np.pi*u.rad, track_cmes=False,
-                     gamma=1.5, include_b_boundary=True, icme_list='CaneRichardson'):
+                     gamma=1.5, include_b_boundary=True, icme_list='CaneRichardson',
+                     pre_icme_buffer=0.2, post_icme_buffer=1):
     """
     Create a SURF solar wind simulation starting from ~1 AU using OMNI observations.
 
@@ -2259,7 +2430,11 @@ def omniSURF_1au_out(start_time, end_time, rmax=230*u.solRad, dt_scale=4, dt=1*u
         if icme_list is None or icme_list == 'None':
             omni_input = omni
         else:
-            omni_input = removeICMEs(omni, icme_list=icme_list)
+            omni_input = removeICMEs(
+                omni, icme_list=icme_list,
+                pre_icme_buffer=pre_icme_buffer,
+                post_icme_buffer=post_icme_buffer
+            )
 
     # Generate Carrington map with density and temperature from OMNI
     need_compressible = _is_compressible_solver(solver)

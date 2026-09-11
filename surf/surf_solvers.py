@@ -58,6 +58,9 @@ M_P_SI = _CONSTANTS['proton_mass']
 SMALL_RHO = _CONSTANTS['min_density']
 SMALL_P = _CONSTANTS['min_pressure']
 NUMBA_CACHE = _CONSTANTS['numba_cache']
+AU_M = 1.496e11
+PUI_REFERENCE_RADIUS_M = AU_M
+PUI_SLOWDOWN_PER_AU = 0.0027
 del _CONSTANTS
 
 
@@ -128,6 +131,86 @@ def _advect_particle_rk2(r_p, v_grid, r_grid, dt, behavior):
             r_final = r_grid[-1]
             
     return r_final, v_mid, is_active
+
+
+@njit(cache=NUMBA_CACHE)
+def _advect_cme_particle_huxt(r_p, v_grid, r_grid, dt):
+    """Advance a CME tracer using HUXt's grid and integration convention."""
+    dr = r_grid[1] - r_grid[0]
+    v_p = np.interp(r_p - 0.5 * dr, r_grid, v_grid)
+    r_new = r_p + v_p * dt
+    if r_new > r_grid[-1]:
+        r_new = r_grid[-1]
+    return r_new, v_p
+
+
+@njit(cache=NUMBA_CACHE)
+def _advance_particles_huxt_batch(r_particles, v_particles, active, injected,
+                                  injection_times, release_times, behaviors,
+                                  require_positive_time, U, r_grid, time, dt):
+    """Advance all hydro tracers in one compiled HUXt-style batch."""
+    dr = r_grid[1] - r_grid[0]
+    n_grid = r_grid.size
+    for particle_id in range(r_particles.size):
+        if not injected[particle_id]:
+            time_is_valid = (not require_positive_time[particle_id]
+                             or time > 0.0)
+            if time >= injection_times[particle_id] and time_is_valid:
+                r_particles[particle_id] = r_grid[0]
+                active[particle_id] = True
+                injected[particle_id] = True
+            else:
+                continue
+
+        if not active[particle_id]:
+            continue
+
+        if time <= release_times[particle_id]:
+            r_particles[particle_id] = r_grid[0]
+
+        sample_r = r_particles[particle_id] - 0.5 * dr
+        if sample_r <= r_grid[0]:
+            velocity = U[0, 1] / U[0, 0]
+        elif sample_r >= r_grid[-1]:
+            velocity = U[-1, 1] / U[-1, 0]
+        else:
+            upper = np.searchsorted(r_grid, sample_r)
+            lower = upper - 1
+            weight = ((sample_r - r_grid[lower]) /
+                      (r_grid[upper] - r_grid[lower]))
+            v_lower = U[lower, 1] / U[lower, 0]
+            v_upper = U[upper, 1] / U[upper, 0]
+            velocity = v_lower + weight * (v_upper - v_lower)
+
+        radius = r_particles[particle_id] + velocity * dt
+        if radius > r_grid[n_grid - 1]:
+            if behaviors[particle_id] == 1:
+                radius = r_grid[n_grid - 1]
+            else:
+                active[particle_id] = False
+        r_particles[particle_id] = radius
+        v_particles[particle_id] = velocity
+
+
+@njit(cache=NUMBA_CACHE)
+def _catch_up_particles_huxt_batch(
+        r_particles, v_particles, active, injected, injection_times,
+        release_times, behaviors, require_positive_time, U, r_grid,
+        particle_step_times, particle_step_idx, previous_particle_time,
+        plasma_time):
+    """Advance all fixed-clock particle steps crossed by a hydro CFL step."""
+    tolerance = 1e-7 * max(1.0, abs(plasma_time))
+    while (particle_step_idx < particle_step_times.size
+           and particle_step_times[particle_step_idx] <= plasma_time + tolerance):
+        particle_time = particle_step_times[particle_step_idx]
+        particle_dt = particle_time - previous_particle_time
+        _advance_particles_huxt_batch(
+            r_particles, v_particles, active, injected, injection_times,
+            release_times, behaviors, require_positive_time, U, r_grid,
+            particle_time, particle_dt)
+        previous_particle_time = particle_time
+        particle_step_idx += 1
+    return particle_step_idx, previous_particle_time
 
 
 # =============================================================================
@@ -431,7 +514,29 @@ def _extract_snapshot(U, nr, gamma, M_P_val, K_B_val):
 
 
 @njit(cache=NUMBA_CACHE)
-def _step_euler(U, U_bc, nr, A, V, dt, gamma, use_plm):
+def _apply_pui_source(U, r, nr, dt, enabled):
+    """Apply the continuous 1 AU-anchored PUI trend, preserving internal energy."""
+    if not enabled:
+        return U
+    for i in range(nr):
+        if r[i] <= PUI_REFERENCE_RADIUS_M:
+            continue
+        rho = max(U[i, 0], SMALL_RHO)
+        velocity = U[i, 1] / rho
+        internal_energy = U[i, 2] - 0.5 * rho * velocity * velocity
+        distance_au = max((r[i] - PUI_REFERENCE_RADIUS_M) / AU_M, 0.0)
+        trend = max(1.0 - PUI_SLOWDOWN_PER_AU * distance_au, 1e-6)
+        # The radius-dependent rate integrates to the paper's linear radial trend.
+        rate_per_m = (PUI_SLOWDOWN_PER_AU / AU_M) / trend
+        factor = max(1.0 - rate_per_m * abs(velocity) * dt, 0.0)
+        velocity_new = velocity * factor
+        U[i, 1] = rho * velocity_new
+        U[i, 2] = internal_energy + 0.5 * rho * velocity_new * velocity_new
+    return U
+
+
+@njit(cache=NUMBA_CACHE)
+def _step_euler(U, U_bc, nr, A, V, r, dt, gamma, use_plm, pui):
     """
     Forward Euler time step with area-weighted fluxes and geometric source.
     """
@@ -466,16 +571,16 @@ def _step_euler(U, U_bc, nr, A, V, dt, gamma, use_plm):
             U_new[i] = U[i]
     
     U_new[0] = U_bc
-    return U_new
+    return _apply_pui_source(U_new, r, nr, dt, pui)
 
 
 @njit(cache=NUMBA_CACHE)
-def _step_rk2(U, U_bc, nr, A, V, dt, gamma, use_plm):
+def _step_rk2(U, U_bc, nr, A, V, r, dt, gamma, use_plm, pui):
     """
     RK2 (Heun's method) time step.
     """
-    U1 = _step_euler(U, U_bc, nr, A, V, dt, gamma, use_plm)
-    U2 = _step_euler(U1, U_bc, nr, A, V, dt, gamma, use_plm)
+    U1 = _step_euler(U, U_bc, nr, A, V, r, dt, gamma, use_plm, pui)
+    U2 = _step_euler(U1, U_bc, nr, A, V, r, dt, gamma, use_plm, pui)
     
     U_new = np.zeros_like(U)
     for i in range(nr):
@@ -520,11 +625,12 @@ class CompressibleSolver:
     
     def __init__(self, r_grid, gamma=1.5, cfl=None,
                  riemann='hllc', reconstruction='plm', time_integration='euler',
-                 verbose=False):
+                 verbose=False, pui=False):
         self.r = r_grid.copy()
         self.nr = len(r_grid)
         self.gamma = gamma
         self.verbose = verbose
+        self.pui = bool(pui)
         
         self.reconstruction = reconstruction.lower()
         self.time_integration = time_integration.lower()
@@ -574,18 +680,20 @@ class CompressibleSolver:
         use_plm = (self.reconstruction == 'plm')
         
         if self.time_integration == 'rk2':
-            self.U = _step_rk2(self.U, U_bc, self.nr, self.A, self.V,
-                               dt, self.gamma, use_plm)
+            self.U = _step_rk2(self.U, U_bc, self.nr, self.A, self.V, self.r,
+                               dt, self.gamma, use_plm, self.pui)
         else:
-            self.U = _step_euler(self.U, U_bc, self.nr, self.A, self.V,
-                                 dt, self.gamma, use_plm)
+            self.U = _step_euler(self.U, U_bc, self.nr, self.A, self.V, self.r,
+                                 dt, self.gamma, use_plm, self.pui)
         
         self.time += dt
         return self.U
     
-    def solve(self, t_grid, v_bc_func, rho_bc_func, T_bc_func, 
+    def solve(self, t_grid, v_bc_func, rho_bc_func, T_bc_func,
               num_particles=0, particle_injection_rate=None, particle_release_rate=None,
-              v_init=None, rho_init=None, T_init=None):
+              particle_initial_positions=None,
+              v_init=None, rho_init=None, T_init=None,
+              particle_step_times=None):
         """
         Run simulation over time grid.
         
@@ -662,19 +770,36 @@ class CompressibleSolver:
         
         if isinstance(num_particles, dict):
             particles_enabled = True
+            v_initial = self.U[:, 1] / self.U[:, 0]
             for group_name, n_p in num_particles.items():
                 inj_times = particle_injection_rate[group_name]
                 rel_times = particle_release_rate[group_name] \
                     if particle_release_rate and group_name in particle_release_rate else inj_times
                 behavior = 1 if 'cme' in group_name.lower() else 0
                 
+                initial_positions = (
+                    particle_initial_positions.get(group_name, [])
+                    if particle_initial_positions else [])
+                initial_positions = list(initial_positions)
+                initial_velocities = [
+                    np.interp(r_p, self.r, v_initial)
+                    for r_p in initial_positions]
                 particle_groups[group_name] = {
                     'n_particles': n_p,
                     'injection_times': inj_times,
                     'release_times': rel_times,
-                    'r': [], 'v': [], 't': [], 't_inject': [], 'active': [],
-                    'particles_injected': 0,
-                    'behavior': behavior
+                    'r': [[r_p] for r_p in initial_positions],
+                    'v': [[v_p] for v_p in initial_velocities],
+                    't': [[t_grid[0]] for _ in initial_positions],
+                    't_inject': [t_grid[0] for _ in initial_positions],
+                    'active': [True for _ in initial_positions],
+                    'r_current': initial_positions.copy(),
+                    'v_current': initial_velocities.copy(),
+                    'initial_velocities': initial_velocities.copy(),
+                    'particles_injected': len(initial_positions),
+                    'behavior': behavior,
+                    'huxt_cme': 'cme' in group_name.lower(),
+                    'huxt_internal': True
                 }
         elif isinstance(num_particles, int) and num_particles > 0:
             particles_enabled = True
@@ -686,9 +811,62 @@ class CompressibleSolver:
                 'injection_times': inj_times,
                 'release_times': rel_times,
                 'r': [], 'v': [], 't': [], 't_inject': [], 'active': [],
+                'r_current': [], 'v_current': [],
                 'particles_injected': 0,
-                'behavior': 0
+                'behavior': 0,
+                'huxt_cme': False,
+                'huxt_internal': False
             }
+
+        # Pack every named group into flat arrays so one compiled call updates
+        # CME, HCS, and streakline tracers on each internal step.
+        cme_r_initial = []
+        cme_v_initial = []
+        cme_active_initial = []
+        cme_injected_initial = []
+        cme_injection_times = []
+        cme_release_times = []
+        particle_behaviors = []
+        require_positive_time = []
+        for group in particle_groups.values():
+            if not group.get('huxt_internal', False):
+                continue
+            n_group = group['n_particles']
+            initial_positions = list(group.get('r_current', []))
+            initial_velocities = list(group.get('initial_velocities', []))
+            group['cme_batch_start'] = len(cme_r_initial)
+            for particle_id in range(n_group):
+                has_initial = particle_id < len(initial_positions)
+                cme_r_initial.append(
+                    initial_positions[particle_id] if has_initial else np.nan)
+                cme_v_initial.append(
+                    initial_velocities[particle_id] if has_initial else np.nan)
+                cme_active_initial.append(has_initial)
+                cme_injected_initial.append(has_initial)
+                cme_injection_times.append(group['injection_times'][particle_id])
+                cme_release_times.append(group['release_times'][particle_id])
+                particle_behaviors.append(group['behavior'])
+                require_positive_time.append(group['huxt_cme'])
+            group['r'] = [[] for _ in range(n_group)]
+            group['v'] = [[] for _ in range(n_group)]
+            group['t'] = [[] for _ in range(n_group)]
+            group['t_inject'] = list(group['injection_times'])
+
+        cme_r_current = np.asarray(cme_r_initial, dtype=float)
+        cme_v_current = np.asarray(cme_v_initial, dtype=float)
+        cme_active = np.asarray(cme_active_initial, dtype=bool)
+        cme_injected = np.asarray(cme_injected_initial, dtype=bool)
+        cme_injection_times = np.asarray(cme_injection_times, dtype=float)
+        cme_release_times = np.asarray(cme_release_times, dtype=float)
+        particle_behaviors = np.asarray(particle_behaviors, dtype=np.int64)
+        require_positive_time = np.asarray(require_positive_time, dtype=bool)
+        if particle_step_times is None:
+            particle_step_times = np.asarray(t_grid, dtype=float)
+        else:
+            particle_step_times = np.asarray(particle_step_times, dtype=float)
+        particle_step_idx = int(np.searchsorted(
+            particle_step_times, self.time, side='right'))
+        previous_particle_time = self.time
         
         # Time loop
         t_idx = 0
@@ -701,6 +879,15 @@ class CompressibleSolver:
             v_out[0, :] = v_snap
             rho_out[0, :] = rho_snap
             T_out[0, :] = T_snap
+            for group in particle_groups.values():
+                if group.get('huxt_internal', False):
+                    batch_start = group['cme_batch_start']
+                    for particle_id in range(group['n_particles']):
+                        batch_id = batch_start + particle_id
+                        if cme_active[batch_id]:
+                            group['r'][particle_id].append(cme_r_current[batch_id])
+                            group['v'][particle_id].append(cme_v_current[batch_id])
+                            group['t'][particle_id].append(self.time)
             t_idx = 1
         
         while t_idx < nt:
@@ -710,44 +897,21 @@ class CompressibleSolver:
                 dt = self._get_dt()
                 if self.time + dt > target_time:
                     dt = target_time - self.time
-                
                 self._step(dt, lambda t: (rho_bc_func(t), v_bc_func(t), T_bc_func(t)))
+
+                if (cme_r_current.size
+                        and particle_step_idx < particle_step_times.size
+                        and particle_step_times[particle_step_idx] <= self.time
+                        + 1e-7 * max(1.0, abs(self.time))):
+                    particle_step_idx, previous_particle_time = (
+                        _catch_up_particles_huxt_batch(
+                        cme_r_current, cme_v_current, cme_active,
+                        cme_injected, cme_injection_times, cme_release_times,
+                        particle_behaviors, require_positive_time,
+                        self.U, self.r, particle_step_times,
+                        particle_step_idx, previous_particle_time,
+                        self.time))
                 
-                # Particle advection
-                if particles_enabled:
-                    v_curr = self.U[:, 1] / self.U[:, 0]
-                    
-                    for group in particle_groups.values():
-                        # Inject new particles
-                        while (group['particles_injected'] < group['n_particles'] and 
-                               group['injection_times'][group['particles_injected']] <= self.time):
-                            group['r'].append([self.r[0]])
-                            group['v'].append([v_curr[0]])
-                            group['t'].append([self.time])
-                            group['t_inject'].append(group['injection_times'][group['particles_injected']])
-                            group['active'].append(True)
-                            group['particles_injected'] += 1
-                        
-                        # Advect particles
-                        behavior = group.get('behavior', 0)
-                        for i in range(len(group['active'])):
-                            if group['active'][i]:
-                                if self.time < group['release_times'][i]:
-                                    group['r'][i].append(self.r[0])
-                                    group['v'][i].append(v_curr[0])
-                                    group['t'][i].append(self.time)
-                                    continue
-                                
-                                r_p = group['r'][i][-1]
-                                r_new, v_new, is_active = _advect_particle_rk2(
-                                    r_p, v_curr, self.r, dt, behavior
-                                )
-                                
-                                group['active'][i] = is_active
-                                if is_active:
-                                    group['r'][i].append(r_new)
-                                    group['v'][i].append(v_new)
-                                    group['t'][i].append(self.time)
             
             # Save snapshot
             v_snap, rho_snap, T_snap = _extract_snapshot(
@@ -755,7 +919,83 @@ class CompressibleSolver:
             v_out[t_idx, :] = v_snap
             rho_out[t_idx, :] = rho_snap
             T_out[t_idx, :] = T_snap
+            for group in particle_groups.values():
+                if group.get('huxt_internal', False):
+                    batch_start = group['cme_batch_start']
+                    for particle_id in range(group['n_particles']):
+                        batch_id = batch_start + particle_id
+                        if cme_active[batch_id]:
+                            group['r'][particle_id].append(cme_r_current[batch_id])
+                            group['v'][particle_id].append(cme_v_current[batch_id])
+                            group['t'][particle_id].append(self.time)
             t_idx += 1
+
+        # Passive particles do not affect the plasma solution.  Advect them
+        # after the solve on the requested output grid, avoiding Python/Numba
+        # crossings at every internal CFL step.  Arrival times are subsequently
+        # interpolated between these output samples.
+        if particles_enabled:
+            for group in particle_groups.values():
+                if group.get('huxt_internal', False):
+                    batch_start = group['cme_batch_start']
+                    batch_stop = batch_start + group['n_particles']
+                    group['active'] = list(cme_active[batch_start:batch_stop])
+                    group['particles_injected'] = int(np.sum(
+                        cme_injected[batch_start:batch_stop]))
+                    continue
+                n_particles_group = group['n_particles']
+                initial_positions = list(group.get('r_current', []))
+                group['r'] = []
+                group['v'] = []
+                group['t'] = []
+                group['t_inject'] = []
+                group['active'] = []
+                behavior = group.get('behavior', 0)
+
+                for particle_id in range(n_particles_group):
+                    inject_time = group['injection_times'][particle_id]
+                    release_time = group['release_times'][particle_id]
+                    r_particle = (
+                        initial_positions[particle_id]
+                        if particle_id < len(initial_positions)
+                        else self.r[0]
+                    )
+                    active = True
+                    r_history = []
+                    v_history = []
+                    t_history = []
+                    previous_time = inject_time
+
+                    for output_id, output_time in enumerate(t_grid):
+                        if output_time < inject_time:
+                            continue
+
+                        if output_time <= release_time:
+                            r_particle = self.r[0]
+                            v_particle = v_out[output_id, 0]
+                        elif active:
+                            move_start = max(previous_time, release_time)
+                            move_dt = output_time - move_start
+                            if move_dt > 0:
+                                r_particle, v_particle, active = _advect_particle_rk2(
+                                    r_particle, v_out[output_id, :], self.r,
+                                    move_dt, behavior
+                                )
+                            else:
+                                v_particle = np.interp(r_particle, self.r, v_out[output_id, :])
+
+                        if active:
+                            r_history.append(r_particle)
+                            v_history.append(v_particle)
+                            t_history.append(output_time)
+                        previous_time = output_time
+
+                    group['r'].append(r_history)
+                    group['v'].append(v_history)
+                    group['t'].append(t_history)
+                    group['t_inject'].append(inject_time)
+                    group['active'].append(active)
+                group['particles_injected'] = n_particles_group
         
         if self.verbose:
             elapsed = time_module.time() - start_time
@@ -770,6 +1010,7 @@ class CompressibleSolver:
             'solver_info': {
                 'reconstruction': self.reconstruction,
                 'time_integration': self.time_integration,
+                'pui': self.pui,
             }
         }
         
@@ -812,7 +1053,8 @@ class CompressibleSolver:
 # Factory Function
 # =============================================================================
 
-def create_solver(r_grid, gamma=1.5, method='hllc-plm', cfl=None, verbose=False):
+def create_solver(r_grid, gamma=1.5, method='hllc-plm', cfl=None, verbose=False,
+                  pui=False):
     """
     Create a compressible solver with specified method.
     
@@ -843,7 +1085,7 @@ def create_solver(r_grid, gamma=1.5, method='hllc-plm', cfl=None, verbose=False)
     return CompressibleSolver(
         r_grid, gamma=gamma, cfl=cfl,
         reconstruction=reconstruction,
-        time_integration=time_int, verbose=verbose
+        time_integration=time_int, verbose=verbose, pui=pui
     )
 
 

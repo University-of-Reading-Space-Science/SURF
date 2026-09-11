@@ -814,7 +814,7 @@ def _find_previous_iswa_wsa_map(timestamp, version, timeout, base_url):
 def get_WSA_from_ISWA(
         timestamp, datadir=None, timeout=30,
         versions=('WSA6', 'WSA5.4', 'WSA5.X'),
-        max_age=datetime.timedelta(days=1),
+        max_age=datetime.timedelta(days=2),
         base_url='https://iswa.ccmc.gsfc.nasa.gov/iswa_data_tree/model/solar'):
     """
     Download the newest available GONG_Z WSA velocity map at or before a given time.
@@ -822,7 +822,7 @@ def get_WSA_from_ISWA(
     Newer WSA model versions are preferred over older versions. The archive is
     currently searched in this order: WSA6, WSA5.4, then WSA5.X. Within the
     first version containing a sufficiently recent map, the map with the latest
-    timestamp not later than ``timestamp`` is selected. Maps more than one day
+    timestamp not later than ``timestamp`` is selected. Maps more than two days
     older than the requested time are ignored.
 
     Args:
@@ -842,7 +842,8 @@ def get_WSA_from_ISWA(
         pathlib.Path: Path to the downloaded FITS file.
 
     Raises:
-        FileNotFoundError: If no supported WSA version has a map within one day
+        FileNotFoundError: If no supported WSA version has a map within
+                           ``max_age``
                            before the requested time.
         requests.RequestException: If an archive request fails.
     """
@@ -871,8 +872,9 @@ def get_WSA_from_ISWA(
             break
 
     if selected is None:
+        max_age_days = max_age.total_seconds() / datetime.timedelta(days=1).total_seconds()
         raise FileNotFoundError(
-            f'No GONG_Z WSA map is available within one day before '
+            f'No GONG_Z WSA map is available within {max_age_days:g} days before '
             f'{timestamp:%Y-%m-%d %H:%M}.')
 
     url, _ = selected
@@ -1405,7 +1407,8 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
         lon_stop: Longitude of the other edge of the longitudinal domain.
         bgrid_carr: input magnetic polarity as a function of Carrington longitude and time
         track_cmes: Bool, whether to track CMEs through the simulation.
-        solver: String, numerical solver. Valid options are 'huxt', 'hydro', and 'hydro-pcm'.
+        solver: Numerical solver. Add the '-pui' suffix to enable gradual pick-up ion deceleration
+                from 1 AU (for example, 'huxt-pui' or 'hydro-pui').
         nlon: Number of equally spaced longitudes in the full longitude grid.
               Must match the longitude dimension of the supplied boundary maps.
         dr: Radial grid spacing.
@@ -1718,17 +1721,8 @@ def get_earth_lat(dt):
 
     """
 
-    cr, cr_lon_init = datetime2surfinputs(dt)
-    # Use the SURF ephemeris data to get Earth lat over the CR
-    # ========================================================
-    dummymodel = s.SURF(v_boundary=np.ones(128)*400*(u.km/u.s), simtime=0.1*u.day, cr_num=cr,
-                           cr_lon_init=cr_lon_init, lon_out=0.0*u.deg)
-    # retrieve a bodies position at each model timestep:
-    earth = dummymodel.get_observer('earth')
-    # get average Earth lat
-    E_lat = np.nanmean(earth.lat_c)
-    
-    return E_lat
+    earth = s.Observer('earth', Time([dt]))
+    return earth.lat_c[0]
 
 
 def surf_td_input_from_WSA_runs(datadir, start_dt, stop_dt, latitude, deacc=True,

@@ -768,8 +768,11 @@ class SURF:
                         reduction).
             solver: String specifying the numerical solver to use. Options:
                      'huxt' (default): First-order HUXt advection scheme (incompressible)
+                     'huxt-pui': HUXt with gradual pick-up ion deceleration from 1 AU
                      'hydro': Second-order compressible HLLC+PLM solver
+                     'hydro-pui': Compressible HLLC+PLM with pick-up ion deceleration
                      'hydro-pcm': Compressible HLLC+PCM solver
+                     'hydro-pcm-pui': Compressible HLLC+PCM with pick-up ion deceleration
             parallel: Boolean flag to enable parallel computation across longitude slices
                       (default True). Uses joblib threading backend for parallelization. Set to
                       False for debugging or if running on a single-core system.
@@ -800,15 +803,18 @@ class SURF:
         
         # Validate and store solver choice
         validate_solver_name(solver)
-        if solver == 'hydro':
+        if solver in ('hydro', 'hydro-pui'):
             print("[OK] Compressible solver (hydro: HLLC+PLM) available")
-        elif solver == 'hydro-pcm':
+        elif solver in ('hydro-pcm', 'hydro-pcm-pui'):
             print("[OK] Compressible solver (hydro-pcm: HLLC+PCM) available")
+        if solver.endswith('-pui'):
+            print("[OK] Gradual pick-up ion deceleration enabled from 1 AU")
         
         self.solver = solver
+        self.pui = solver.endswith('-pui')
         
         # Auto-determine compressible mode based on solver choice
-        compressible = solver in ('hydro', 'hydro-pcm')
+        compressible = solver in ('hydro', 'hydro-pui', 'hydro-pcm', 'hydro-pcm-pui')
         
         # Store parallel computation flag
         self.parallel = parallel
@@ -874,7 +880,7 @@ class SURF:
             print("Warning: No V boundary conditions supplied. Using default")
             self.v_boundary = 400 * np.ones(self.nlon_full) * self.kms
             lon_boundary, dlon, nlon = longitude_grid(nlon=self.nlon_full)
-            self.v_boundary_lons = lon_boundary * u.rad
+            self.v_boundary_lons = lon_boundary
         elif not np.all(np.isnan(v_boundary)):
             # check that the implicit time step from vlong is not comparable to the SURF timestep
             assert v_boundary.size < 4600  # this equates to about 9 mins
@@ -1061,7 +1067,8 @@ class SURF:
         self.model_params = np.array([self.dtdr.value, self.alpha, self.r_accel.value,
                                       self.dt_scale.value, self.nt_out, self.nr, self.nlon,
                                       self.r[0].to('km').value,
-                                      self.rotation_period.to(u.s).value, self.gamma])
+                                      self.rotation_period.to(u.s).value, self.gamma,
+                                      int(self.pui)])
 
         # Process inputs for time dependent boundary conditions, e.g., from in-situ data
         self.input_b_ts = np.nan
@@ -1292,9 +1299,28 @@ class SURF:
         v_init_lon = None
         if hasattr(self, '_v_init') and self._v_init is not None:
             v_init_lon = self._v_init[i]
+        cme_r_init_lon = None
+        cme_v_init_lon = None
+        hcs_r_init_lon = None
+        hcs_count_init_lon = 0
+        streak_r_init_lon = None
+        if hasattr(self, '_cme_r_init') and self._cme_r_init is not None:
+            cme_r_init_lon = self._cme_r_init.get(i)
+            cme_v_init_lon = self._cme_v_init.get(i)
+        if hasattr(self, '_hcs_r_init') and self._hcs_r_init is not None:
+            hcs_r_init_lon = self._hcs_r_init.get(i)
+            hcs_count_init_lon = self._hcs_count_init.get(i, 0)
+        if hasattr(self, '_streak_r_init') and self._streak_r_init is not None:
+            streak_r_init_lon = self._streak_r_init.get(i)
+        elif self.track_streak:
+            # Keep the full streak/rotation shape even when this longitude
+            # has no new injection during the current chunk.
+            streak_r_init_lon = np.full(streak_times.shape[1:3], np.nan)
 
         # actually run the solver
-        v, cme_r_bounds, cme_v_bounds, hcs_r, streak_r, rho_out, temp_out = solve_radial(
+        (v, cme_r_bounds, cme_v_bounds, hcs_r, streak_r, rho_out, temp_out,
+         final_v, final_cme_r, final_cme_v, final_hcs_r, final_hcs_count,
+         final_streak_r) = solve_radial(
                                                                       self.input_v_ts[:, i].value,
                                                                       bslice,
                                                                       self.input_iscme_ts[:, i],
@@ -1305,9 +1331,16 @@ class SURF:
                                                                       streak_times[i, :, :, :],
                                                                       rhoinput=rhoslice,
                                                                       tempinput=tempslice,
-                                                                      v_init=v_init_lon)
-        
-        return (i, v, cme_r_bounds, cme_v_bounds, hcs_r, streak_r, rho_out, temp_out)
+                                                                      v_init=v_init_lon,
+                                                                      cme_r_init=cme_r_init_lon,
+                                                                      cme_v_init=cme_v_init_lon,
+                                                                      hcs_r_init=hcs_r_init_lon,
+                                                                      hcs_count_init=hcs_count_init_lon,
+                                                                      streak_r_init=streak_r_init_lon)
+
+        return (i, v, cme_r_bounds, cme_v_bounds, hcs_r, streak_r, rho_out,
+                temp_out, final_v, final_cme_r, final_cme_v, final_hcs_r,
+                final_hcs_count, final_streak_r)
     
     def _process_longitude_compressible(self, i, n_cme, n_hcs_max, streak_times):
         """
@@ -1335,7 +1368,10 @@ class SURF:
         num_particles = 0
         particle_injection_rate = None
         particle_release_rate = None
+        particle_initial_positions = {}
         hcs_polarities = []  # Initialize HCS polarities list
+        hcs_count = 0
+        hcs_count_initial = 0
         
         # Only set up tracking if actually needed
         if (self.track_cmes and n_cme > 0) or (self.track_b and n_hcs_max > 0) or self.track_streak:
@@ -1345,49 +1381,80 @@ class SURF:
             
             # CME particles: track leading and trailing edges
             if self.track_cmes and n_cme > 0:
+                cme_r_init_lon = None
+                if (hasattr(self, '_cme_r_init')
+                        and self._cme_r_init is not None):
+                    cme_r_init_lon = self._cme_r_init.get(i)
                 for cme_id in range(n_cme):
                     # Find times when this CME crosses this longitude
                     cme_mask = (self.input_iscme_ts[:, i] == cme_id + 1)
+                    mask_indices = np.where(cme_mask)[0]
+                    t_leading = (
+                        self.model_time[mask_indices[0]].value
+                        if mask_indices.size else self.model_time[0].value)
+                    t_trailing = (
+                        self.model_time[mask_indices[-1]].value
+                        if mask_indices.size else self.model_time[0].value)
+
+                    for bound, label in enumerate(('leading', 'trailing')):
+                        key = f'cme_{cme_id}_{label}'
+                        if (cme_r_init_lon is not None
+                                and np.isfinite(
+                                    cme_r_init_lon[cme_id, bound])):
+                            num_particles[key] = 1
+                            particle_injection_rate[key] = [
+                                self.model_time[0].value]
+                            particle_release_rate[key] = [
+                                (t_trailing if label == 'trailing'
+                                 and mask_indices.size
+                                 and cme_mask[0]
+                                 else self.model_time[0].value)]
+                            particle_initial_positions[key] = [
+                                cme_r_init_lon[cme_id, bound]]
+
                     if np.any(cme_mask):
-                        # Leading edge injected at start of CME
-                        leading_idx = np.where(cme_mask)[0][0]
-                        t_leading = self.model_time[leading_idx].value
-                        
-                        # Trailing edge injected at end of CME
-                        trailing_idx = np.where(cme_mask)[0][-1]
-                        t_trailing = self.model_time[trailing_idx].value
-                        
-                        num_particles[f'cme_{cme_id}_leading'] = 1
-                        num_particles[f'cme_{cme_id}_trailing'] = 1
-                        
-                        particle_injection_rate[f'cme_{cme_id}_leading'] = [t_leading]
-                        particle_release_rate[f'cme_{cme_id}_leading'] = [t_leading]
-                        
-                        # Fix for CME inner boundary: inject trailing edge at START of CME
-                        # but hold it at the boundary until the END of the CME (release time)
-                        particle_injection_rate[f'cme_{cme_id}_trailing'] = [t_leading]
-                        particle_release_rate[f'cme_{cme_id}_trailing'] = [t_trailing]
+                        leading_key = f'cme_{cme_id}_leading'
+                        trailing_key = f'cme_{cme_id}_trailing'
+                        if leading_key not in num_particles:
+                            num_particles[leading_key] = 1
+                            particle_injection_rate[leading_key] = [t_leading]
+                            particle_release_rate[leading_key] = [t_leading]
+                        if trailing_key not in num_particles:
+                            num_particles[trailing_key] = 1
+                            particle_injection_rate[trailing_key] = [t_leading]
+                            particle_release_rate[trailing_key] = [t_trailing]
             
             # HCS particles: inject at each polarity change
             # Also track the polarity direction for each crossing
             if self.track_b and n_hcs_max > 0:
-                hcs_times = []
+                hcs_r_init_lon = None
+                hcs_count = 0
+                if (hasattr(self, '_hcs_r_init')
+                        and self._hcs_r_init is not None):
+                    hcs_r_init_lon = self._hcs_r_init.get(i)
+                    hcs_count = self._hcs_count_init.get(i, 0)
+                    hcs_count_initial = hcs_count
+                    for ihcs in range(hcs_count):
+                        if np.isfinite(hcs_r_init_lon[ihcs, 0]):
+                            key = f'hcs_{ihcs}'
+                            num_particles[key] = 1
+                            particle_injection_rate[key] = [
+                                self.model_time[0].value]
+                            particle_initial_positions[key] = [
+                                hcs_r_init_lon[ihcs, 0]]
+                        hcs_polarities.append(
+                            hcs_r_init_lon[ihcs, 1])
                 b_input = self.input_b_ts[:, i]
                 for t in range(1, len(b_input)):
                     diff = b_input[t] - b_input[t-1]
-                    if diff != 0:  # Polarity change
+                    if diff != 0 and hcs_count < n_hcs_max:
                         t_hcs = self.model_time[t].value
-                        # Track HCS crossings including during spin-up period
-                        hcs_times.append(t_hcs)
-                        # Store polarity direction: +1 if B increases, -1 if B decreases
-                        if diff > 0:
-                            hcs_polarities.append(1.0)
-                        else:
-                            hcs_polarities.append(-1.0)
-                
-                if len(hcs_times) > 0:
-                    num_particles['hcs'] = len(hcs_times)
-                    particle_injection_rate['hcs'] = hcs_times
+                        key = f'hcs_{hcs_count}'
+                        num_particles[key] = 1
+                        particle_injection_rate[key] = [t_hcs]
+                        hcs_polarities.append(
+                            1.0 if diff > 0 else -1.0)
+                        hcs_count += 1
             
             # Streakline particles: inject according to streak_times
             if self.track_streak:
@@ -1396,12 +1463,25 @@ class SURF:
                 streak_data = streak_times[i, :, :, 0]  # Get time indices for this longitude
                 n_streaks = streak_data.shape[0]
                 n_rots = streak_data.shape[1]
-                
+                streak_r_init_lon = None
+                if (hasattr(self, '_streak_r_init')
+                        and self._streak_r_init is not None):
+                    streak_r_init_lon = self._streak_r_init.get(i)
+
                 for istreak in range(n_streaks):
                     for irot in range(n_rots):
+                        streak_name = f'streak_{istreak}_rot_{irot}'
+                        if (streak_r_init_lon is not None
+                                and np.isfinite(
+                                    streak_r_init_lon[istreak, irot])):
+                            num_particles[streak_name] = 1
+                            particle_injection_rate[streak_name] = [
+                                self.model_time[0].value]
+                            particle_initial_positions[streak_name] = [
+                                streak_r_init_lon[istreak, irot]]
+                            continue
                         time_idx = streak_data[istreak, irot]
                         if not np.isnan(time_idx):
-                            streak_name = f'streak_{istreak}_rot_{irot}'
                             t_inject = self.model_time[int(time_idx)]
                             t_inject = t_inject.value
                             num_particles[streak_name] = 1
@@ -1439,20 +1519,25 @@ class SURF:
             nt_out=self.nt_out,
             nr=self.nr,
             riemann=_compressible_method_from_solver(self.solver),
+            pui=self.pui,
             verbose=False,  # Suppress detailed solver output in parallel mode
             num_particles=num_particles,
             particle_injection_rate=particle_injection_rate,
             particle_release_rate=particle_release_rate,
+            particle_initial_positions=particle_initial_positions,
             v_init_kms=v_init_lon,
             rho_init_kgm3=rho_init_lon,
             T_init_K=T_init_lon
         )
         
         # Extract particle positions at output times
-        # Compressible solver doesn't track velocity, fill with NaN
+        # Particle positions and velocities are populated from trajectories.
         cme_particles_r_out = np.full((n_cme, self.nt_out, 2), np.nan)
         cme_particles_v_out = np.full((n_cme, self.nt_out, 2), np.nan)
         hcs_particles_r_out = np.full((n_hcs_max, self.nt_out, 2), np.nan)
+        final_hcs_count = hcs_count_initial
+        for ihcs, polarity in enumerate(hcs_polarities[:n_hcs_max]):
+            hcs_particles_r_out[ihcs, :, 1] = polarity
         
         # Initialize streakline array
         if self.track_streak:
@@ -1483,9 +1568,13 @@ class SURF:
                         if np.any(valid_mask):
                             r_valid = r_traj[valid_mask]
                             t_valid = t_traj[valid_mask]
-                            r_out = np.interp(time_out_sec, t_valid, r_valid, 
+                            r_out = np.interp(time_out_sec, t_valid, r_valid,
                                              left=np.nan, right=np.nan)
                             cme_particles_r_out[cme_id, :, 0] = r_out
+                            v_traj = groups[leading_key]['v'][valid_mask]
+                            cme_particles_v_out[cme_id, :, 0] = np.interp(
+                                time_out_sec, t_valid, v_traj,
+                                left=np.nan, right=np.nan)
                     
                     if trailing_key in groups:
                         # Compressible solver returns 1D trajectory arrays
@@ -1498,6 +1587,10 @@ class SURF:
                             r_out = np.interp(time_out_sec, t_valid, r_valid,
                                              left=np.nan, right=np.nan)
                             cme_particles_r_out[cme_id, :, 1] = r_out
+                            v_traj = groups[trailing_key]['v'][valid_mask]
+                            cme_particles_v_out[cme_id, :, 1] = np.interp(
+                                time_out_sec, t_valid, v_traj,
+                                left=np.nan, right=np.nan)
             
             # Process HCS particles
             if self.track_b:
@@ -1535,6 +1628,11 @@ class SURF:
                     for ihcs in range(n_hcs_max):
                         hcs_key = f'hcs_{ihcs}'
                         if hcs_key in groups:
+                            # Preserve the monotonically increasing crossing
+                            # index even if this particle left the grid before
+                            # the next saved output. Otherwise a later chunk
+                            # can reuse the slot with the wrong polarity.
+                            final_hcs_count = max(final_hcs_count, ihcs + 1)
                             # Compressible solver returns 1D trajectory arrays
                             r_traj = groups[hcs_key]['r']
                             t_traj = groups[hcs_key]['t']
@@ -1571,8 +1669,20 @@ class SURF:
                                 streak_particles_r_out[:, istreak, irot] = r_out
         
         # Return tuple consistent with builtin solver format
-        return (i, v_out_kms, cme_particles_r_out, cme_particles_v_out, 
-                hcs_particles_r_out, streak_particles_r_out, rho_out_kgm3, temp_out_K)
+        final_v = v_out_kms[-1].copy()
+        final_cme_r = cme_particles_r_out[:, -1, :].copy()
+        final_cme_v = cme_particles_v_out[:, -1, :].copy()
+        final_hcs_r = (
+            hcs_particles_r_out[:, -1, :].copy()
+            if self.track_b else None)
+        final_streak_r = (
+            streak_particles_r_out[-1].copy()
+            if self.track_streak else None)
+        return (i, v_out_kms, cme_particles_r_out, cme_particles_v_out,
+                hcs_particles_r_out, streak_particles_r_out, rho_out_kgm3,
+                temp_out_K, final_v, final_cme_r, final_cme_v, final_hcs_r,
+                final_hcs_count,
+                final_streak_r)
     
     def set_gamma(self, new_gamma):
         """
@@ -1626,7 +1736,23 @@ class SURF:
             rho = self.rho_grid[-1, :, :].value.copy()
             temp = self.temp_grid[-1, :, :].value.copy()
 
-        return {'v': v, 'rho': rho, 'temp': temp}
+        state = {'v': v, 'rho': rho, 'temp': temp}
+        if hasattr(self, 'cme_particles_r') and self.cme_particles_r.shape[1]:
+            state['cme_r'] = self.cme_particles_r[:, -1, :, :].value.copy()
+            state['cme_v'] = self.cme_particles_v[:, -1, :, :].value.copy()
+        if self.track_b and getattr(self, '_final_hcs_r_state', None):
+            state['hcs_r'] = np.stack(
+                [self._final_hcs_r_state[i] for i in range(self.nlon)],
+                axis=-1)
+            state['hcs_count'] = np.array(
+                [self._final_hcs_count_state[i] for i in range(self.nlon)],
+                dtype=np.int64)
+        if (hasattr(self, '_final_streak_r_state')
+                and self._final_streak_r_state):
+            state['streak_r'] = np.stack(
+                [self._final_streak_r_state[i] for i in range(self.nlon)],
+                axis=-1)
+        return state
 
     def set_initial_state(self, state):
         """
@@ -1659,6 +1785,26 @@ class SURF:
         # Store rho/temp init for compressible solver restart
         self._rho_init = None
         self._temp_init = None
+        self._cme_r_init = None
+        self._cme_v_init = None
+        self._hcs_r_init = None
+        self._hcs_count_init = None
+        self._streak_r_init = None
+        if state.get('cme_r') is not None:
+            self._cme_r_init = {
+                i: state['cme_r'][:, :, i].copy() for i in range(self.nlon)}
+            self._cme_v_init = {
+                i: state['cme_v'][:, :, i].copy() for i in range(self.nlon)}
+        if state.get('hcs_r') is not None:
+            self._hcs_r_init = {
+                i: state['hcs_r'][:, :, i].copy()
+                for i in range(self.nlon)}
+            self._hcs_count_init = {
+                i: int(state['hcs_count'][i]) for i in range(self.nlon)}
+        if state.get('streak_r') is not None:
+            self._streak_r_init = {
+                i: state['streak_r'][:, :, i].copy()
+                for i in range(self.nlon)}
         if self.compressible and state.get('rho') is not None and state.get('temp') is not None:
             rho = state['rho']
             temp = state['temp']
@@ -1696,7 +1842,8 @@ class SURF:
         self.model_params = np.array([self.dtdr.value, self.alpha, self.r_accel.value,
                                       self.dt_scale.value, self.nt_out, self.nr, self.nlon,
                                       self.r[0].to('km').value,
-                                      self.rotation_period.to(u.s).value, self.gamma])
+                                      self.rotation_period.to(u.s).value, self.gamma,
+                                      int(self.pui)])
 
         # ======================================================================
         # Generate ambient solar wind time series
@@ -1785,7 +1932,12 @@ class SURF:
         if self.input_iscme_ts_flag:
             # CME input has been parsed as input - set up some dummy coneCME's
             # to hold the CME tracking data
-            n_cme = np.nanmax(self.input_iscme_ts)
+            n_cme = int(np.nanmax(self.input_iscme_ts))
+            if hasattr(self, '_chunk_n_cme'):
+                n_cme = max(n_cme, self._chunk_n_cme)
+            if hasattr(self, '_cme_r_init') and self._cme_r_init:
+                n_cme = max(
+                    n_cme, next(iter(self._cme_r_init.values())).shape[0])
             # Create dummy CME list to sort the boundaries
             self.cmes = []
             for n in range(0, n_cme):
@@ -1833,10 +1985,12 @@ class SURF:
                         self.input_v_ts[:, i] = v * (u.km / u.s)
                     self.input_iscme_ts[:, i] = isincme
 
-        # Set up the CME test particle position field
-        self.cme_particles_r = np.full((n_cme, self.nt_out, 2, self.nlon),
+        # Boundary CMEs still affect the solution when tracking is disabled,
+        # but no tracer storage or tracer integration is then required.
+        n_cme_tracers = n_cme if self.track_cmes else 0
+        self.cme_particles_r = np.full((n_cme_tracers, self.nt_out, 2, self.nlon),
                                        np.nan) * u.dimensionless_unscaled
-        self.cme_particles_v = np.full((n_cme, self.nt_out, 2, self.nlon),
+        self.cme_particles_v = np.full((n_cme_tracers, self.nt_out, 2, self.nlon),
                                        np.nan) * u.dimensionless_unscaled
 
         # ======================================================================    
@@ -1855,6 +2009,8 @@ class SURF:
 
             # create variables to store the HCS positions
             n_hcs_max = int(max(n_hcs)) + 1
+            if hasattr(self, '_chunk_n_hcs_max'):
+                n_hcs_max = self._chunk_n_hcs_max
             self.hcs_particles_r = np.full((n_hcs_max, self.nt_out, 2, self.nlon),
                                            np.nan) * u.dimensionless_unscaled
 
@@ -1865,40 +2021,103 @@ class SURF:
             self.track_streak = True
             self.streak_lon_r0 = np.ones((len(self.time_out), len(streak_carr)))
 
-            # compute the number of intersections with each longitude
-            time_from_start = self.model_time - self.model_time[0]
-            nrot = int(np.ceil(time_from_start[-1] / self.rotation_period) + 1)
-
+            # Chunked runs use the full-run clock here.  This keeps rotation
+            # slots stable between chunks and prevents every chunk from
+            # reinjecting the first-rotation particles.
+            chunk_offset = getattr(
+                self, '_streak_chunk_offset', 0.0 * u.s)
+            full_streak_duration = getattr(
+                self, '_streak_full_duration',
+                self.model_time[-1] - self.model_time[0])
+            streak_buffertime = getattr(
+                self, '_streak_full_buffertime', self.buffertime)
+            absolute_model_time = self.model_time + chunk_offset
+            nrot = getattr(
+                self, '_streak_nrot',
+                int(np.ceil((full_streak_duration + self.buffertime)
+                            / self.rotation_period) + 1))
             streak_times = np.ones((self.nlon, len(streak_carr), nrot, 2)) * np.nan
-            # work out the source longitude at start of spin up 
+            full_injection_times = getattr(
+                self, '_streak_injection_times', None)
+            # work out the source longitude at start of spin up
             for istreak, carr in enumerate(streak_carr):
 
                 # convert from Carrington longitude to model lon at t=0
                 lon_src = zerototwopi((carr - self.cr_lon_init)) * u.rad
 
-                # adjust the source longitude for the spin-up time
-                dl_spinup = 2 * np.pi * self.buffertime.to(u.s) / self.rotation_period
-                lon_0 = zerototwopi(lon_src.to(u.rad).value - dl_spinup)
-
-                # compute the model longitude of the streak line footpoint with time
-                streak_lon_t = (lon_0 + time_from_start * 2 * np.pi / self.rotation_period) * u.rad
+                # Use the full-run spin-up origin and absolute run clock.
+                # This preserves the ordinary solve() rotation numbering.
+                dl_spinup = (2 * np.pi * streak_buffertime.to(u.s)
+                             / self.rotation_period)
+                lon_0 = zerototwopi(
+                    lon_src.to(u.rad).value - dl_spinup)
+                time_from_start = absolute_model_time + streak_buffertime
+                streak_lon_t = (
+                    lon_0
+                    + time_from_start * 2 * np.pi / self.rotation_period
+                ) * u.rad
 
                 # save the streakline footpoint longitude on the model time step
-                self.streak_lon_r0[:, istreak] = np.interp(self.time_out, self.model_time,
-                                                           streak_lon_t, period=2 * np.pi)
+                # Interpolate on the (non-periodic) time axis, then wrap the
+                # angular result. Passing ``period=2*pi`` to np.interp wraps
+                # the x coordinates, which are seconds, and corrupts chunked
+                # streakline footpoints.
+                streak_lon_unwrapped = np.unwrap(streak_lon_t.to_value(u.rad))
+                self.streak_lon_r0[:, istreak] = zerototwopi(np.interp(
+                    self.time_out.to_value(self.model_time.unit),
+                    self.model_time.to_value(self.model_time.unit),
+                    streak_lon_unwrapped))
 
                 # Handle both scalar and array longitude cases
                 lon_array = [self.lon] if self.lon.size == 1 else self.lon
                 for ilon, lon in enumerate(lon_array):
                     for irot in range(0, nrot):
-                        # find the time index of the streakline at the given lon
-                        id_in = np.argmin(abs(streak_lon_t -
-                                              (lon - self.dlon / 2 + 2 * np.pi * irot * u.rad)))
+                        if full_injection_times is not None:
+                            injection_time_value = full_injection_times[
+                                ilon, istreak, irot]
+                            if np.isnan(injection_time_value):
+                                continue
+                            injection_time = (
+                                injection_time_value * self.dt.unit)
+                            id_in = np.argmin(
+                                abs(absolute_model_time - injection_time))
+                            if (id_in > 0
+                                    and id_in < len(absolute_model_time) - 1
+                                    and abs(absolute_model_time[id_in]
+                                            - injection_time) <= self.dt / 2):
+                                streak_times[
+                                    ilon, istreak, irot, 0] = id_in
+                            continue
+
+                        target_in = (
+                            lon - self.dlon / 2
+                            + 2 * np.pi * irot * u.rad)
+                        # Quantise the crossing on the full run's model-time
+                        # grid, then locate that absolute instant in this
+                        # chunk.  A truncated chunk endpoint must not change
+                        # which model step owns the injection.
+                        crossing_time = (
+                            (target_in.to(u.rad).value - lon_0)
+                            * self.rotation_period / (2 * np.pi)
+                            - streak_buffertime)
+                        full_step = np.rint(
+                            ((crossing_time + streak_buffertime) / self.dt)
+                            .decompose().value)
+                        injection_time = (
+                            -streak_buffertime + full_step * self.dt)
+                        id_in = np.argmin(
+                            abs(absolute_model_time - injection_time))
                         id_out = np.argmin(abs(streak_lon_t -
                                                (lon + self.dlon / 2 + 2 * np.pi * irot * u.rad)))
 
-                        # if id_out ==0, then the streakline hasn't made it to that lon
-                        if id_in > 0 and id_in < len(time_from_start) - 1:
+                        # argmin selects an endpoint when this full-run step
+                        # lies outside the current chunk; reject that alias.
+                        is_local_crossing = (
+                            abs(absolute_model_time[id_in] - injection_time)
+                            <= self.dt / 2)
+                        if (id_in > 0
+                                and id_in < len(absolute_model_time) - 1
+                                and is_local_crossing):
                             streak_times[ilon, istreak, irot, 0] = id_in
                             streak_times[ilon, istreak, irot, 1] = id_out
 
@@ -1934,15 +2153,24 @@ class SURF:
         # This section handles all solvers using unified process_longitude
 
         if True:  # Always execute
+            self._final_v_state = {}
+            self._final_cme_r_state = {}
+            self._final_cme_v_state = {}
+            self._final_hcs_r_state = {}
+            self._final_hcs_count_state = {}
+            self._final_streak_r_state = {}
             if self.parallel:
                 # Parallel execution using joblib
                 results = Parallel(n_jobs=-1, backend='threading')(
-                    delayed(self.process_longitude)(i, n_cme, n_hcs_max, streak_times) 
+                    delayed(self.process_longitude)(i, n_cme_tracers, n_hcs_max, streak_times) 
                     for i in range(self.lon.size)
                 )
                 
                 # Unpack results into grids
-                for i, v, cme_r_bounds, cme_v_bounds, hcs_r, streak_r, rho_out, temp_out in results:
+                for (i, v, cme_r_bounds, cme_v_bounds, hcs_r, streak_r,
+                     rho_out, temp_out, final_v, final_cme_r,
+                     final_cme_v, final_hcs_r, final_hcs_count,
+                     final_streak_r) in results:
                     self.v_grid[:, :, i] = v * self.kms
                     self.cme_particles_r[:, :, :, i] = cme_r_bounds * u.dimensionless_unscaled
                     self.cme_particles_v[:, :, :, i] = cme_v_bounds * u.dimensionless_unscaled
@@ -1955,11 +2183,21 @@ class SURF:
                     if self.compressible:
                         self.rho_grid[:, :, i] = rho_out * (u.kg / u.m ** 3)
                         self.temp_grid[:, :, i] = temp_out * u.K
+                    self._final_v_state[i] = final_v
+                    self._final_cme_r_state[i] = final_cme_r
+                    self._final_cme_v_state[i] = final_cme_v
+                    if self.track_b and final_hcs_r is not None:
+                        self._final_hcs_r_state[i] = final_hcs_r
+                        self._final_hcs_count_state[i] = final_hcs_count
+                    if self.track_streak and final_streak_r is not None:
+                        self._final_streak_r_state[i] = final_streak_r
             else:
                 # Serial execution (original loop)
                 for i in range(self.lon.size):
-                    i, v, cme_r_bounds, cme_v_bounds, hcs_r, streak_r, rho_out, temp_out = (
-                        self.process_longitude(i, n_cme, n_hcs_max, streak_times))
+                    (i, v, cme_r_bounds, cme_v_bounds, hcs_r, streak_r,
+                     rho_out, temp_out, final_v, final_cme_r, final_cme_v,
+                     final_hcs_r, final_hcs_count, final_streak_r) = (
+                        self.process_longitude(i, n_cme_tracers, n_hcs_max, streak_times))
                     
                     # Save the output at each longitude
                     self.v_grid[:, :, i] = v * self.kms
@@ -1974,6 +2212,14 @@ class SURF:
                     if self.compressible:
                         self.rho_grid[:, :, i] = rho_out * (u.kg / u.m ** 3)
                         self.temp_grid[:, :, i] = temp_out * u.K
+                    self._final_v_state[i] = final_v
+                    self._final_cme_r_state[i] = final_cme_r
+                    self._final_cme_v_state[i] = final_cme_v
+                    if self.track_b and final_hcs_r is not None:
+                        self._final_hcs_r_state[i] = final_hcs_r
+                        self._final_hcs_count_state[i] = final_hcs_count
+                    if self.track_streak and final_streak_r is not None:
+                        self._final_streak_r_state[i] = final_streak_r
 
         # Update CMEs positions by tracking through the solution.
         if self.track_cmes:
@@ -2013,6 +2259,8 @@ class SURF:
         self._v_init = None
         self._rho_init = None
         self._temp_init = None
+        self._cme_r_init = None
+        self._cme_v_init = None
         return
 
     def save(self, tag=''):
@@ -2315,7 +2563,8 @@ def surf_constants():
     T_sw_1au = 1e5 * u.K  # Typical solar wind temperature at 1 AU (~100,000 K)
     n_sw_21p5 = 600 * (u.cm ** -3)  # Reference ambient proton density at 21.5 Rs
     T_sw_21p5 = 1e6 * u.K  # Reference ambient temperature at 21.5 Rs
-    valid_solvers = ("huxt", "hydro", "hydro-pcm")
+    valid_solvers = ("huxt", "huxt-pui", "hydro", "hydro-pui",
+                     "hydro-pcm", "hydro-pcm-pui")
     
     boltzmann_constant = 1.380649e-23  # J/K
     proton_mass = 1.67262192e-27  # kg
@@ -2400,10 +2649,8 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
             last_chunk_len, model.dt_scale, dr=model.dr, v_max=model.v_max)
         if tg_last['nt_out'] == 0:
             n_chunks -= 1
-    # Add 1 for a dedicated spin-up chunk (simtime=0, buffer only)
-    n_chunks += 1
     if verbose:
-        print(f"solve_chunked: 1 spin-up + {n_chunks - 1} data chunk(s) "
+        print(f"solve_chunked: {n_chunks} data chunk(s); first includes spin-up "
               f"of up to {chunk_simtime.to(u.day):.1f} "
               f"(total {total_simtime.to(u.day):.1f})")
 
@@ -2413,6 +2660,7 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
     # calling ts_from_vlong once for the full duration.
     # ------------------------------------------------------------------
     full_buffertime = model.buffertime
+    full_input_iscme_ts_flag = model.input_iscme_ts_flag
     if not model.input_v_ts_flag:
         model.ts_from_vlong()
         model.input_v_ts_flag = True
@@ -2421,6 +2669,48 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
             model.input_iscme_ts = np.zeros(
                 (model.model_time.size, model.nlon), dtype='int')
 
+    full_cmes = None
+    if cme_list and not model.input_iscme_ts_flag:
+        checked_cmes = [copy.deepcopy(cme) for cme in cme_list
+                        if isinstance(cme, ConeCME) and cme.t_launch >= 0*u.s]
+        for cme in checked_cmes:
+            if model.frame == 'sidereal':
+                earthpos = model.get_observer('EARTH')
+                dt_t0 = (earthpos.time - model.time_init).to(u.s)
+                dlon_t0 = earthpos.lon_hae - earthpos.lon_hae[0]
+                cme_hae = np.interp(
+                    cme.t_launch.to(u.s).value, dt_t0.value, dlon_t0)
+                cme.longitude_surf = zerototwopi(
+                    cme.longitude + cme_hae) * u.rad
+            else:
+                cme.longitude_surf = cme.longitude
+        cme_params = np.array([cme.parameter_array(model) for cme in checked_cmes])
+        order = np.argsort(cme_params[:, 0])
+        cme_params = cme_params[order]
+        full_cmes = [checked_cmes[i] for i in order]
+        model._chunk_n_cme = len(full_cmes)
+        model.input_iscme_ts = np.zeros(
+            (model.model_time.size, model.nlon), dtype='int')
+        for i in range(model.lon.size):
+            lon_out = model.lon.value if model.lon.size == 1 else model.lon[i].value
+            if model.compressible:
+                v, isincme, rho, temp = add_cmes_to_input_series(
+                    model.input_v_ts[:, i].value, model.model_time, lon_out,
+                    model.r[0].to('km').value, cme_params, model.latitude.value,
+                    rhoinput=model.input_rho_ts[:, i].value,
+                    tempinput=model.input_temp_ts[:, i].value, compressible=True)
+                model.input_rho_ts[:, i] = rho * (u.kg/u.m**3)
+                model.input_temp_ts[:, i] = temp * u.K
+            else:
+                v, isincme, _, _ = add_cmes_to_input_series(
+                    model.input_v_ts[:, i].value, model.model_time, lon_out,
+                    model.r[0].to('km').value, cme_params, model.latitude.value,
+                    rhoinput=None, tempinput=None, compressible=False)
+            model.input_v_ts[:, i] = v * model.kms
+            model.input_iscme_ts[:, i] = isincme
+        model.input_iscme_ts_flag = True
+
+    full_input_iscme_ts_flag = model.input_iscme_ts_flag
     # Snapshot the full-run input time series (these will be sliced per chunk)
     full_simtime = model.simtime
     full_nt_out = model.nt_out
@@ -2431,7 +2721,8 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
     full_model_time = model.model_time.copy()
     full_input_b_ts = model.input_b_ts.copy() if model.track_b else None
     full_input_iscme_ts = (model.input_iscme_ts.copy()
-                           if not np.all(np.isnan(model.input_iscme_ts))
+                           if full_input_iscme_ts_flag
+                           and not np.all(np.isnan(model.input_iscme_ts))
                            else None)
     if model.compressible:
         full_input_rho_ts = model.input_rho_ts.copy()
@@ -2442,75 +2733,92 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
     rho_chunks = []
     temp_chunks = []
     b_chunks = []
+    cme_r_chunks = []
+    cme_v_chunks = []
+    hcs_chunks = []
+    streak_chunks = []
+    streak_lon_chunks = []
     time_out_chunks = []
+
+    if isinstance(streak_carr, u.Quantity) and streak_carr.size > 0:
+        model._streak_full_duration = full_simtime
+        model._streak_full_buffertime = full_buffertime
+        model._streak_nrot = int(np.ceil(
+            (full_simtime + full_buffertime) / model.rotation_period) + 1)
+        # Build the injection schedule once on the original, uninterrupted
+        # model-time grid.  Chunks consume this schedule; they must never
+        # independently round a crossing to a local endpoint.
+        n_streak = len(streak_carr)
+        n_rot = model._streak_nrot
+        injection_times = np.full(
+            (model.nlon, n_streak, n_rot), np.nan)
+        time_from_start = full_model_time - full_model_time[0]
+        lon_array = [model.lon] if model.lon.size == 1 else model.lon
+        for istreak, carr in enumerate(streak_carr):
+            lon_src = zerototwopi(
+                (carr - model.cr_lon_init)) * u.rad
+            dl_spinup = (2 * np.pi * full_buffertime.to(u.s)
+                         / model.rotation_period)
+            lon_0 = zerototwopi(
+                lon_src.to(u.rad).value - dl_spinup)
+            streak_lon_full = (
+                lon_0
+                + time_from_start * 2 * np.pi / model.rotation_period
+            ) * u.rad
+            for ilon, lon in enumerate(lon_array):
+                for irot in range(n_rot):
+                    target = (
+                        lon - model.dlon / 2
+                        + 2 * np.pi * irot * u.rad)
+                    id_in = np.argmin(abs(streak_lon_full - target))
+                    if 0 < id_in < len(full_model_time) - 1:
+                        injection_times[ilon, istreak, irot] = (
+                            full_model_time[id_in].to(model.dt.unit).value)
+        model._streak_injection_times = injection_times
+    if model.track_b and full_input_b_ts is not None:
+        full_b_polarity = np.sign(full_input_b_ts)
+        full_hcs_counts = np.sum(
+            np.abs(np.diff(full_b_polarity, axis=0)) > 0.01, axis=0)
+        model._chunk_n_hcs_max = int(np.max(full_hcs_counts)) + 1
 
     state = None  # will hold the restart state after each chunk
     t_elapsed = 0.0 * u.s
     ideal_elapsed = 0.0 * u.s   # tracks ideal chunk boundaries for splitting
 
     for ic in range(n_chunks):
-        is_spinup = (ic == 0)
+        # The first data chunk performs the normal spin-up.  A separate
+        # zero-duration spin-up has no output frame from which to restart.
+        ideal_remaining = total_simtime - ideal_elapsed
+        this_chunk = min(chunk_simtime, ideal_remaining)
+        ideal_end = ideal_elapsed + this_chunk
 
-        if is_spinup:
-            # First chunk is spin-up only: run the buffer period with
-            # simtime=0 so no model output is produced.
-            this_chunk = 0.0 * u.s
-            ideal_end = 0.0 * u.s
-            chunk_start = 0.0 * u.s
-            model.simtime = 0.0 * u.s
-            if verbose:
-                print(f"  spin-up: buffertime = {full_buffertime.to(u.day):.2f}")
-        else:
-            ideal_remaining = total_simtime - ideal_elapsed
-            this_chunk = min(chunk_simtime, ideal_remaining)
-            ideal_end = ideal_elapsed + this_chunk
+        chunk_start = t_elapsed
+        model.simtime = (ideal_end - chunk_start).to(u.s)
 
-            if model.compressible:
-                # Compressible solver: start from last actual output time so
-                # there is no evolution gap between state capture and restart.
-                chunk_start = t_elapsed
-                model.simtime = (ideal_end - chunk_start).to(u.s)
-            else:
-                # HUXt-family solvers: iter_count-based output — ideal
-                # boundaries avoid time_out alignment issues.
-                chunk_start = ideal_elapsed
-                model.simtime = this_chunk
-
-            if verbose:
-                print(f"  chunk {ic}/{n_chunks - 1}: "
-                      f"t = {chunk_start.to(u.day):.2f} .. "
-                      f"{ideal_end.to(u.day):.2f}")
+        if verbose:
+            print(f"  chunk {ic + 1}/{n_chunks}: "
+                  f"t = {chunk_start.to(u.day):.2f} .. "
+                  f"{ideal_end.to(u.day):.2f}")
 
         # --- Configure the model for this chunk ---
 
-        if is_spinup:
-            # Spin-up produces no output time steps
-            model.nt_out = 0
-            model.dt_out = full_dt_out
-            model.time_out = np.array([]) * model.dt.unit
-        elif model.compressible:
-            # Compressible solver: slice the full run's output time grid so
-            # that snapshot times match a single long solve() call exactly.
-            dt_half = 0.5 * model.dt
-            if ic == 1:
-                # First data chunk after spin-up: include t=0 output
-                mask = (full_time_out < ideal_end + dt_half)
-            else:
-                mask = ((full_time_out > chunk_start + dt_half) &
-                        (full_time_out < ideal_end + dt_half))
-            chunk_time_out_abs = full_time_out[mask]
-            chunk_time_out_rel = chunk_time_out_abs - chunk_start
-            model.nt_out = len(chunk_time_out_rel)
-            model.dt_out = full_dt_out
-            model.time_out = chunk_time_out_rel
-        else:
-            # HUXt-family: recompute from time_grid (matches solve_radial's
-            # internal iter_count-based output timing)
+        dt_half = 0.5 * model.dt
+        if ic == 0 and not model.compressible:
             tg = time_grid(
                 model.simtime, model.dt_scale, dr=model.dr, v_max=model.v_max)
             model.nt_out = tg['nt_out']
             model.dt_out = tg['dt_out']
             model.time_out = tg['time_out']
+        else:
+            if ic == 0:
+                mask = (full_time_out < ideal_end + dt_half)
+            else:
+                mask = ((full_time_out > chunk_start + dt_half) &
+                        (full_time_out < ideal_end + dt_half))
+            chunk_time_out_abs = full_time_out[mask]
+            model.nt_out = len(chunk_time_out_abs)
+            model.dt_out = full_dt_out
+            model.time_out = chunk_time_out_abs - chunk_start
 
         # Reallocate output grids for this chunk
         model.v_grid = np.zeros((model.nt_out, model.nr, model.nlon),
@@ -2537,6 +2845,8 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
             (model.simtime.to(u.s) + model.dt).value,
             model.dt.value
         ) * model.dt.unit
+        if state is not None and not model.compressible:
+            chunk_model_time = chunk_model_time + full_dt_out
         model.model_time = chunk_model_time
 
         # Slice the full input time series for this chunk
@@ -2573,6 +2883,10 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
                 )).astype('int')
             model.input_iscme_ts = chunk_input_iscme
             model.input_iscme_ts_flag = True
+        else:
+            # Cone CMEs still need to be inserted by model.solve().  Marking
+            # an empty mask as prescribed causes solve() to skip insertion.
+            model.input_iscme_ts_flag = False
 
         if model.compressible:
             chunk_input_rho = np.zeros((nt_chunk, nlon)) * (u.kg / u.m ** 3)
@@ -2588,7 +2902,10 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
             model.input_temp_ts = chunk_input_temp
 
         # --- Solve this chunk ---
-        model.solve(cme_list, streak_carr=streak_carr)
+        # Each chunk has a local time axis, so express cone launch times
+        # relative to this chunk while leaving the caller's objects unchanged.
+        model._streak_chunk_offset = chunk_start
+        model.solve([], streak_carr=streak_carr)
 
         # Collect output — offset time_out by elapsed time
         if model.nt_out > 0:
@@ -2599,20 +2916,21 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
                 temp_chunks.append(model.temp_grid.value.copy())
             if model.track_b and hasattr(model, 'b_grid'):
                 b_chunks.append(model.b_grid.copy())
+            cme_r_chunks.append(model.cme_particles_r.value.copy())
+            cme_v_chunks.append(model.cme_particles_v.value.copy())
+            if model.track_b and hasattr(model, 'hcs_particles_r'):
+                hcs_chunks.append(model.hcs_particles_r.value.copy())
+            if model.track_streak and hasattr(model, 'streak_particles_r'):
+                streak_chunks.append(model.streak_particles_r.value.copy())
+                streak_lon_chunks.append(model.streak_lon_r0.copy())
 
         # Get the final state for restarting the next chunk
         state = model.get_final_state()
 
-        if not is_spinup:
-            # Track actual elapsed time for chunk boundary placement.
-            if model.compressible and model.nt_out > 0:
-                # Compressible: next chunk must start from where the state
-                # was captured (last output time) to avoid evolution gaps.
-                t_elapsed = chunk_start + model.time_out[-1].to(u.s)
-            else:
-                # HUXt: iter_count-based output — ideal boundaries are fine.
-                t_elapsed = ideal_end
-            ideal_elapsed = ideal_end
+        # Track actual elapsed time for chunk boundary placement.
+        if model.nt_out > 0:
+            t_elapsed = chunk_start + model.time_out[-1].to(u.s)
+        ideal_elapsed = ideal_end
 
     # --- Concatenate all chunks ---
     model.simtime = full_simtime
@@ -2624,6 +2942,52 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
         model.temp_grid = np.concatenate(temp_chunks, axis=0) * u.K
     if b_chunks:
         model.b_grid = np.concatenate(b_chunks, axis=0)
+    if hcs_chunks:
+        model.hcs_particles_r = np.concatenate(
+            hcs_chunks, axis=1) * u.dimensionless_unscaled
+    if streak_chunks:
+        model.streak_particles_r = np.concatenate(
+            streak_chunks, axis=0) * u.dimensionless_unscaled
+        model.streak_lon_r0 = np.concatenate(streak_lon_chunks, axis=0)
+    if cme_r_chunks:
+        model.cme_particles_r = np.concatenate(
+            cme_r_chunks, axis=1) * u.dimensionless_unscaled
+        model.cme_particles_v = np.concatenate(
+            cme_v_chunks, axis=1) * u.dimensionless_unscaled
+        if full_cmes is not None:
+            model.cmes = full_cmes
+            if model.track_cmes:
+                for cme_num, cme in enumerate(model.cmes):
+                    cme._track_(model, cme_num)
+
+    # All time-dependent products must describe the same output timeline.
+    # Check this here, before a chunked model can be saved and later fail in
+    # analysis or animation with an unrelated-looking indexing exception.
+    timeline_lengths = {
+        'time_out': len(model.time_out),
+        'v_grid': model.v_grid.shape[0],
+        'cme_particles_r': model.cme_particles_r.shape[1],
+        'cme_particles_v': model.cme_particles_v.shape[1],
+    }
+    if model.compressible:
+        timeline_lengths['rho_grid'] = model.rho_grid.shape[0]
+        timeline_lengths['temp_grid'] = model.temp_grid.shape[0]
+    if model.track_b:
+        timeline_lengths['b_grid'] = model.b_grid.shape[0]
+        timeline_lengths['hcs_particles_r'] = model.hcs_particles_r.shape[1]
+    if model.track_streak:
+        timeline_lengths['streak_particles_r'] = model.streak_particles_r.shape[0]
+
+    inconsistent = {
+        name: length for name, length in timeline_lengths.items()
+        if length != model.nt_out
+    }
+    if inconsistent:
+        lengths = ', '.join(
+            f'{name}={length}' for name, length in timeline_lengths.items())
+        raise RuntimeError(
+            'Chunked solve produced inconsistent output timelines: '
+            f'{lengths}. The model has not been saved.')
 
     # Restore the full input time series
     model.input_v_ts = full_input_v_ts
@@ -2632,6 +2996,20 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
         model.input_b_ts = full_input_b_ts
     if full_input_iscme_ts is not None:
         model.input_iscme_ts = full_input_iscme_ts
+    model.input_iscme_ts_flag = full_input_iscme_ts_flag
+    if hasattr(model, '_chunk_n_cme'):
+        del model._chunk_n_cme
+    if hasattr(model, '_chunk_n_hcs_max'):
+        del model._chunk_n_hcs_max
+    for attr in ('_streak_chunk_offset', '_streak_full_duration',
+                 '_streak_full_buffertime',
+                 '_streak_nrot', '_streak_injection_times',
+                 '_streak_r_init',
+                 '_final_streak_r_state', '_hcs_r_init',
+                 '_hcs_count_init', '_final_hcs_r_state',
+                 '_final_hcs_count_state'):
+        if hasattr(model, attr):
+            delattr(model, attr)
     if model.compressible:
         model.input_rho_ts = full_input_rho_ts
         model.input_temp_ts = full_input_temp_ts
@@ -2649,7 +3027,9 @@ def _compressible_method_from_solver(solver_name):
     """Map public solver names to internal compressible method strings."""
     method_map = {
         'hydro': 'hllc-plm-rk2',
+        'hydro-pui': 'hllc-plm-rk2',
         'hydro-pcm': 'hllc-pcm',
+        'hydro-pcm-pui': 'hllc-pcm',
     }
     if solver_name not in method_map:
         raise ValueError(f"Solver '{solver_name}' is not a compressible solver.")
@@ -3200,7 +3580,9 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
                               r_grid, nt_out, nr, gamma=1.5, riemann='hllc-plm-rk2', verbose=False,
                               num_particles=0, particle_injection_rate=None,
                               particle_release_rate=None, solver_instance=None,
-                              v_init_kms=None, rho_init_kgm3=None, T_init_K=None):
+                              particle_initial_positions=None,
+                              v_init_kms=None, rho_init_kgm3=None, T_init_K=None,
+                              pui=False):
     """
     Solve 1D radial solar wind expansion using a compressible solver with selectable Riemann solver.
     
@@ -3286,6 +3668,11 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
     v_init_si = v_init_kms * KM_TO_M if v_init_kms is not None else None
     rho_init_si = rho_init_kgm3  # already kg/m³ if provided
     T_init_si = T_init_K  # already K if provided
+    particle_initial_positions_si = None
+    if particle_initial_positions:
+        particle_initial_positions_si = {
+            name: (np.asarray(positions) * KM_TO_M).tolist()
+            for name, positions in particle_initial_positions.items()}
     
     # Convert SURF radial grid to m
     r_grid_m = r_grid * KM_TO_M
@@ -3316,6 +3703,7 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
             gamma=gamma,
             method=method,
             cfl=0.7 if 'plm' in method else 0.8, # Lower CFL for PLM
+            pui=pui,
             verbose=verbose
         )
     else:
@@ -3330,6 +3718,8 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
         num_particles=num_particles,
         particle_injection_rate=particle_injection_rate,
         particle_release_rate=particle_release_rate,
+        particle_initial_positions=particle_initial_positions_si,
+        particle_step_times=model_time_seconds,
         v_init=v_init_si,
         rho_init=rho_init_si,
         T_init=T_init_si
@@ -3428,7 +3818,9 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
 @jit(nopython=True, nogil=True, cache=surf_constants()['numba_cache'])
 def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
                  n_cme, n_hcs_max, streak_times, rhoinput=None, tempinput=None,
-                 v_init=None):
+                 v_init=None, cme_r_init=None, cme_v_init=None,
+                 hcs_r_init=None, hcs_count_init=0,
+                 streak_r_init=None):
     """
     Solve the radial profile as a function of time (including spinup), and
     return radial profile at specified output timesteps.
@@ -3469,7 +3861,7 @@ def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
     nt_out = np.int32(params[4])
     nr = np.int32(params[5])
     r_boundary = params[7]
-    solver = 'huxt'  # This function is only called for huxt-family solvers
+    pui = bool(params[10]) if len(params) > 10 else False
     compressible = False  # huxt solver is incompressible by default
     
     # Compute the radial grid for the test particles
@@ -3493,7 +3885,7 @@ def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
 
     # Check if CMEs need to be tracked.
     do_cme = 0
-    if np.any(iscmeinput) > 0:
+    if n_cme > 0 and (np.any(iscmeinput) > 0 or cme_r_init is not None):
         do_cme = 1
 
     # Check if HCS needs to be tracked.
@@ -3501,19 +3893,22 @@ def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
 
     # see if there are any streaklines to be traced
     do_streak = False
-    if not (np.isnan(streak_times)).all():
+    if not (np.isnan(streak_times)).all() or streak_r_init is not None:
         do_streak = True
         n_streaks = len(streak_times[:, 0, 0])
         n_rots = len(streak_times[0, :, 0])
 
         streak_particles = np.ones((nt_out, n_streaks, n_rots)) * np.nan
-        r_streakparticles = np.ones((n_streaks, n_rots)) * np.nan
+        r_streakparticles = (
+            streak_r_init.copy() if streak_r_init is not None
+            else np.ones((n_streaks, n_rots)) * np.nan)
     else:
         streak_particles = np.ones((1, 1, 1)) * np.nan
 
     iter_count = 0
     t_out = 0
-    hcs_count = 0
+    hcs_count = hcs_count_init
+    hcs_count_out = hcs_count_init
 
     for t, time in enumerate(model_time):
         # Get the initial condition, which will update in the loop,
@@ -3523,9 +3918,13 @@ def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
                 v = v_init.copy()
             else:
                 v = np.ones(nr) * 400
-            r_cmeparticles = np.ones((n_cme, 2)) * np.nan
-            v_cmeparticles = np.ones((n_cme, 2)) * np.nan
-            r_hcsparticles = np.ones((n_hcs_max, 2)) * np.nan
+            r_cmeparticles = (cme_r_init.copy() if cme_r_init is not None
+                              else np.ones((n_cme, 2)) * np.nan)
+            v_cmeparticles = (cme_v_init.copy() if cme_v_init is not None
+                              else np.ones((n_cme, 2)) * np.nan)
+            r_hcsparticles = (
+                hcs_r_init.copy() if hcs_r_init is not None
+                else np.ones((n_hcs_max, 2)) * np.nan)
             
             # Initialize density and temperature arrays for compressible solver
             if compressible:
@@ -3567,13 +3966,15 @@ def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
         # see if there's an HCS crossing to be inserted at the boundary
         if t > 0:
             if binput[t] - binput[t - 1] > 0:
-                r_hcsparticles[hcs_count, 0] = r_boundary
-                r_hcsparticles[hcs_count, 1] = 1
-                hcs_count = hcs_count + 1
+                if hcs_count < n_hcs_max:
+                    r_hcsparticles[hcs_count, 0] = r_boundary
+                    r_hcsparticles[hcs_count, 1] = 1
+                    hcs_count = hcs_count + 1
             elif binput[t] - binput[t - 1] < 0:
-                r_hcsparticles[hcs_count, 0] = r_boundary
-                r_hcsparticles[hcs_count, 1] = -1
-                hcs_count = hcs_count + 1
+                if hcs_count < n_hcs_max:
+                    r_hcsparticles[hcs_count, 0] = r_boundary
+                    r_hcsparticles[hcs_count, 1] = -1
+                    hcs_count = hcs_count + 1
 
         # see if there's a new streakline to track and if so, insert at boundary
         if do_streak:
@@ -3608,20 +4009,17 @@ def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
         # Do a single model time step
         # Solver dispatch: select numerical method based on solver parameter
         
-        if solver == 'huxt':
-            # HUXt advection scheme (implemented with first-order upwind differencing)
-           
-            # Incompressible HUXt update (velocity only)
-            u_up_next = _upwind_step_(u_up, u_dn, dtdr, alpha, r_accel, rrel)
-            
-            # Save the updated time step (direct assignment, no copy needed)
-            v[1:] = u_up_next
-        
+        if pui:
+            u_up_next = _upwind_step_pui_(
+                u_up, u_dn, dtdr, alpha, r_accel, rrel, rgrid)
         else:
-            raise ValueError(f"Unknown solver: {solver}. Supported solvers: 'huxt'")
+            u_up_next = _upwind_step_(u_up, u_dn, dtdr, alpha, r_accel, rrel)
+
+        # Save the updated time step (direct assignment, no copy needed)
+        v[1:] = u_up_next
 
         # Move the CME test particles forward
-        if t > 0 and do_cme:
+        if (t > 0 or cme_r_init is not None) and do_cme:
             for n in range(0, n_cme):  # loop over each CME
                 for bound in range(0, 2):  # loop over front and rear boundaries
                     if not np.isnan(r_cmeparticles[n, bound]):
@@ -3642,7 +4040,7 @@ def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
                     r_cmeparticles[n, 1] = rgrid[-1]
 
         # Move the HCS test particles forward
-        if t > 0:
+        if t > 0 or hcs_r_init is not None:
             for n in range(0, n_hcs_max):  # loop over each HCS
 
                 if not np.isnan(r_hcsparticles[n, 0]):
@@ -3657,7 +4055,8 @@ def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
                     r_hcsparticles[n, 0] = np.nan
 
         # move the streak line particles forward
-        if t > 0 and do_streak:
+        if (t > 0 or (streak_r_init is not None
+                      and np.any(~np.isnan(streak_r_init)))) and do_streak:
             for istreak in range(0, n_streaks):
                 for irot in range(0, n_rots):
                     if not np.isnan(r_streakparticles[istreak, irot]):
@@ -3681,6 +4080,7 @@ def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
                     cme_particles_r[:, t_out, :] = r_cmeparticles.copy()
                     cme_particles_v[:, t_out, :] = v_cmeparticles.copy()
                     hcs_particles[:, t_out, :] = r_hcsparticles.copy()
+                    hcs_count_out = hcs_count
                     if do_streak:
                         streak_particles[t_out, :, :] = r_streakparticles.copy()
                     
@@ -3692,8 +4092,11 @@ def solve_radial(vinput, binput, iscmeinput, model_time, rrel, params,
                     t_out = t_out + 1
                     iter_count = 0
 
-    return (v_grid, cme_particles_r, cme_particles_v, hcs_particles, streak_particles, rho_grid,
-            temp_grid)
+    return (v_grid, cme_particles_r, cme_particles_v, hcs_particles,
+            streak_particles, rho_grid, temp_grid, v, r_cmeparticles,
+            v_cmeparticles, hcs_particles[:, -1, :].copy(), hcs_count_out,
+            (streak_particles[-1].copy()
+             if do_streak and nt_out > 0 else np.empty((0, 0))))
 
 
 @jit(nopython=True, cache=surf_constants()['numba_cache'])
@@ -3838,6 +4241,33 @@ def _upwind_step_(v_up, v_dn, dtdr, alpha, r_accel, rrel):
     # Add the residual acceleration over this grid cell
     v_up_next = v_up_next + (v_dn * dtdr * v_diff)
 
+    return v_up_next
+
+
+@jit(nopython=True)
+def _upwind_step_pui_(v_up, v_dn, dtdr, alpha, r_accel, rrel, rgrid):
+    """Advance HUXt with observation-calibrated PUI deceleration from 1 AU.
+
+    Elliott et al. (2026, ApJ 1001, 55) find a mean simulated slowdown of
+    0.27 percent per AU, reaching about 13--15 percent at 50--58.5 AU.
+    """
+    au_km = 1.496e8
+    reference_radius_km = au_km
+    slowdown_per_au = 0.0027
+
+    v_up_next = _upwind_step_(v_up, v_dn, dtdr, alpha, r_accel, rrel)
+    dt = dtdr * (rgrid[1] - rgrid[0])
+    for i in range(len(v_up_next)):
+        radius_km = rgrid[i + 1]
+        if radius_km > reference_radius_km:
+            distance_au = (radius_km - reference_radius_km) / au_km
+            trend = max(1.0 - slowdown_per_au * distance_au, 1e-6)
+            # Apply only the slowdown accumulated over the distance travelled
+            # during this timestep.  Applying a whole radial-cell ratio here
+            # over-counts the source by approximately the inverse CFL number.
+            travelled_au = abs(v_up_next[i]) * dt / au_km
+            trend_next = max(trend - slowdown_per_au * travelled_au, 1e-6)
+            v_up_next[i] *= trend_next / trend
     return v_up_next
 
 
