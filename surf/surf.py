@@ -1917,18 +1917,11 @@ class SURF:
             import time
             solve_start = time.time()
             compressible_method = _compressible_method_from_solver(self.solver)
-            
-            print("\n" + "="*70)
-            print(f"USING COMPRESSIBLE SOLVER: {self.solver.upper()}")
-            print("="*70)
-            print(f"Method: {compressible_method}")
-            print(f"Frame: {self.frame}")
-            print(f"Parallel: {self.parallel}")
+
             if self.parallel:
                 print(f"\nWARNING: Parallel execution for compressible solver is typically"
                       f" SLOWER than serial")
                 print(f"Recommended: Set parallel=False for better performance")
-            print("="*70 + "\n")
         
         # ======================================================================
         # Solve the time series at each longitude (HUXT and COMPRESSIBLE SOLVERS)
