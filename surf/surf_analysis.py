@@ -2035,7 +2035,10 @@ def plot_earth_timeseries(model, plot_omni=True, save=False, tag='', timefromrun
 
     # Only last panel gets x-label
     for i in range(len(axs) - 1):
-        axs[i].set_xticklabels([])
+        # With sharex=True, set_xticklabels([]) replaces the formatter shared
+        # by every panel and therefore also removes the bottom date labels.
+        # Hide labels only on this axes without modifying the shared formatter.
+        axs[i].tick_params(axis='x', which='both', labelbottom=False)
     if timefromrunstart == 'True':
         axs[-1].set_xlabel('Time from run start (days)')
     else:
