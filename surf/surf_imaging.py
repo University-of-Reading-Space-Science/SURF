@@ -360,24 +360,25 @@ class SyntheticImager:
         Make a 2-panel plot of the normal and difference image jmaps
         """
 
-        times = model.SURFlat[0].time_out.to(u.day).value
+        times = (model.SURFlat[0].time_init + model.SURFlat[0].time_out).datetime
         elons = self.e.to(u.deg).value
 
         cmap = plt.cm.gray.copy()
         cmap.set_bad(color='midnightblue')
 
         fig, ax = plt.subplots(1, 2, figsize=(20, 10))
-        vmin, vmax = np.nanpercentile(jmap, [1, 99])
+        vmin, vmax = np.nanpercentile(jmap, [2, 98])
         ax[0].pcolormesh(times, elons, jmap, cmap=cmap, vmin=vmin, vmax=vmax)
 
-        vmin, vmax = np.nanpercentile(djmap, [1, 99])
+        vmin, vmax = np.nanpercentile(djmap, [2, 98])
         ax[1].pcolormesh(times, elons, djmap, cmap=cmap, vmin=vmin, vmax=vmax)
 
         for a in ax:
             a.set_ylim(self.e_min.to(u.deg).value, self.e_max.to(u.deg).value)
             a.set_xlim(times[0], times[-1])
-            a.set_xlabel('Time [days]')
-            a.set_ylabel('Elongation [deg]')
+            ax.set_xlabel(f'Date in {times[0].year}')
+            ax.set_ylabel('Elongation [deg]')
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%dT%H'))
 
         fig.subplots_adjust(left=0.05, bottom=0.08, right=0.98, top=0.98, wspace=0.1)
         return fig, ax
@@ -387,23 +388,23 @@ class SyntheticImager:
         Make a 2-panel plot of the normal and difference image jmaps
         """
 
-        times = model.SURFlat[0].time_out.to(u.day).value
+        times = (model.SURFlat[0].time_init + model.SURFlat[0].time_out).datetime
         elons = self.e.to(u.deg).value
 
         cmap = plt.cm.gray.copy()
         cmap.set_bad(color='midnightblue')
 
         fig, ax = plt.subplots(figsize=(15,5))
-        vmin, vmax = np.nanpercentile(djmap, [1, 99])
+        vmin, vmax = np.nanpercentile(djmap, [2, 98])
         ax.pcolormesh(times, elons, djmap, cmap=cmap, vmin=vmin, vmax=vmax)
 
         ax.set_ylim(self.e_min.to(u.deg).value, self.e_max.to(u.deg).value)
         ax.set_xlim(times[0], times[-1])
-        ax.set_xlabel('Time [days]')
+        ax.set_xlabel(f'Date in {times[0].year}')
         ax.set_ylabel('Elongation [deg]')
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%dT%H'))
 
-        fig.subplots_adjust(left=0.05, bottom=0.08, right=0.98, top=0.98, wspace=0.1)
+        fig.subplots_adjust(left=0.08, bottom=0.12, right=0.98, top=0.98)
         return fig, ax
 
     def plot_jmap_with_cme_profiles(self, model, jmap, djmap):

@@ -401,7 +401,8 @@ def animate(model, tag, duration=10, fps=20, plotHCS=True, trace_earth_connectio
 
 
 def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimalplot=False,
-                      annotateplot=True, plot_rmax=None, plotHCS=True):
+                      annotateplot=True, plot_rmax=None, plotHCS=False,
+                      show_body_latitudes=False, bodies=None):
     """
     Make three contour plots on polar axes of the compressible solar wind solution at a specific
     time. Shows velocity, density, and temperature in separate subplots.
