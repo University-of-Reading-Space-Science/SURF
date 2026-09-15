@@ -381,6 +381,29 @@ class SyntheticImager:
         fig.subplots_adjust(left=0.05, bottom=0.08, right=0.98, top=0.98, wspace=0.1)
         return fig, ax
 
+    def plot_diff_jmap(self, model, djmap):
+        """
+        Make a 2-panel plot of the normal and difference image jmaps
+        """
+
+        times = model.SURFlat[0].time_out.to(u.day).value
+        elons = self.e.to(u.deg).value
+
+        cmap = plt.cm.gray.copy()
+        cmap.set_bad(color='midnightblue')
+
+        fig, ax = plt.subplots(figsize=(15,5))
+        vmin, vmax = np.nanpercentile(djmap, [1, 99])
+        ax.pcolormesh(times, elons, djmap, cmap=cmap, vmin=vmin, vmax=vmax)
+
+        ax.set_ylim(self.e_min.to(u.deg).value, self.e_max.to(u.deg).value)
+        ax.set_xlim(times[0], times[-1])
+        ax.set_xlabel('Time [days]')
+        ax.set_ylabel('Elongation [deg]')
+
+        fig.subplots_adjust(left=0.05, bottom=0.08, right=0.98, top=0.98, wspace=0.1)
+        return fig, ax
+
     def plot_jmap_with_cme_profiles(self, model, jmap, djmap):
         """
         Plot the plain and differenced jmaps with the automatically tracked CME profiles overlaid.
