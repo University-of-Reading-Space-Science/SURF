@@ -9,6 +9,7 @@ from astropy.coordinates import SkyCoord, spherical_to_cartesian
 from sunpy.coordinates import frames
 import astropy.units as u
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 from scipy.integrate import trapezoid
@@ -400,6 +401,7 @@ class SyntheticImager:
         ax.set_xlim(times[0], times[-1])
         ax.set_xlabel('Time [days]')
         ax.set_ylabel('Elongation [deg]')
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%dT%H'))
 
         fig.subplots_adjust(left=0.05, bottom=0.08, right=0.98, top=0.98, wspace=0.1)
         return fig, ax
