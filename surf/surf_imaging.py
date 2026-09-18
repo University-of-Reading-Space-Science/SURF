@@ -420,7 +420,7 @@ class SyntheticImager2D:
         #     for obs_no in range(self.n_obs)
         # ]
         elons = self.e.to(u.deg).value
-
+        print(f"elons={elons}")
         #jmap_plot = jmap[:, ind_req]
         #djmap_plot = djmap[:, ind_req]
 
@@ -1003,8 +1003,8 @@ class SyntheticImager3D:
 
 
     def get_model_timestep(self, model, obs_no):
-        print(f"model.__dict__ = {model.SURFlat[0].__dict__.keys()}")
-        print(f"obs_no / len(self.position.times) = {obs_no} / {len(self.position.times)}")
+        # print(f"model.__dict__ = {model.SURFlat[0].__dict__.keys()}")
+        # print(f"obs_no / len(self.position.times) = {obs_no} / {len(self.position.times)}")
         model_obs_time_diff = (model.SURFlat[0].time_out - self.position.times[obs_no])
 
         time_step = np.argmin(
@@ -1109,7 +1109,8 @@ class SyntheticImager3D:
         # Check that the model is compatible with this FoV.
         self._check_latitude_compatibility(model)
 
-        time_out = model.SURFlat[0].time_out
+        time_out = self.position.times.to(u.day).value
+        #time_out = model.SURFlat[0].time_out
         jmap = np.full((self.e.size, time_out.size), np.nan)
         
         print(f"self.n_obs = {self.n_obs}")
@@ -1139,13 +1140,13 @@ class SyntheticImager3D:
         Make a 2-panel plot of the normal and difference image jmaps
         """
 
-        #times = self.observer_times.to(u.day).value
-        #print(f"times={times}")
+        times = self.position.times.to(u.day).value # self.observer_times.to(u.day).value
+        print(f"times={times}")
         # ind_req = [
         #     self.get_model_timestep(model, obs_no)
         #     for obs_no in range(self.n_obs)
         # ]
-        times = model.SURFlat[0].time_out.to(u.day).value
+        # times = model.SURFlat[0].time_out.to(u.day).value
         elons = self.e.to(u.deg).value
 
         #jmap_plot = jmap[:, ind_req]
@@ -1205,15 +1206,17 @@ class SyntheticImager3D:
 
         #times = self.observer_times.to(u.day).value
         times = model.SURFlat[0].time_out.to(u.day).value
+        obs_times = np.array(self.position.times.to(u.day).value)# * u.day
+        #times = model.SURFlat[0].time_out.to(u.day).value
         elons = self.e.to(u.deg).value
 
         # Clip and scale the jmap. Find ridges.
         djmap = np.nan_to_num(djmap, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # If there is no structure in the djamp, all elements will be close to zero.
-        if np.allclose(djmap, 0.0):
-            print('No structure in the jmap. Returning empty list of profiles.')
-            return []
+        # This test is shit and needs fixing.
+        # if np.allclose(djmap, 0.0):
+        #    print('No structure in the jmap. Returning empty list of profiles.')
+        #    return []
 
         vmin, vmax = np.nanpercentile(np.abs(djmap), [0, 100])
         djmap_clipped = np.clip(djmap, vmin, vmax)
@@ -1230,6 +1233,8 @@ class SyntheticImager3D:
         # Base this on max/min elongation from propagating along the plane of the sky at v +/- dv
         cme_profiles = []
 
+        print(f"np.shape(obs_times) = {np.shape(obs_times)}")
+        print(f"obs_times = {obs_times}")
         for cme in model.SURFlat[0].cmes:
             # USE TRACER PARTICLES TO ISOLATE THE CME IN TIME - ELONGATION SPACE.
             flank, extent = self.compute_flank_profile(cme)
@@ -1241,10 +1246,11 @@ class SyntheticImager3D:
 
             cme_mask = np.zeros(djmap.shape, dtype=bool)
             dt_pad = (2 * u.hour).to_value(u.s)
-            for id_t, t in enumerate(times):
+            for id_t, t in enumerate(obs_times):
                 travel_time = (t - t_launch) * 86400
                 if travel_time < -dt_pad:
                     continue
+                print(f"id_t={id_t}, time={t}")
 
                 r_obs = self.position.r[id_t].to(u.m).value
                 r_nose_fast = r_min + 1.25 * cme.v.to(u.m/u.s).value * (travel_time + dt_pad)
@@ -1353,9 +1359,14 @@ class SyntheticImager3D:
                 flank.loc[i, ['lon', 'r', 'el']] = np.nan
                 continue
 
-            r_obs = self.observer_rs[i].to(u.m)
-            lon_obs = self.observer_lons[i].to(u.rad)
-            lat_obs = self.observer_lats[i].to(u.rad)
+            """
+            self.position.lon = self.position.lon.to(u.rad)
+            self.position.lat = self.position.lat.to(u.rad)
+            self.n_obs = len(self.position.times)
+            """
+            r_obs = self.position.r[i].to(u.m) # self.observer_rs[i].to(u.m)
+            lon_obs = self.position.lon[i].to(u.rad) # self.observer_lons[i].to(u.rad)
+            lat_obs = self.position.lat[i].to(u.rad) # self.observer_lats[i].to(u.rad)
             x_obs = r_obs * np.cos(lat_obs) * np.cos(lon_obs)
             y_obs = r_obs * np.cos(lat_obs) * np.sin(lon_obs)
             z_obs = r_obs * np.sin(lat_obs)
@@ -1383,12 +1394,12 @@ class SyntheticImager3D:
             # Restrict those CME points to those in FOV
             # For those ahead of Earth, this is negative y_cme_s
             # For those behind Earth, this is positive y_cme_s
-            if self.observer_lons[i] < np.pi * u.rad:
+            if self.position.lon[i].to(u.rad) < np.pi * u.rad:
                 id_sub = y_cme_s.value < 0
                 e_obs = e_obs[id_sub]
                 lon_cme = lon_cme[id_sub]
                 r_cme = r_cme[id_sub]
-            elif self.observer_lons[i] > np.pi * u.rad:
+            elif self.position.lon[i].to(u.rad) > np.pi * u.rad:
                 id_sub = y_cme_s.value > 0
                 e_obs = e_obs[id_sub]
                 lon_cme = lon_cme[id_sub]
