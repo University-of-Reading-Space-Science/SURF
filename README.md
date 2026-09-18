@@ -82,7 +82,7 @@ If you use SURF in a publication or presentation, please cite the software using
 
 To cite this project, including the scientific basis and functionality of SURF, please use: 
 
-Owens and Barnard. (2026), *Space-weather Utilities for Research and Forecasting (SURF): A tool for investigating hydrodynamic aspects of solar wind and coronal mass ejection expansion and evolution*, Solar Physics [doi](link)
+Owens and Barnard. (2026), *Space-weather Utilities for Research and Forecasting (SURF): A tool for investigating hydrodynamic aspects of solar wind and coronal mass ejection expansion and evolution*, Solar Physics [doi](https://www.researchsquare.com/article/rs-9496956/v1)
 
 Barnard and Owens. (2022), *HUXt - An open source, computationally efficient reduced-physics solar wind model, written in Python*, Frontiers in Physics [10.3389/fphy.2022.1005621](https://doi.org/10.3389/fphy.2022.1005621)
 
