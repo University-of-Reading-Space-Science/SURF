@@ -504,35 +504,20 @@ def build_generated_code(request: SimulationRequest) -> str:
                 f"    donki_cme.initial_height = {float(donki_defaults.get('initial_height_rs', state['rmin']))}*u.solRad",
             ]
         )
-        if donki_defaults.get("plasma_mode") == "Absolute values":
-            lines.extend(
-                [
-                    f"    donki_cme.cme_density = ({float(donki_defaults.get('cme_density_pcc', 100))}/u.cm**3*const.m_p).to(u.kg/u.m**3)",
-                    f"    donki_cme.cme_temperature = {float(donki_defaults.get('cme_temperature_k', 100000))}*u.K",
-                ]
-            )
-        else:
-            lines.extend(
-                [
-                    f"    donki_cme.density_fraction = {float(donki_defaults.get('density_fraction', 1))}",
-                    f"    donki_cme.temperature_fraction = {float(donki_defaults.get('temperature_fraction', 1))}",
-                ]
-            )
+        lines.extend(
+            [
+                f"    donki_cme.cme_density = ({float(donki_defaults.get('cme_density_pcc', 600))}/u.cm**3*const.m_p).to(u.kg/u.m**3)",
+                f"    donki_cme.cme_temperature = {float(donki_defaults.get('cme_temperature_k', 1000000))}*u.K",
+            ]
+        )
         lines.append("cme_list.extend(donki_cmes)")
     # "Grab at run start" replaces the editor contents with a fresh runtime query.
     literal_cmes = [] if state.get("grab_donki_at_run_start") else cmes
     for index, cme in enumerate(literal_cmes):
-        plasma = (
-            [
-                f"cme_density=({float(cme['cme_density_pcc'])}/u.cm**3*const.m_p).to(u.kg/u.m**3)",
-                f"cme_temperature={float(cme['cme_temperature_k'])}*u.K",
-            ]
-            if cme.get("plasma_mode") == "Absolute values"
-            else [
-                f"density_fraction={float(cme.get('density_fraction', 1))}",
-                f"temperature_fraction={float(cme.get('temperature_fraction', 1))}",
-            ]
-        )
+        plasma = [
+            f"cme_density=({float(cme.get('cme_density_pcc', 600))}/u.cm**3*const.m_p).to(u.kg/u.m**3)",
+            f"cme_temperature={float(cme.get('cme_temperature_k', 1000000))}*u.K",
+        ]
         args = [
             f"t_launch={float(cme['t_launch_day'])}*u.day",
             f"longitude={float(cme['longitude'])}*u.deg",

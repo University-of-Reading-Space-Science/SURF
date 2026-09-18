@@ -4,6 +4,7 @@ import os
 import copy
 import errno
 from appdirs import user_data_dir
+from astropy.constants import m_p
 import astropy.coordinates as acoords
 from astropy.time import Time, TimeDelta
 import astropy.units as u
@@ -292,10 +293,8 @@ class ConeCME:
                         21.5 solar radii.
         radius: Initial radius of the CME, in km.
         thickness: Thickness of the CME cone, in km.
-        cme_density: Mass density of the CME in kg/m³. Defaults to x0.1 the solar wind density at
-                     initial_height.
-        cme_temperature: Temperature of the CME in Kelvin. Defaults x0.1 the solar wind temperature
-                         at initial_height.
+        cme_density: Mass density of the CME in kg/m³. Defaults to 600 protons/cm³.
+        cme_temperature: Temperature of the CME in Kelvin. Defaults to 1,000,000 K.
         profile_type: Temporal profile shape ('square' or 'sinusoidal'). 
                      'square': step function from ambient to CME values
                      'sinusoidal': smooth sinusoidal pulse from ambient to CME values and back
@@ -306,8 +305,8 @@ class ConeCME:
     def __init__(self, t_launch=0.0 * u.s, longitude=0.0 * u.deg, latitude=0.0 * u.deg,
                  v=1000.0 * (u.km / u.s), width=30.0 * u.deg, thickness=0.0 * u.solRad,
                  initial_height=21.5 * u.solRad, cme_expansion=False, cme_fixed_duration=True,
-                 fixed_duration=12 * 60 * 60 * u.s, cme_density=np.nan * (u.kg / u.m ** 3),
-                 cme_temperature=np.nan * u.K, density_fraction=1, temperature_fraction=1,
+                 fixed_duration=12 * 60 * 60 * u.s, cme_density=(600 / u.cm ** 3 * m_p).to(u.kg / u.m ** 3),
+                 cme_temperature=1e6 * u.K,
                  profile_type='square', label=None):
 
         """
@@ -323,12 +322,10 @@ class ConeCME:
             cme_expansion : Whether to insert a declining speed profile at the inner boundary
             cme_fixed_duration : Whether to fix the CME duration, or do a standard cone CME
             fixed_duration : If fixed duration, the value to use
-            cme_density: CME mass density in kg/m³. Overrides density_fraction.
-            cme_temperature: CME temperature in Kelvin. Overrides temperature_fraction.
-            density_fraction: Fraction of ambient solar wind density.  Only used if cme_density
-                              is not provided.
-            temperature_fraction: Fraction of ambient solar wind temperature. Only used if
-                                  cme_temperature is not provided.
+            cme_density: CME mass density or particle number density as an Astropy quantity.
+                         Number density assumes protons and is converted to kg/m³.
+                         Defaults to 600 protons/cm³.
+            cme_temperature: CME temperature in Kelvin. Defaults to 1,000,000 K.
             profile_type: Type of temporal profile for CME perturbation. Options:
                          'square' (default): Step function from ambient to CME values
                          'sinusoidal': Smooth sinusoidal pulse from ambient to CME values and back
@@ -353,8 +350,6 @@ class ConeCME:
         self.fixed_duration = fixed_duration
         self.cme_density = cme_density   
         self.cme_temperature = cme_temperature
-        self.density_fraction = density_fraction
-        self.cme_temperature_fraction = temperature_fraction
         
         # Validate and store profile type
         if profile_type not in ['square', 'sinusoidal']:
@@ -369,6 +364,17 @@ class ConeCME:
         self.__version__ = get_version()
         return
 
+    @property
+    def cme_density(self):
+        """CME mass density in kg/m³, assuming protons for number-density inputs."""
+        return self.__dict__['cme_density']
+
+    @cme_density.setter
+    def cme_density(self, density):
+        if density.unit.is_equivalent(u.m ** -3):
+            density = density * m_p
+        self.__dict__['cme_density'] = density.to(u.kg / u.m ** 3)
+
     def parameter_array(self, model):
         """
         Returns a numpy array of CME parameters. This is used in the numba optimised solvers that
@@ -378,22 +384,6 @@ class ConeCME:
         """
         cme_density = self.cme_density
         cme_temperature = self.cme_temperature
-        if model.compressible and (np.isnan(cme_density.value) or
-                                   np.isnan(cme_temperature.value)):
-            constants = surf_constants()
-            r_ref = 21.5 * u.solRad
-            # Establish a reference velocity at 21.5 Rs, then Parker-map the
-            # prescribed ambient density and temperature to the model boundary.
-            _, n_ambient, T_ambient = map_properties_parker(
-                constants['v_sw_1au'], r_ref, model.r[0], constants['n_sw_21p5'],
-                constants['T_sw_21p5'], gamma=model.gamma)
-
-            if np.isnan(cme_density.value):
-                cme_density = (self.density_fraction * n_ambient.to(u.m ** -3) *
-                               constants['proton_mass'] * u.kg)
-            if np.isnan(cme_temperature.value):
-                cme_temperature = self.cme_temperature_fraction * T_ambient
-
         # Convert profile_type to numeric flag: 0 = square, 1 = sinusoidal
         profile_flag = 1.0 if self.profile_type == 'sinusoidal' else 0.0
         
@@ -803,13 +793,8 @@ class SURF:
         
         # Validate and store solver choice
         validate_solver_name(solver)
-        if solver in ('hydro', 'hydro-pui'):
-            print("[OK] Compressible solver (hydro: HLLC+PLM) available")
-        elif solver in ('hydro-pcm', 'hydro-pcm-pui'):
-            print("[OK] Compressible solver (hydro-pcm: HLLC+PCM) available")
-        if solver.endswith('-pui'):
+        if solver == "huxt-pui":
             print("[OK] Gradual pick-up ion deceleration enabled from 1 AU")
-        
         self.solver = solver
         self.pui = solver.endswith('-pui')
         
@@ -1520,7 +1505,7 @@ class SURF:
             nr=self.nr,
             riemann=_compressible_method_from_solver(self.solver),
             pui=self.pui,
-            verbose=False,  # Suppress detailed solver output in parallel mode
+            verbose=False,
             num_particles=num_particles,
             particle_injection_rate=particle_injection_rate,
             particle_release_rate=particle_release_rate,
@@ -2129,19 +2114,6 @@ class SURF:
         else:
             streak_times = np.ones((self.nlon, 1, 1, 1)) * np.nan
 
-        # ======================================================================
-        # Print solver information
-        # ======================================================================
-        if self.compressible:
-            import time
-            solve_start = time.time()
-            compressible_method = _compressible_method_from_solver(self.solver)
-
-            if self.parallel:
-                print(f"\nWARNING: Parallel execution for compressible solver is typically"
-                      f" SLOWER than serial")
-                print(f"Recommended: Set parallel=False for better performance")
-        
         # ======================================================================
         # Solve the time series at each longitude (HUXT and COMPRESSIBLE SOLVERS)
         # ======================================================================
@@ -3613,7 +3585,7 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
         Compressible method string, e.g. 'hllc-plm-rk2' or 'hllc-pcm'.
         Default is 'hllc-plm-rk2'.
     verbose : bool, optional
-        If True, print detailed diagnostics. Default False.
+        Retained for compatibility; the hydro solver runs without terminal output.
     num_particles : int or dict, optional
         Number of test particles to track. If 0 (default), no tracking.
         Dict with keys 'cme_leading', 'cme_trailing', 'hcs', 'streak_*' supported.
@@ -3735,9 +3707,6 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
     
     # If solver returned fewer points than expected, interpolate
     if v_out_si.shape[0] != nt_out:
-        if verbose:
-            print(f"Warning: solver returned {v_out_si.shape[0]} points,"
-                  f" expected {nt_out}, interpolating...")
         
         v_interp = np.zeros((nt_out, nr))
         rho_interp = np.zeros((nt_out, nr))

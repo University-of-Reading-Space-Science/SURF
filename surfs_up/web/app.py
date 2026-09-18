@@ -665,9 +665,8 @@ def _fetch_donki_cmes(
                 "profile_type": (
                     "sinusoidal" if str(solver).strip().lower() in {"hydro", "hydro-pui"} else "square"
                 ),
-                "plasma_mode": "Fraction of ambient",
-                "density_fraction": 1,
-                "temperature_fraction": 1,
+                "cme_density_pcc": 600.0,
+                "cme_temperature_k": 1000000.0,
                 "source": "donki",
             }
         )
@@ -1254,8 +1253,6 @@ def _request_from_form() -> SimulationRequest:
         cmes = []
     cone_file = request.files.get("cone_file")
     if cone_file and cone_file.filename:
-        import numpy as np
-
         cone_path = _save_uploaded_file(cone_file)
         model_start = datetime.datetime.fromisoformat(start.replace("T", " "))
         for cone in _parse_cone_cmes(cone_path, model_start):
@@ -1268,11 +1265,8 @@ def _request_from_form() -> SimulationRequest:
                     "cme_fixed_duration": True,
                     "fixed_duration_hr": 12,
                     "profile_type": "square",
-                    "plasma_mode": "Fraction of ambient",
-                    "density_fraction": 1,
-                    "temperature_fraction": 1,
-                    "cme_density_pcc": np.nan,
-                    "cme_temperature_k": np.nan,
+                    "cme_density_pcc": 600.0,
+                    "cme_temperature_k": 1000000.0,
                 }
             )
     simtime_days = _float("simtime_days", 10.0)
@@ -1301,11 +1295,8 @@ def _request_from_form() -> SimulationRequest:
                     "donki_profile_type",
                     "sinusoidal" if request.form.get("solver") in {"hydro", "hydro-pui"} else "square",
                 ),
-                "plasma_mode": request.form.get("donki_plasma_mode", "Fraction of ambient"),
-                "density_fraction": _float("donki_density_fraction", 1.0),
-                "temperature_fraction": _float("donki_temperature_fraction", 1.0),
-                "cme_density_pcc": _float("donki_cme_density_pcc", 100.0),
-                "cme_temperature_k": _float("donki_cme_temperature_k", 100000.0),
+                "cme_density_pcc": _float("donki_cme_density_pcc", 600.0),
+                "cme_temperature_k": _float("donki_cme_temperature_k", 1000000.0),
             },
             "streak_lines_enabled": "streak_lines_enabled" in request.form,
             "streak_spacing_deg": _float("streak_spacing_deg", 10.0),

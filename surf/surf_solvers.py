@@ -615,7 +615,7 @@ class CompressibleSolver:
     time_integration : str, optional
         'euler' (1st order, default) or 'rk2' (2nd order)
     verbose : bool, optional
-        Print progress information
+        Retained for compatibility; simulations run without terminal output
         
     Example
     -------
@@ -729,13 +729,6 @@ class CompressibleSolver:
             Results with keys 't', 'r', 'v', 'rho', 'T', 'solver_info',
             and optionally 'particles'
         """
-        import time as time_module
-        
-        if self.verbose:
-            print(f"CompressibleSolver starting:")
-            print(f"  Reconstruction: {self.reconstruction}")
-            print(f"  Time integration: {self.time_integration}")
-        
         # Initialize state: use provided profiles or power-law scaling
         if v_init is not None and rho_init is not None and T_init is not None:
             self._set_initial_conditions(rho_init, v_init, T_init)
@@ -870,7 +863,6 @@ class CompressibleSolver:
         
         # Time loop
         t_idx = 0
-        start_time = time_module.time()
         
         # Save first snapshot
         if abs(t_grid[0] - self.time) < 1e-5:
@@ -997,9 +989,6 @@ class CompressibleSolver:
                     group['active'].append(active)
                 group['particles_injected'] = n_particles_group
         
-        if self.verbose:
-            elapsed = time_module.time() - start_time
-            print(f"  Completed in {elapsed:.2f} seconds")
         
         results = {
             't': t_grid,
@@ -1070,7 +1059,7 @@ def create_solver(r_grid, gamma=1.5, method='hllc-plm', cfl=None, verbose=False,
     cfl : float, optional
         CFL number (default depends on reconstruction)
     verbose : bool, optional
-        Print progress
+        Retained for compatibility; simulations run without terminal output
         
     Returns
     -------
