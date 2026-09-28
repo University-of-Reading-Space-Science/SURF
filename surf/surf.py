@@ -295,7 +295,7 @@ class ConeCME:
         thickness: Thickness of the CME cone, in km.
         cme_density: Mass density of the CME in kg/m³. Defaults to 600 protons/cm³.
         cme_temperature: Temperature of the CME in Kelvin. Defaults to 1,000,000 K.
-        profile_type: Temporal profile shape ('square' or 'sinusoidal'). 
+        profile_type: Temporal profile shape ('square' or 'sinusoidal').
                      'square': step function from ambient to CME values
                      'sinusoidal': smooth sinusoidal pulse from ambient to CME values and back
         coords: Dictionary containing the radial and longitudinal (for SURF2D) coordinates of the of
@@ -384,7 +384,7 @@ class ConeCME:
         """
         cme_density = self.cme_density
         cme_temperature = self.cme_temperature
-        # Convert profile_type to numeric flag: 0 = square, 1 = sinusoidal
+        # Numeric profile flags for the compiled boundary injector.
         profile_flag = 1.0 if self.profile_type == 'sinusoidal' else 0.0
         
         cme_parameters = [self.t_launch.to('s').value, 
@@ -4092,7 +4092,7 @@ def add_cmes_to_input_series(vinput, model_time, lon, r_boundary, cme_params, la
     """
 
     n_cme = cme_params.shape[0]
-    v = vinput
+    v = vinput.copy()
     isincme = v * 0
     
     # Initialize density and temperature outputs (plain arrays without units)

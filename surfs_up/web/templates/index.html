@@ -912,6 +912,70 @@
   </dialog>
   <script>
     const savedOutputsKey = "surfs-up-output-history";
+    const savedProductOptionsKey = "surfs-up-product-options";
+
+    function productControlKey(form, control) {
+      if (control.id) return control.id;
+      const group = control.classList.contains("map-body") ? "map-body"
+        : control.classList.contains("movie-body") ? "movie-body" : "";
+      return group ? `${form.id}:${group}:${control.value}` : "";
+    }
+
+    function saveProductOptions() {
+      const state = {controls: {}, tabs: {}};
+      ["plots-form", "movies-form"].forEach(formId => {
+        const form = document.getElementById(formId);
+        if (!form) return;
+        form.querySelectorAll("input, select, textarea").forEach(control => {
+          const key = productControlKey(form, control);
+          if (!key || ["button", "submit", "hidden"].includes(control.type)) return;
+          state.controls[key] = control.type === "checkbox" || control.type === "radio"
+            ? control.checked : control.value;
+        });
+        const activeTab = form.querySelector("[data-inner-tab].active")?.dataset.innerTab;
+        if (activeTab) state.tabs[formId] = activeTab;
+      });
+      try {
+        sessionStorage.setItem(savedProductOptionsKey, JSON.stringify(state));
+      } catch (_) {}
+    }
+
+    function restoreProductOptions() {
+      let state;
+      try {
+        state = JSON.parse(sessionStorage.getItem(savedProductOptionsKey) || "null");
+      } catch (_) {
+        return;
+      }
+      if (!state || typeof state.controls !== "object") return;
+      ["plots-form", "movies-form"].forEach(formId => {
+        const form = document.getElementById(formId);
+        if (!form) return;
+        form.querySelectorAll("input, select, textarea").forEach(control => {
+          const key = productControlKey(form, control);
+          if (!key || !(key in state.controls)) return;
+          if (control.type === "checkbox" || control.type === "radio") {
+            control.checked = Boolean(state.controls[key]);
+          } else {
+            control.value = state.controls[key];
+          }
+        });
+        const activeTab = state.tabs?.[formId];
+        if (activeTab) {
+          form.querySelectorAll("[data-inner-tab]").forEach(button => {
+            button.classList.toggle("active", button.dataset.innerTab === activeTab);
+          });
+          form.querySelectorAll("[data-inner-panel]").forEach(panel => {
+            panel.classList.toggle("active", panel.dataset.innerPanel === activeTab);
+          });
+        }
+        form.addEventListener("input", saveProductOptions);
+        form.addEventListener("change", saveProductOptions);
+        form.addEventListener("click", event => {
+          if (event.target.closest("[data-inner-tab]")) saveProductOptions();
+        });
+      });
+    }
 
     function markOutputsTabHasNewContent() {
       const outputsTab = document.querySelector('[data-tab="outputs"]');
@@ -2666,6 +2730,17 @@
       });
     }
     streakToggle.addEventListener("change", syncModelDependentControls);
+    syncModelDependentControls();
+    restoreProductOptions();
+    syncTimeseriesLocation();
+    [
+      ["map-limit-rmax", "map-rmax"],
+      ["movie-limit-rmax", "movie-rmax"]
+    ].forEach(([toggle, field]) => {
+      const checkbox = document.getElementById(toggle);
+      const input = document.getElementById(field);
+      if (checkbox && input) input.disabled = !checkbox.checked;
+    });
     syncModelDependentControls();
     updateBodyLongitudeRange().catch(console.error);
   </script>

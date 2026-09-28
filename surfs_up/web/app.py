@@ -1350,6 +1350,11 @@ def create_app(config: dict | None = None) -> Flask:
         """Ensure every visitor receives an isolated signed session identifier."""
         _session_id()
 
+    @app.get("/healthz")
+    def healthcheck():
+        """Provide a lightweight startup probe for the local browser launcher."""
+        return "", 204
+
     @app.get("/model-coordinates")
     def model_coordinates():
         """Convert between model UTC time and Carrington coordinates."""
@@ -2125,6 +2130,23 @@ def create_app(config: dict | None = None) -> Flask:
     return app
 
 
+def _open_browser_when_ready(
+    url: str, *, attempts: int = 120, retry_delay: float = 0.1
+) -> bool:
+    """Open *url* after the local web server begins accepting requests."""
+    probe_url = f"{url.rstrip('/')}/healthz"
+    for _attempt in range(attempts):
+        try:
+            with urlopen(probe_url, timeout=0.5):
+                pass
+        except (OSError, URLError):
+            time.sleep(retry_delay)
+            continue
+        webbrowser.open(url)
+        return True
+    return False
+
+
 def main() -> None:
     """Run the development server, worker, and open the interface."""
     from surfs_up.jobs import cancel_all_unfinished_jobs, run_worker
@@ -2137,18 +2159,19 @@ def main() -> None:
         daemon=True,
         name="surfs-up-worker",
     ).start()
-    # Give Flask a moment to bind its socket before asking the default browser
-    # to load the interface. The timer is a daemon so it cannot delay shutdown.
-    browser_timer = threading.Timer(
-        1.0,
-        webbrowser.open,
+    app = create_app()
+    # App creation can take more than a second on a cold start.  Wait for an
+    # actual HTTP response so the browser's first navigation cannot race the
+    # development server binding its socket.
+    threading.Thread(
+        target=_open_browser_when_ready,
         args=("http://127.0.0.1:5000",),
-    )
-    browser_timer.daemon = True
-    browser_timer.start()
+        daemon=True,
+        name="surfs-up-browser",
+    ).start()
     # Disabling Werkzeug's process reloader prevents it from starting a second
     # worker and racing for the same filesystem queue.
-    create_app().run(debug=True, use_reloader=False)
+    app.run(debug=True, use_reloader=False)
 
 
 if __name__ == "__main__":
