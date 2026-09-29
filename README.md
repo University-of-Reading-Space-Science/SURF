@@ -1,10 +1,10 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4889326.svg)](https://doi.org/10.5281/zenodo.4889326)
-# HUXt - a computationally efficient solar wind model
+# SURF - Space Weather Utilities for Research and Forecasting
 
 
 ## Introduction
 
-This repository provides an implementation of the SURF (Space-weather Utilities for Research and Forecasting) modelling framework.
+This repository provides an implementation of the SURF modelling framework.
 
 This includes the HUXt model (Heliospheric Upwind Extrapolation with time dependence) in Python, as described by [Owens et al. (2020)](https://doi.org/10.1007/s11207-020-01605-3). This is a simple 1D reduced hydrodynamic model, which essentially solves Burgers equation using the upwind numerical scheme. For more details on the models background, refer to [Owens et al. (2020)](https://doi.org/10.1007/s11207-020-01605-3).
 
@@ -31,18 +31,15 @@ If you are developing features in SURF, it can be easier to work with an editabl
 
 ### Numba cache mode
 
-SURF disables Numba's on-disk compilation cache by default, which is useful
-while developing. To enable it for production runs, change the following line
-near the top of `surf/surf.py`:
+SURF enables Numba's on-disk compilation cache by default, as in general it makes simulations 
+faster. However, for model development work it can be useful to disable this. To disable it for 
+development work, change line 2515 of `surf/surf.py`:
 
 ```python
-NUMBA_CACHE = True
+numba_cache = True
 ```
 
-Set it back to `False` for development. The setting is read when SURF is first
-imported, so restart Python after changing it.
-
-
+Set it back to `True` for general use.
 
 Installation also provides the `surf-open-examples` and
 `surf-make-ephemeris` command-line tools.
