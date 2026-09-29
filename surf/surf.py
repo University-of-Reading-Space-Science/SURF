@@ -2401,15 +2401,15 @@ class SURF:
 class SURF3d:
     """
     A class containing a list of SURF classes, to enable mutliple latitudes to
-    be simulated, plotted, animated, etc. together
+    be simulated, plotted, animated, etc. together. Note that at present SURF3D does not allow a
+    user to specify the magnetic field, density or temperature at each latiitude. For hydro runs,
+    the density and temperature are computed from the empirical OMNI relations.
     
     Attributes inherited from SURF. Additional:
         lat: The list of latitudes of individual SURF runs, in radians from the equator
         nlat: The number of latitudes simulated
         SURFlat: List of individual SURF model classes at each latitude
         v_in: a list of Carrington longitude solar wind profiles at each simulated latitude
-        br_in: a list of Carrington longitude Br profiles at each simulated latitude
-        
     
     """
 
@@ -2427,9 +2427,6 @@ class SURF3d:
             v_map: Inner solar wind speed boundary Carrington map. Must have units of km/s.
             v_map_lat: List of latitude positions for v_map, in radians
             v_map_long: List of Carrington longitudes for v_map, in radians
-            br_map: Inner Br boundary Carrington map. Must have no units.
-            br_map_lat: List of latitude positions for br_map, in radians
-            br_map_long: List of Carrington longitudes for br_map, in radians
             latitude_max: Maximum helio latitude (from the equator) of SURF plane, in degrees
             latitude_min: Maximum helio latitude (from the equator) of SURF plane, in degrees
             cr_num: Integer Carrington rotation number. Used to determine the planetary and
