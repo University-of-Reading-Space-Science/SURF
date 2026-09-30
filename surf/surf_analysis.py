@@ -442,6 +442,9 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
         fig = fighandle
         axes = [fig.add_subplot(1, 3, i+1, projection='polar') for i in range(3)]
 
+    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.15, top=0.95,
+                        wspace=-0.3)
+
     id_t = np.argmin(np.abs(model.time_out - time))
 
     # Get plotting data
@@ -2056,12 +2059,14 @@ def plot_earth_timeseries(model, plot_omni=True, save=False, tag='', timefromrun
     return fig, axs
 
 
-def plot3d_radial_lat_slice(model3d, time, lon=np.nan * u.deg,
+def plot3d_slices(model3d, time, lon=np.nan * u.deg,
                             lat=0.0 * u.deg, save=False, tag='',
-                            fighandle=np.nan, axhandle=np.nan):
+                            fighandle=np.nan, axhandle=np.nan,
+                            show_body_latitudes=False, bodies=None,
+                            annotateplot=True):
     """
-    Make a contour plot on polar axis of a radial-latitudinal plane of the solar wind solution at
-    a fixed time and longitude.
+    Make a contour plot on a polar axis of both a constant longitude plane and a constant latitude
+    plane.
     Args:
         model3d: An instance of the SURF3d class with a completed solution.
         time: Time for which to find the closest model output.
@@ -2069,7 +2074,10 @@ def plot3d_radial_lat_slice(model3d, time, lon=np.nan * u.deg,
         save: Boolean to determine if the figure is saved.
         tag: String to append to the filename if saving the figure.
         fighandle: Pass a figure handle to render the plot in that figure.
-        axhandle: Pass an axes handle to renfer the plot in that axes.
+        axhandle: Pass an axis handle to render the plot in that axis.
+        show_body_latitudes: Include each observer's latitude in its legend label.
+        bodies: Optional sequence of planet/spacecraft names. None uses the plotting defaults.
+        annotateplot: Whether to include the observer legend.
     Returns:
         fig: Figure handle.
         ax: Axes handle.
@@ -2120,8 +2128,8 @@ def plot3d_radial_lat_slice(model3d, time, lon=np.nan * u.deg,
     # Reserve space below the lower polar row for one colourbar per column.
     # tight_layout does not account reliably for polar axes plus manually
     # shared colourbars, which previously caused both to overlap.
-    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.12, top=0.91,
-                        wspace=0.02, hspace=0.14)
+    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.15, top=0.95,
+                        wspace=-0.3, hspace=0.1)
 
     r = model.r.to_value(u.solRad)
     lat_theta, lat_r = np.meshgrid(model3d.lat.to_value(u.rad), r)
@@ -2134,7 +2142,24 @@ def plot3d_radial_lat_slice(model3d, time, lon=np.nan * u.deg,
     lon_theta, lon_r = np.meshgrid(full_lon.to_value(u.rad), r)
     lon_theta = np.concatenate((lon_theta, lon_theta[:, :1] + 2 * np.pi), axis=1)
     lon_r = np.concatenate((lon_r, lon_r[:, :1]), axis=1)
-    for column, (variable, label, cmap, vmin, vmax, dv, logarithmic, ticks) in enumerate(variables):
+    observers_list = _bodies_to_plot(model, bodies)
+    styles = observer_styles()
+    observer_labels = {}
+    observer_positions = {}
+    deltalon = 0.0 * u.rad
+    if model.frame == 'sidereal':
+        earth_pos = model.get_observer('EARTH')
+        deltalon = earth_pos.lon_hae[id_t] - earth_pos.lon_hae[0]
+    for body in observers_list:
+        obs = model.get_observer(body)
+        observer_labels[body] = _observer_legend_label(
+            body, obs, id_t, show_body_latitudes)
+        observer_positions[body] = (
+            obs.lat[id_t].to_value(u.rad),
+            zerototwopi(obs.lon[id_t] + deltalon).to_value(u.rad),
+            obs.r[id_t].to_value(u.solRad),
+        )
+    for column, (variable, xlab, cmap, vmin, vmax, dv, logarithmic, ticks) in enumerate(variables):
         data = values(variable)
         if logarithmic:
             data = np.log10(data)
@@ -2169,6 +2194,13 @@ def plot3d_radial_lat_slice(model3d, time, lon=np.nan * u.deg,
             axis.set_xticklabels([])
             axis.patch.set_facecolor('slategrey')
             axis.plot(0, 0, 'o', color=[1.0, 0.5, 0.25], markersize=12)
+        for body in observers_list:
+            body_lat, body_lon, body_r = observer_positions[body]
+            style = styles[body]
+            label = observer_labels[body] if column == 0 else None
+            # Only plot on the radial-longitude axis.
+            ax_lon.plot(body_lon, body_r, markersize=12, color=style['color'],
+                        marker=style['marker'], linestyle='')
         ax_lat.set_title(f'Radial-latitude: lon={model.lon[id_lon].to_value(u.deg):.1f}°')
         ax_lon.set_title(f'Radial-longitude: lat={model3d.lat[id_lat].to_value(u.deg):.1f}°')
         # Place the colourbar in its own axes, spanning this column only.
@@ -2178,176 +2210,99 @@ def plot3d_radial_lat_slice(model3d, time, lon=np.nan * u.deg,
         bottom_pos = ax_lon.get_position()
         cbar_left = min(top_pos.x0, bottom_pos.x0)
         cbar_right = max(top_pos.x1, bottom_pos.x1)
-        cbar_bottom = bottom_pos.y0 - 0.055
+        # Keep the colourbar close to the lower axes so the shared legend has
+        # room beneath it without overlapping the bar.
+        cbar_bottom = bottom_pos.y0 - 0.025
         cbar_ax = fig.add_axes([cbar_left, cbar_bottom, cbar_right - cbar_left, 0.018])
         cbar = fig.colorbar(cnt_lat, cax=cbar_ax, orientation='horizontal')
-        cbar.set_label(label)
+        cbar.set_label(xlab)
         cbar.set_ticks(ticks)
 
-    fig.suptitle(f'SURF3D - {solver} | {model.time_out[id_t].to(u.day).value:.2f} days')
+    if annotateplot and observers_list:
+        # Position below the colorbar labels (closer to plots)
+        label_y = 0.2
+
+        styles = observer_styles()
+
+        # Calculate approximate width per observer item (marker + text)
+        # Each item: circle (0.015) + gap (0.008) + text (~0.007 per char)
+        item_widths = []
+        for body in observers_list:
+            observer_label = observer_labels[body]
+            text_width = len(observer_label) * 0.007  # Approximate width per character
+            item_width = 0.015 + 0.008 + text_width  # marker + gap + text
+            item_widths.append(item_width)
+
+        # Space between items
+        spacing = 0.02  # Small gap between items
+
+        # Total width of all items plus spacing
+        content_width = sum(item_widths) + spacing * (len(observers_list) - 1)
+
+        # Add minimal padding
+        box_padding = 0.015  # Small padding
+        box_width = content_width + 2 * box_padding
+        box_height = 0.025
+
+        # Center everything
+        box_x = 0.5 - box_width / 2
+        box_y = cbar_bottom - 0.1
+        lab_y = box_y + box_height / 2
+        content_start_x = box_x + box_padding
+
+        # Draw a subtle box around the observer labels
+        from matplotlib.patches import FancyBboxPatch
+        box = FancyBboxPatch((box_x, box_y), box_width, box_height,
+                             boxstyle="round,pad=0.003",
+                             edgecolor='gray', facecolor='white', alpha=0.8,
+                             linewidth=1, transform=fig.transFigure, zorder=10)
+        fig.patches.append(box)
+
+        # Draw each observer label
+        current_x = content_start_x
+        for i, body in enumerate(observers_list):
+            # Map marker types to display characters dynamically
+            marker_type = styles[body]['marker']
+            marker_map = {
+                'o': ('●', 18),  # circle
+                '^': ('▲', 16),  # triangle up
+                'x': ('✕', 16),  # cross
+                'v': ('▼', 16),  # triangle down
+                's': ('■', 16),  # square
+                '+': ('+', 18),  # plus
+                '*': ('★', 18),  # star
+            }
+            marker_char, marker_size = marker_map.get(marker_type, ('●', 18))
+
+            fig.text(current_x + 0.0075, lab_y, marker_char, fontsize=marker_size,
+                     color=styles[body]['color'],
+                     horizontalalignment='center', verticalalignment='center', zorder=11)
+            # Add body name - darker and bolder for visibility
+            observer_label = observer_labels[body]
+            fig.text(current_x + 0.015 + 0.008, lab_y, observer_label.upper(), fontsize=13,
+                     color='black', fontweight='bold',
+                     horizontalalignment='left', verticalalignment='center', zorder=11)
+
+            # Move to next position
+            current_x += item_widths[i] + spacing
+
+        # Label the model/solver and simulation time.
+        pos_left = axes[0, 0].get_position()
+        pos_right = axes[0, 2].get_position()
+        time_label = f"{model.time_out[id_t].to(u.day).value:3.2f} days"
+        fig.text(pos_right.x1, pos_right.y1 + 0.01, time_label, fontsize=13,
+                 horizontalalignment='right', verticalalignment='bottom')
+
+        model_label = f"SURF3D-{_compressible_solver_label(model)}"
+        fig.text(pos_left.x0 - 0.05, pos_left.y1 + 0.01, model_label, fontsize=13,
+                 horizontalalignment='left', verticalalignment='bottom')
+
     if save:
         cr_num = np.int32(model.cr_num.value)
         filepath = get_figure_dir().joinpath(f"SURF_CR{cr_num:03d}_{tag}_3D_frame_{id_t:03d}.png")
         fig.savefig(filepath)
+
     return fig, axes.ravel()
-
-    plotvmin = 200
-    plotvmax = 810
-    dv = 10
-    ylab = "Solar Wind Speed (km/s)"
-
-    # get the metadata from one of the individual SURF elements
-    model = model3d.SURFlat[0]
-
-    if (time < model.time_out.min()) | (time > (model.time_out.max())):
-        print("Error, input time outside span of model times. Defaulting to closest time")
-
-    id_t = np.argmin(np.abs(model.time_out - time))
-
-    # get the requested longitude
-    if model.lon.size == 1:
-        id_lon = 0
-        lon_out = model.lon.to(u.deg)
-    else:
-        id_lon = np.argmin(np.abs(model.lon - lon))
-        lon_out = model.lon[id_lon].to(u.deg)
-
-    # loop over latitudes and extract the radial profiles
-    mercut = np.ones((len(model.r), model3d.nlat))
-    for n in range(0, model3d.nlat):
-        model = model3d.SURFlat[n]
-        mercut[:, n] = model.v_grid[id_t, :, id_lon]
-
-    orig_cmap = mpl.cm.viridis
-    # make a copy
-    mymap = type(orig_cmap)(orig_cmap.colors)
-
-    mymap.set_over('lightgrey')
-    mymap.set_under([0, 0, 0])
-    levels = np.arange(plotvmin, plotvmax + dv, dv)
-    
-    # if no fig and axis handles are given, create a new figure
-    if isinstance(fighandle, float):
-        fig, ax = plt.subplots(figsize=(10, 10), subplot_kw={"projection": "polar"})
-    else:
-        fig = fighandle
-        ax = axhandle
-
-    cnt = ax.contourf(model3d.lat.to(u.rad), model.r, mercut, levels=levels, cmap=mymap,
-                      extend='both')
-
-    # Set edge color of contours the same, for good rendering in PDFs
-    cnt.set_edgecolor("face")
-
-    # Trace the CME boundaries
-    cme_colors = get_cme_colors()
-    for n in range(0, len(model.cmes)):
-
-        # Get latitudes 
-        lats = model3d.lat
-
-        cme_r_front = np.ones(model3d.nlat) * np.nan
-        cme_r_back = np.ones(model3d.nlat) * np.nan
-        for ilat in range(0, model3d.nlat):
-            model = model3d.SURFlat[ilat]
-
-            cme_r_front[ilat] = model.cme_particles_r[n, id_t, 0, id_lon]
-            cme_r_back[ilat] = model.cme_particles_r[n, id_t, 1, id_lon]
-
-        # trim the nans
-        # Find indices that sort the longitudes, to make a wraparound of lons
-        id_sort_inc = np.argsort(lats)
-        id_sort_dec = np.flipud(id_sort_inc)
-
-        cme_r_front = cme_r_front[id_sort_inc]
-        cme_r_back = cme_r_back[id_sort_dec]
-
-        lat_front = lats[id_sort_inc]
-        lat_back = lats[id_sort_dec]
-
-        # Only keep good values
-        id_good = np.isfinite(cme_r_front)
-        if id_good.any():
-            cme_r_front = cme_r_front[id_good]
-            lat_front = lat_front[id_good]
-
-            id_good = np.isfinite(cme_r_back)
-            cme_r_back = cme_r_back[id_good]
-            lat_back = lat_back[id_good]
-
-            # Get one array of longitudes and radii from the front and back particles
-            lats = np.hstack([lat_front, lat_back, lat_front[0]])
-            cme_r = np.hstack([cme_r_front, cme_r_back, cme_r_front[0]])
-
-            ax.plot(lats.to(u.rad), (cme_r * u.km).to(u.solRad), color=cme_colors[n],
-                    linewidth=3)
-
-    # determine which bodies should be plotted
-    planet_list = get_planets_to_plot(model)
-    spacecraft_list = get_spacecraft_to_plot(model)
-    observer_list = planet_list + spacecraft_list
-
-    if model.r[0] > 200 * u.solRad:
-        observer_list = ['EARTH', 'MARS', 'JUPITER', 'SATURN']
-
-    styles = observer_styles()
-    # Add on observers 
-    for body in observer_list:
-        obs = model.get_observer(body)
-        deltalon = 0.0 * u.rad
-
-        # adjust body longitude for the frame
-        if model.frame == 'sidereal':
-            earth_pos = model.get_observer('EARTH')
-            deltalon = earth_pos.lon_hae[id_t] - earth_pos.lon_hae[0]
-
-        bodylon = zerototwopi(obs.lon[id_t] + deltalon)
-        # plot bodies that are close to being in the plane
-        if abs(bodylon - lon_out) < model.dlon * 2:
-            ax.plot(obs.lat[id_t], obs.r[id_t], markersize=16, label=body, linestyle='',
-                    marker=styles[body]['marker'], color=styles[body]['color'])
-
-    # Add on a legend.
-    fig.legend(ncol=len(observer_list), loc='lower center', frameon=False, handletextpad=0.1,
-               columnspacing=0.5)
-
-    ax.patch.set_facecolor('slategrey')
-    fig.subplots_adjust(left=0.05, bottom=0.16, right=0.95, top=0.99)
-
-    ax.set_ylim(0, model.r.value.max())
-    ax.set_yticklabels([])
-    ax.set_xticklabels([])
-    ax.patch.set_facecolor('slategrey')
-    fig.subplots_adjust(left=0.05, bottom=0.16, right=0.95, top=0.99)
-
-    # Add color bar
-    pos = ax.get_position()
-    dw = 0.005
-    dh = 0.045
-    left = pos.x0 + dw
-    bottom = pos.y0 - dh
-    wid = pos.width - 2 * dw
-    cbaxes = fig.add_axes([left, bottom, wid, 0.03])
-    cbar1 = fig.colorbar(cnt, cax=cbaxes, orientation='horizontal')
-    cbar1.set_label(ylab)
-    cbar1.set_ticks(np.arange(plotvmin, plotvmax, dv * 10))
-
-    # Add label
-    label = f"   Time: {model.time_out[id_t].to(u.day).value:3.2f} days"
-    label = label + '\n ' + (model.time_init + time).strftime('%Y-%m-%d %H:%M')
-    fig.text(0.70, pos.y0, label, fontsize=16)
-
-    label = f"SURF3D \nLong: {lon_out.to(u.deg).value:3.1f} deg"
-    fig.text(0.175, pos.y0, label, fontsize=16)
-
-    if save:
-        cr_num = np.int32(model.cr_num.value)
-        filename = f"SURF_CR{cr_num:03d}_{tag}_3D_frame_{id_t:03d}.png"
-        figure_dir = get_figure_dir()
-        filepath = figure_dir.joinpath(filename)
-        fig.savefig(filepath)
-
-    return fig, ax
 
 
 def animate_3d(model3d, lon=0.0 * u.deg, lat=0.0 * u.deg, tag='', duration=10, fps=20,
