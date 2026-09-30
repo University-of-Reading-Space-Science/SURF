@@ -355,9 +355,9 @@ class SyntheticImager:
 
         return jmap, djmap
 
-    def plot_jmap(self, model, jmap, djmap):
+    def plot_jmap(self, model, jmap):
         """
-        Make a 2-panel plot of the normal and difference image jmaps
+        Render an image from the Jmap array. Optionally add on the CME profiles.
         """
 
         times = (model.SURFlat[0].time_init + model.SURFlat[0].time_out).datetime
@@ -366,26 +366,24 @@ class SyntheticImager:
         cmap = plt.cm.gray.copy()
         cmap.set_bad(color='midnightblue')
 
-        fig, ax = plt.subplots(1, 2, figsize=(20, 10))
+        fig, ax = plt.subplots(figsize=(15, 5))
         vmin, vmax = np.nanpercentile(jmap, [2, 98])
-        ax[0].pcolormesh(times, elons, jmap, cmap=cmap, vmin=vmin, vmax=vmax)
+        ax.pcolormesh(times, elons, jmap, cmap=cmap, vmin=vmin, vmax=vmax)
 
-        vmin, vmax = np.nanpercentile(djmap, [2, 98])
-        ax[1].pcolormesh(times, elons, djmap, cmap=cmap, vmin=vmin, vmax=vmax)
+        ax.set_ylim(self.e_min.to(u.deg).value, self.e_max.to(u.deg).value)
+        ax.set_xlim(times[0], times[-1])
+        ax.set_xlabel(f'Date in {times[0].year}')
+        ax.set_ylabel('Elongation [deg]')
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%dT%H'))
 
-        for a in ax:
-            a.set_ylim(self.e_min.to(u.deg).value, self.e_max.to(u.deg).value)
-            a.set_xlim(times[0], times[-1])
-            ax.set_xlabel(f'Date in {times[0].year}')
-            ax.set_ylabel('Elongation [deg]')
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%dT%H'))
+        fig.subplots_adjust(left=0.08, bottom=0.12, right=0.98, top=0.98)
 
-        fig.subplots_adjust(left=0.05, bottom=0.08, right=0.98, top=0.98, wspace=0.1)
         return fig, ax
 
-    def plot_diff_jmap(self, model, djmap):
+    def plot_diff_jmap(self, model, jmap, track_cmes=False):
         """
-        Make a 2-panel plot of the normal and difference image jmaps
+        Render an image from the Jmap array. Optionally add on the CME profiles extracted from
+        the differenced image jmap.
         """
 
         times = (model.SURFlat[0].time_init + model.SURFlat[0].time_out).datetime
@@ -395,8 +393,8 @@ class SyntheticImager:
         cmap.set_bad(color='midnightblue')
 
         fig, ax = plt.subplots(figsize=(15,5))
-        vmin, vmax = np.nanpercentile(djmap, [2, 98])
-        ax.pcolormesh(times, elons, djmap, cmap=cmap, vmin=vmin, vmax=vmax)
+        vmin, vmax = np.nanpercentile(jmap, [2, 98])
+        ax.pcolormesh(times, elons, jmap, cmap=cmap, vmin=vmin, vmax=vmax)
 
         ax.set_ylim(self.e_min.to(u.deg).value, self.e_max.to(u.deg).value)
         ax.set_xlim(times[0], times[-1])
@@ -405,23 +403,20 @@ class SyntheticImager:
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%dT%H'))
 
         fig.subplots_adjust(left=0.08, bottom=0.12, right=0.98, top=0.98)
-        return fig, ax
 
-    def plot_jmap_with_cme_profiles(self, model, jmap, djmap):
-        """
-        Plot the plain and differenced jmaps with the automatically tracked CME profiles overlaid.
-        """
-        fig, ax = self.plot_jmap(model, jmap, djmap)
-        cme_profiles = self.track_cmes(model, djmap)
-        for cme in cme_profiles:
-            for key, val in cme.items():
-                ax[1].plot(val['t'], val['e'], 'r.', label=key)
+        if track_cmes:
+            cme_profiles = self.track_cmes(model, jmap)
+            for cme in cme_profiles:
+                for key, val in cme.items():
+                    t = (model.SURFlat[0].time_init + val['t']*u.day).datetime
+                    ax.plot(t, val['e'], 'r.', label=key)
 
         return fig, ax
 
     def track_cmes(self, model, djmap):
         """
-        Use image processing techniques to track the CME front in the differenced Jmap.
+        Use image processing techniques to track the CME front in the differenced Jmap. This code is
+        still experimental and may not work as expected.
         """
         # Check that the model is compatible with this FoV.
         self._check_latitude_compatibility(model)
@@ -440,20 +435,10 @@ class SyntheticImager:
         times = model.SURFlat[0].time_out.to(u.day).value
         elons = self.e.to(u.deg).value
 
-        cmap = plt.cm.gray.copy()
-        cmap.set_bad(color='midnightblue')
-
-        fig, ax = plt.subplots(figsize=(10, 10))
-        vmin, vmax = np.nanpercentile(djmap, [1, 99])
-        ax.pcolormesh(times, elons, djmap, cmap=cmap, vmin=vmin, vmax=vmax)
-
         # Clip and scale the jmap. Find ridges.
         djmap = np.nan_to_num(djmap, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # This test is shit and needs fixing.
-        #if np.allclose(djmap, 0.0):
-        #    print('No structure in the jmap. Returning empty list of profiles.')
-        #    return []
+        # ToDo Add a test here for if there is no structure in the jmap to identify as a CME
 
         vmin, vmax = np.nanpercentile(np.abs(djmap), [0, 100])
         djmap_clipped = np.clip(djmap, vmin, vmax)
