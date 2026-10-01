@@ -237,7 +237,7 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
             ax.text(0.98, -0.01, label, fontsize=15, transform=ax.transAxes,
                     horizontalalignment='right')
 
-            label = f"HUXt2D \nLat: {model.latitude.to(u.deg).value:.1f} deg"
+            label = f"SURF-huxt \nLat: {model.latitude.to(u.deg).value:.1f} deg"
             ax.text(0.02, -0.01, label, fontsize=15, transform=ax.transAxes)
 
         # plot any tracked streaklines
@@ -302,7 +302,8 @@ def plot(model, time, save=False, tag='', fighandle=np.nan, axhandle=np.nan, min
 
     if save:
         cr_num = np.int32(model.cr_num.value)
-        filename = f"HUXt_CR{cr_num:03d}_{tag}_frame_{id_t:03d}.png"
+        solver_tag = _compressible_solver_tag(model)
+        filename = f"SURF_{solver_tag}_CR{cr_num:03d}_{tag}_frame_{id_t:03d}.png"
         figure_dir = get_figure_dir()
         filepath = figure_dir.joinpath(filename)
         fig.savefig(filepath)
@@ -2119,17 +2120,24 @@ def plot3d_slices(model3d, time, lon=np.nan * u.deg,
     if isinstance(fighandle, float):
         # Polar axes are square; use a figure aspect ratio that matches the
         # 3-column by 2-row grid instead of leaving wide unused margins.
-        fig, axes = plt.subplots(2, len(variables), figsize=(6 * len(variables), 12),
-                                 squeeze=False, subplot_kw={'projection': 'polar'})
+        if solver == 'hydro':
+            fig, axes = plt.subplots(2, len(variables), figsize=(6 * len(variables), 12),
+                                     squeeze=False, subplot_kw={'projection': 'polar'})
+
+        else:
+            fig, axes = plt.subplots(1, 2, figsize=(12, 6),
+                                     squeeze=False, subplot_kw={'projection': 'polar'})
+
     else:
         fig = fighandle
         axes = np.asarray(axhandle).reshape(2, len(variables))
 
-    # Reserve space below the lower polar row for one colourbar per column.
-    # tight_layout does not account reliably for polar axes plus manually
-    # shared colourbars, which previously caused both to overlap.
-    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.15, top=0.95,
-                        wspace=-0.3, hspace=0.1)
+    if solver == 'hydro':
+        fig.subplots_adjust(left=0.02, right=0.98, bottom=0.15, top=0.95,
+                            wspace=-0.3, hspace=0.1)
+    else:
+        fig.subplots_adjust(left=0.02, right=0.98, bottom=0.2, top=0.95,
+                            wspace=-0.2)
 
     r = model.r.to_value(u.solRad)
     lat_theta, lat_r = np.meshgrid(model3d.lat.to_value(u.rad), r)
@@ -2179,7 +2187,12 @@ def plot3d_slices(model3d, time, lon=np.nan * u.deg,
         cmap.set_under([0, 0, 0])
         # Left: radius-latitude at the requested longitude.  Latitude is the
         # polar angle, so this is a meridional wedge centred on the Sun.
-        ax_lat, ax_lon = axes[0, column], axes[1, column]
+        if solver == 'hydro':
+            ax_lat, ax_lon = axes[0, column], axes[1, column]
+        else:
+            axes = axes.ravel()
+            ax_lat, ax_lon = axes[0], axes[1]
+
         cnt_lat = ax_lat.contourf(lat_theta, lat_r, data[:, :, id_lon], levels=levels,
                                cmap=cmap, extend='both')
         cnt_lon = ax_lon.contourf(lon_theta, lon_r, lon_data, levels=levels,
@@ -2197,31 +2210,38 @@ def plot3d_slices(model3d, time, lon=np.nan * u.deg,
         for body in observers_list:
             body_lat, body_lon, body_r = observer_positions[body]
             style = styles[body]
-            label = observer_labels[body] if column == 0 else None
             # Only plot on the radial-longitude axis.
             ax_lon.plot(body_lon, body_r, markersize=12, color=style['color'],
                         marker=style['marker'], linestyle='')
+
         ax_lat.set_title(f'Radial-latitude: lon={model.lon[id_lon].to_value(u.deg):.1f}°')
         ax_lon.set_title(f'Radial-longitude: lat={model3d.lat[id_lat].to_value(u.deg):.1f}°')
         # Place the colourbar in its own axes, spanning this column only.
         # Using the polar axes' actual positions keeps it aligned after their
         # square aspect ratio has been applied.
-        top_pos = ax_lat.get_position()
-        bottom_pos = ax_lon.get_position()
-        cbar_left = min(top_pos.x0, bottom_pos.x0)
-        cbar_right = max(top_pos.x1, bottom_pos.x1)
-        # Keep the colourbar close to the lower axes so the shared legend has
-        # room beneath it without overlapping the bar.
-        cbar_bottom = bottom_pos.y0 - 0.025
-        cbar_ax = fig.add_axes([cbar_left, cbar_bottom, cbar_right - cbar_left, 0.018])
-        cbar = fig.colorbar(cnt_lat, cax=cbar_ax, orientation='horizontal')
-        cbar.set_label(xlab)
-        cbar.set_ticks(ticks)
+        if solver == 'hydro':
+            top_pos = ax_lat.get_position()
+            bottom_pos = ax_lon.get_position()
+            cbar_left = min(top_pos.x0, bottom_pos.x0)
+            cbar_right = max(top_pos.x1, bottom_pos.x1)
+            # Keep the colourbar close to the lower axes so the shared legend has
+            # room beneath it without overlapping the bar.
+            cbar_bottom = bottom_pos.y0 - 0.025
+            cbar_ax = fig.add_axes([cbar_left, cbar_bottom, cbar_right - cbar_left, 0.018])
+            cbar = fig.colorbar(cnt_lat, cax=cbar_ax, orientation='horizontal')
+            cbar.set_label(xlab)
+            cbar.set_ticks(ticks)
+        else:
+            for a in [ax_lon, ax_lat]:
+                pos = a.get_position()
+                cbar_bottom = pos.y0 - 0.025
+                cbar_ax = fig.add_axes([pos.x0, cbar_bottom, pos.x1 - pos.x0, 0.018])
+                cbar = fig.colorbar(cnt_lat, cax=cbar_ax, orientation='horizontal')
+                cbar.set_label(xlab)
+                cbar.set_ticks(ticks)
 
     if annotateplot and observers_list:
         # Position below the colorbar labels (closer to plots)
-        label_y = 0.2
-
         styles = observer_styles()
 
         # Calculate approximate width per observer item (marker + text)
@@ -2229,24 +2249,32 @@ def plot3d_slices(model3d, time, lon=np.nan * u.deg,
         item_widths = []
         for body in observers_list:
             observer_label = observer_labels[body]
-            text_width = len(observer_label) * 0.007  # Approximate width per character
+            text_width = len(observer_label) * 0.008  # Approximate width per character
             item_width = 0.015 + 0.008 + text_width  # marker + gap + text
             item_widths.append(item_width)
 
         # Space between items
-        spacing = 0.02  # Small gap between items
+        if solver == 'hydro':
+            spacing = 0.02
+            box_padding = 0.015
+            box_height = 0.025
+            box_y = cbar_bottom - 0.1
+            delta = 0
+        else:
+            spacing = 0.03
+            box_padding = 0.015
+            box_height = 0.04
+            box_y = cbar_bottom - 0.16
+            delta = 0.01
 
         # Total width of all items plus spacing
-        content_width = sum(item_widths) + spacing * (len(observers_list) - 1)
+        content_width = sum(item_widths) + spacing * (len(observers_list) - 1) + delta
 
         # Add minimal padding
-        box_padding = 0.015  # Small padding
         box_width = content_width + 2 * box_padding
-        box_height = 0.025
 
         # Center everything
         box_x = 0.5 - box_width / 2
-        box_y = cbar_bottom - 0.1
         lab_y = box_y + box_height / 2
         content_start_x = box_x + box_padding
 
@@ -2274,6 +2302,7 @@ def plot3d_slices(model3d, time, lon=np.nan * u.deg,
             }
             marker_char, marker_size = marker_map.get(marker_type, ('●', 18))
 
+
             fig.text(current_x + 0.0075, lab_y, marker_char, fontsize=marker_size,
                      color=styles[body]['color'],
                      horizontalalignment='center', verticalalignment='center', zorder=11)
@@ -2283,12 +2312,18 @@ def plot3d_slices(model3d, time, lon=np.nan * u.deg,
                      color='black', fontweight='bold',
                      horizontalalignment='left', verticalalignment='center', zorder=11)
 
+
             # Move to next position
             current_x += item_widths[i] + spacing
 
         # Label the model/solver and simulation time.
-        pos_left = axes[0, 0].get_position()
-        pos_right = axes[0, 2].get_position()
+        if solver == 'hydro':
+            pos_left = axes[0, 0].get_position()
+            pos_right = axes[0, 2].get_position()
+        else:
+            pos_left = axes[0].get_position()
+            pos_right = axes[1].get_position()
+
         time_label = f"{model.time_out[id_t].to(u.day).value:3.2f} days"
         fig.text(pos_right.x1, pos_right.y1 + 0.01, time_label, fontsize=13,
                  horizontalalignment='right', verticalalignment='bottom')
@@ -2305,7 +2340,7 @@ def plot3d_slices(model3d, time, lon=np.nan * u.deg,
     return fig, axes.ravel()
 
 
-def animate_3d(model3d, lon=0.0 * u.deg, lat=0.0 * u.deg, tag='', duration=10, fps=20,
+def animate3d(model3d, lon=0.0 * u.deg, lat=0.0 * u.deg, tag='', duration=10, fps=20,
                outputfilepath=''):
     """
     Animate the model solution and save as an MP4.
@@ -2322,10 +2357,17 @@ def animate_3d(model3d, lon=0.0 * u.deg, lat=0.0 * u.deg, tag='', duration=10, f
         None
     """
     model = model3d.SURFlat[0]
-    
-    is_hydro = str(getattr(model, 'solver', 'huxt')).lower() == 'hydro'
-    nrows = 2
-    ncols = 3 if is_hydro else 1
+    solver = str(getattr(model, 'solver', 'huxt')).lower()
+    is_hydro = solver == 'hydro'
+    if is_hydro:
+        nrows = 2
+        ncols = 3
+        figsize = (18,12)
+    else:
+        nrows = 1
+        ncols = 2
+        figsize = (12,6)
+
     interval = (1/fps)*1000
     nframes = int(duration*1000/interval)
     
@@ -2343,19 +2385,21 @@ def animate_3d(model3d, lon=0.0 * u.deg, lat=0.0 * u.deg, tag='', duration=10, f
         fig.clear()
         frame_axes = fig.subplots(nrows, ncols, squeeze=False,
                                   subplot_kw={'projection': 'polar'})
+
         # Get the time index closest to this fraction of movie duration
         i = np.int32((model.nt_out - 1) * frame / nframes)
-        plot3d_radial_lat_slice(model3d, model.time_out[i], lon, lat,
-                                fighandle=fig, axhandle=frame_axes.ravel())
+        plot3d_slices(model3d, model.time_out[i], lon, lat, fighandle=fig,
+                      axhandle=frame_axes.ravel())
         # FuncAnimation renders the figure through its writer.  Returning a
         # pixel buffer here accesses the interactive canvas before it has a
         # renderer; return the artists instead (blitting is disabled).
         return fig.axes
     
     # Create a new figure
-    fig, _ = plt.subplots(nrows, ncols, figsize=(6 * ncols, 12), squeeze=False,
-                          subplot_kw={'projection': 'polar'})
-    
+
+    fig, ax = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False,
+                           subplot_kw={'projection': 'polar'})
+
     # Create the animation
     ani = FuncAnimation(fig, make_frame3d, frames=range(nframes), interval=interval)
     
@@ -2363,7 +2407,7 @@ def animate_3d(model3d, lon=0.0 * u.deg, lat=0.0 * u.deg, tag='', duration=10, f
         filepath = outputfilepath
     else:
         cr_num = np.int32(model.cr_num.value)
-        filename = f"SURF_CR{cr_num:03d}_{tag}_3D_movie.mp4"
+        filename = f"SURF_{solver}_CR{cr_num:03d}_{tag}_lon_lat_movie.mp4"
         figure_dir = get_figure_dir()
         filepath = figure_dir.joinpath(filename)
     
