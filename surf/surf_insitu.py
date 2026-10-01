@@ -833,7 +833,7 @@ def generate_vCarr_from_OMNI_DTW(runstart, runend, nlon=None, omni_input=None, r
     dtw1 = omni_lagged[dtw_on].to_numpy()
 
     # compute the DTW betweeen the behind and ahead using various parameters
-    path_v = dtw.warping_path(dtw1, dtw2, psi_neg=psi_steps,
+    path_v = dtw.warping_path(dtw1, dtw2, psi=psi_steps,
                               window=max_warp_steps)
     path_v_arr = np.array(path_v)
 
