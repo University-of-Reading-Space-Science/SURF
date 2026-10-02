@@ -1,4 +1,3 @@
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4889326.svg)](https://doi.org/10.5281/zenodo.4889326)
 # SURF - Space Weather Utilities for Research and Forecasting
 
 
@@ -36,7 +35,7 @@ faster. However, for model development work it can be useful to disable this. To
 development work, change line 2515 of `surf/surf.py`:
 
 ```python
-numba_cache = True
+numba_cache = False
 ```
 
 Set it back to `True` for general use.
