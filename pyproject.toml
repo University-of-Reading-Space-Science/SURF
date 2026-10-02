@@ -3,19 +3,21 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "surf"
+name = "surfs-up"
 version = "1.0.0"
-description = "Space-weather Utilities for Research adn Forecasting (SURF)"
+description = "Space-weather Utilities for Research and Forecasting (SURF)"
 readme = "README.md"
 authors = [
   {name = "Luke Barnard", email = "l.a.barnard@reading.ac.uk" },
   {name = "Mathew Owens", email = "m.j.owens@reading.ac.uk" },
 ]
 license-files = ["LICENSE.md"]
-requires-python = ">=3.12.11"
+requires-python = ">=3.12"
 dependencies = [
+  "appdirs>=1.4.4",
   "astropy>=7.1.0",
-  "dtaidistance>=2.3.13",
+  "dtaidistance>=2.5.1",
+  "Flask>=3.1.0",
   "h5py>=3.14.0",
   "imageio>=2.37.0",
   "imageio-ffmpeg>=0.6.0",
@@ -27,10 +29,10 @@ dependencies = [
   "numpy>=2.2.6",
   "onnxruntime>=1.15.0",
   "pandas>=2.3.2",
-  "pytest>=8.4.2",
   "requests>=2.32.5",
   "scipy>=1.16.1",
-  "sunpy>=7.0.1",
+  "scikit-image>=0.26.0",
+  "sunpy[all]>=7.0.1",
   "tqdm>=4.67.1"
 ]
 
@@ -38,13 +40,21 @@ dependencies = [
 "surf.data.ephemeris" = ["*.hdf5"]
 "surf.data.example_inputs" = ["*.fits", "*.in", "*.fits", "*.nc", "*.dat"]
 "surf.data.example_inputs.WSA_GONGZ" = ["*.fits"]
+"surf.data.insitu" = ["*.txt", "*.csv", "*.onnx", "*.save"]
 "surf.notebooks" = ["*.ipynb"]
+"surfs_up.web" = ["templates/*.html"]
 
 [project.scripts]
 surf-make-ephemeris = "surf.scripts.make_ephemeris:main"
 surf-open-examples = "surf.scripts.open_examples_notebook:main"
+surfs-up = "surfs_up.web.app:main"
+surfs-up-web = "surfs_up.web.app:main"
+surfs-up-worker = "surfs_up.jobs:main"
 
 [project.urls]
-Homepage = ""
-Repository = ""
-Issues = ""
+Homepage = "https://github.com/University-of-Reading-Space-Science/SURF"
+Repository = "https://github.com/University-of-Reading-Space-Science/SURF.git"
+Issues = "https://github.com/University-of-Reading-Space-Science/SURF/issues"
+
+[tool.setuptools.packages.find]
+include = ["surf*", "surfs_up*"]
