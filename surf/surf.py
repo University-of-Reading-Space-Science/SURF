@@ -4585,4 +4585,4 @@ def get_version():
     """Return the installed SURF package version."""
     from importlib.metadata import version
 
-    return version("surf")
+    return version("surfs-up")

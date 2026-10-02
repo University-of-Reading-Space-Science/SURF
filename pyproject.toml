@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "surf"
+name = "surfs-up"
 version = "1.0.0"
 description = "Space-weather Utilities for Research and Forecasting (SURF)"
 readme = "README.md"

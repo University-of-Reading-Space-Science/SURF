@@ -1655,7 +1655,7 @@ def get_DONKI_coneCMEs(startdate, enddate, mostAccOnly='true', catalog='ALL', fe
 
     startdate_str = startdate.strftime('%Y-%m-%d')
     stopdate_str = enddate.strftime('%Y-%m-%d')
-    url_head = "https://kauai.ccmc.gsfc.nasa.gov/DONKI/WS/get/CMEAnalysis?startDate="
+    url_head = "https://ccmc.gsfc.nasa.gov/DONKI-API/get/CMEAnalysis?startDate="
     url_1 = url_head + startdate_str + '&endDate=' + stopdate_str
     url_2 = '&mostAccurateOnly=' + mostAccOnly + '&feature=' + feature
     url_3 = '&catalog=' + catalog

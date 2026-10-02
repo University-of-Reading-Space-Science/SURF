@@ -1105,6 +1105,12 @@ def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.
     # scrape the DONKI database of interplanetary shocks at Earth or STEREO. Create
     # a pseudo-ICME list in the same format as Cane and Richardson
 
+    # New API cannot ask for more than 60 days of data. For now raise an error if more than 60 days
+    # are requested
+    if (enddate - startdate).days > 60:
+        raise ValueError('DONKI API doesnt permit requests for more than 60 days of data.  Please '
+                         'reduce the time window.')
+
     min_quality = int(min_quality)
     if min_quality not in (-1, 0, 1, 2):
         raise ValueError('min_quality must be -1, 0, 1, or 2')
@@ -1112,7 +1118,7 @@ def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.
     # construct the url
     startdate_str = startdate.strftime('%Y-%m-%d')
     stopdate_str = enddate.strftime('%Y-%m-%d')
-    url_head = "https://kauai.ccmc.gsfc.nasa.gov/DONKI/WS/get/IPS?startDate="
+    url_head = "https://ccmc.gsfc.nasa.gov/DONKI-API/get/IPS?startDate="
     url = url_head + startdate_str + '&endDate=' + stopdate_str
 
     # Read the JSON response.
@@ -1358,8 +1364,8 @@ def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme
 
     omni_noicmes = omni.copy()
     
-    dl_starttime = omni.loc[0]['datetime'] - datetime.timedelta(days=27)
-    dl_endtime = omni.loc[len(omni)-1]['datetime'] + datetime.timedelta(days=27)
+    dl_starttime = omni.loc[0]['datetime'] - datetime.timedelta(days=5)
+    dl_endtime = omni.loc[len(omni)-1]['datetime'] + datetime.timedelta(days=5)
     
     # load the ICME list
     if icme_list == 'DONKI':
