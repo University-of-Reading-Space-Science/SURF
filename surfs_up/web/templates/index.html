@@ -593,7 +593,7 @@
             <label class="grid items-center gap-3 sm:grid-cols-[10rem_1fr]">Longitude (deg)
               <input id="radial-lon" type="number" min="-360" max="360" step="1" value="0">
             </label>
-            {% if ambient_model_available %}<label><span><input class="show-ambient-solution" type="checkbox"> Show ambient solution</span></label>{% endif %}
+            {% if ambient_model_available %}<label><span><input id="radial-show-ambient" class="show-ambient-solution" type="checkbox"> Show ambient solution</span></label>{% endif %}
             <div><button type="button" onclick="showPlot('radial', this)">Plot Radial Profile</button></div>
           </div>
         </section>
@@ -616,7 +616,7 @@
               <select id="timeseries-insitu-source"><option value="OMNI"{% if default_insitu_source == "OMNI" %} selected{% endif %}>OMNI</option><option value="SWPC"{% if default_insitu_source == "SWPC" %} selected{% endif %}>SWPC real-time L1</option></select>
             </label>
             <p class="text-sm text-slate-500">Standard locations follow each observer's ephemeris throughout the run. Custom longitude is fixed on the SURF model grid: HEEQ/model longitude at run start for sidereal runs, or corotating model longitude for synodic runs.</p>
-            {% if ambient_model_available %}<label><span><input class="show-ambient-solution" type="checkbox"> Show ambient solution</span></label>{% endif %}
+            {% if ambient_model_available %}<label><span><input id="timeseries-show-ambient" class="show-ambient-solution" type="checkbox"> Show ambient solution</span></label>{% endif %}
             <div class="hidden grid-cols-1 items-end gap-3 sm:grid-cols-[10rem_1fr_1fr]" id="timeseries-custom-coordinates">
               <span class="pb-2 text-sm font-medium text-slate-700">Custom coordinates</span>
               <label>Radius (AU)<input id="plot-radius" type="number" min="0.1" max="10" step="0.1" value="1"></label>
