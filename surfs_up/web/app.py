@@ -122,7 +122,9 @@ _MAX_RETAINED_RUNS = 1
 _RUN_CACHE_DIR = Path(
     os.environ.get("SURFS_UP_RUN_CACHE_DIR", Path.home() / ".cache" / "surfs_up" / "runs")
 )
-_DONKI_URL = "https://kauai.ccmc.gsfc.nasa.gov/DONKI/WS/get/CMEAnalysis"
+# Keep the web editor on the same CCMC endpoint used by
+# surf_inputs.get_DONKI_coneCMEs() during a generated model run.
+_DONKI_URL = "https://ccmc.gsfc.nasa.gov/DONKI-API/get/CMEAnalysis"
 _PLOT_BODY_CHOICES = (
     ("MERCURY", "Mercury"), ("VENUS", "Venus"), ("EARTH", "Earth"),
     ("MARS", "Mars"), ("JUPITER", "Jupiter"), ("SATURN", "Saturn"),
@@ -193,13 +195,17 @@ def _session_id() -> str:
 
 
 def _retain_model(
-    model: object, simulation: SimulationRequest, ambient_model: object | None = None
+    model: object,
+    simulation: SimulationRequest,
+    ambient_model: object | None = None,
+    code: str | None = None,
 ) -> str:
     run_id = uuid.uuid4().hex
     retained = {
         "model": model,
         "ambient_model": ambient_model,
         "simulation": simulation,
+        "code": code,
         "owner_session_id": _session_id(),
     }
     with _RUNS_LOCK:
@@ -628,11 +634,16 @@ def _fetch_donki_cmes(
     query = urlencode(query_params)
     try:
         with urlopen(f"{_DONKI_URL}?{query}", timeout=30) as response:
-            analyses = json.load(response)
-    except (URLError, TimeoutError) as exc:
+            payload = response.read()
+        if not payload or not payload.strip():
+            raise ValueError("DONKI returned an empty response")
+        analyses = json.loads(payload)
+        if not isinstance(analyses, list):
+            raise ValueError("DONKI returned an unexpected response")
+    except (URLError, TimeoutError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise DonkiAccessError(
-            "DONKI CME data could not be accessed. Check your network connection "
-            "or try again later. You can run without DONKI data by unticking "
+            "DONKI CME data is temporarily unavailable or returned an invalid "
+            "response. Try again later, or run without DONKI data by unticking "
             "'Grab DONKI CMEs at run start'."
         ) from exc
     results = []
@@ -832,10 +843,10 @@ def _ambient_preview_figure():
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    source = request.form.get("ambient_source", "user_specified")
+    source = request.form.get("ambient_source", "insitu_backmapped")
     latitude = _float("latitude", 0.0) * u.deg
     include_bpol = "include_bpol" in request.form
-    solver = request.form.get("solver", "huxt").strip().lower()
+    solver = request.form.get("solver", "hydro").strip().lower()
     acc_profile = "huxt" if solver.startswith("huxt") else "parker"
 
     def plot_mas():
@@ -1123,7 +1134,7 @@ def _request_from_form() -> SimulationRequest:
     start = request.form.get("start_datetime") or datetime.datetime.now(
         datetime.UTC
     ).strftime("%Y-%m-%d %H:%M:%S")
-    source = request.form.get("ambient_source", "user_specified")
+    source = request.form.get("ambient_source", "insitu_backmapped")
     speed = _float("speed_kms", 400.0)
     ambient = {"source": source}
     if source == "user_specified":
@@ -1272,7 +1283,7 @@ def _request_from_form() -> SimulationRequest:
     simtime_days = _float("simtime_days", 10.0)
     return SimulationRequest.from_mappings(
         {
-            "solver": request.form.get("solver", "huxt"),
+            "solver": request.form.get("solver", "hydro"),
             "rmin": _float("rmin", 21.5),
             "rmax": _float("rmax", 240.0),
             "lon_min": _float("lon_min", 0.0),
@@ -1293,7 +1304,7 @@ def _request_from_form() -> SimulationRequest:
                 "fixed_duration_hr": _float("donki_fixed_duration_hr", 12.0),
                 "profile_type": request.form.get(
                     "donki_profile_type",
-                    "sinusoidal" if request.form.get("solver") in {"hydro", "hydro-pui"} else "square",
+                    "sinusoidal" if request.form.get("solver", "hydro") in {"hydro", "hydro-pui"} else "square",
                 ),
                 "cme_density_pcc": _float("donki_cme_density_pcc", 600.0),
                 "cme_temperature_k": _float("donki_cme_temperature_k", 1000000.0),
@@ -1491,6 +1502,7 @@ def create_app(config: dict | None = None) -> Flask:
             "run_id": None,
             "show_movies": False,
             "show_code_dialog": False,
+            "code_is_executed": False,
             "plot_body_choices": _PLOT_BODY_CHOICES,
             "default_plot_bodies": [],
             "default_insitu_source": "SWPC",
@@ -1510,6 +1522,8 @@ def create_app(config: dict | None = None) -> Flask:
                 message=status.get("message", ""),
                 output=status.get("output", ""),
             )
+            context["code"] = status.get("code")
+            context["code_is_executed"] = bool(context["code"])
             if context["result"].success:
                 context["run_id"] = requested_run_id
                 context["show_movies"] = bool(status.get("show_movies", False))
@@ -1540,6 +1554,10 @@ def create_app(config: dict | None = None) -> Flask:
                         ), 202
                     progress_id = request.form.get("progress_id", "")
                     _set_run_progress(progress_id, "Grabbing and processing input data")
+                    # From this point onward, this exact string is the program
+                    # handed to the runner. Keep Show Code pinned to it even if
+                    # execution fails or the form is subsequently changed.
+                    context["code_is_executed"] = True
                     with _SURF_RUN_LOCK:
                         context["result"] = run_generated_code(
                             context["code"],
@@ -1565,6 +1583,7 @@ def create_app(config: dict | None = None) -> Flask:
                             context["result"].model,
                             simulation,
                             getattr(context["result"], "ambient_model", None),
+                            context["code"],
                         )
                         context["ambient_model_available"] = (
                             getattr(context["result"], "ambient_model", None) is not None
@@ -1923,7 +1942,7 @@ def create_app(config: dict | None = None) -> Flask:
                 )
             )
         except DonkiAccessError as exc:
-            abort(502, str(exc))
+            return str(exc), 502, {"Content-Type": "text/plain; charset=utf-8"}
 
     @app.get("/runs/<run_id>/timeseries.csv")
     def timeseries_csv(run_id: str):

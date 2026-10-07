@@ -421,6 +421,53 @@ class ConeCME:
         cme_r_field = model.cme_particles_r[cme_id, :, :, :]
         cme_v_field = model.cme_particles_v[cme_id, :, :, :]
 
+        # The common 1-D case has exactly two trajectories per CME.  Convert
+        # their complete time series in bulk; constructing Astropy Time and
+        # Quantity objects separately for every output step is substantially
+        # more expensive than the passive-particle integration itself.
+        if model.lon.size == 1:
+            model_lon = np.atleast_1d(model.lon)[0]
+            relative_lon = (model_lon - self.longitude).to_value(u.rad)
+            if relative_lon > np.pi:
+                relative_lon -= 2 * np.pi
+            elif relative_lon < -np.pi:
+                relative_lon += 2 * np.pi
+            tracked_lons = (
+                np.array([relative_lon, relative_lon]) * u.rad + self.longitude
+            ).to(model.lon.unit)
+            tracked_r = np.stack(
+                [cme_r_field[:, 0, 0].value, cme_r_field[:, 1, 0].value],
+                axis=1,
+            ) * u.km
+            tracked_r = tracked_r.to(model.r.unit)
+            tracked_v = np.stack(
+                [cme_v_field[:, 0, 0].value, cme_v_field[:, 1, 0].value],
+                axis=1,
+            ) * (u.km / u.s)
+            tracked_times = model.time_init + model.time_out
+            front_id = np.array([1.0, 0.0]) * u.dimensionless_unscaled
+            self.coords = {}
+            for j, model_time in enumerate(model.time_out):
+                entry = {
+                    'time': tracked_times[j],
+                    'model_time': model_time,
+                    'front_id': np.array([]) * u.dimensionless_unscaled,
+                    'lon': np.array([]) * model.lon.unit,
+                    'r': np.array([]) * model.r.unit,
+                    'lat': np.array([]) * model.latitude.unit,
+                    'v': np.array([]) * model.v_grid.unit,
+                }
+                if np.any(np.isfinite(tracked_r[j])):
+                    entry.update({
+                        'front_id': front_id.copy(),
+                        'lon': tracked_lons.copy(),
+                        'r': tracked_r[j].copy(),
+                        'lat': model.latitude.copy(),
+                        'v': tracked_v[j].copy(),
+                    })
+                self.coords[j] = entry
+            return
+
         # Setup dictionary to track this CME
         self.coords = {j: {'time': np.array([]), 'model_time': np.array([]) * u.s,
                            'front_id': np.array([]) * u.dimensionless_unscaled,
@@ -2194,7 +2241,8 @@ class SURF:
                         self._final_streak_r_state[i] = final_streak_r
 
         # Update CMEs positions by tracking through the solution.
-        if self.track_cmes:
+        if (self.track_cmes
+                and not getattr(self, '_defer_cme_coordinate_tracking', False)):
             updated_cmes = []
             for cme_num, cme in enumerate(self.cmes):
                 cme._track_(self, cme_num)
@@ -2874,7 +2922,20 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
         # Each chunk has a local time axis, so express cone launch times
         # relative to this chunk while leaving the caller's objects unchanged.
         model._streak_chunk_offset = chunk_start
-        model.solve([], streak_carr=streak_carr)
+        # Keep integrating and retaining the raw tracer trajectories in every
+        # chunk, but defer the expensive ConeCME.coords materialisation until
+        # the complete output timeline has been concatenated below.
+        had_defer_tracking = hasattr(model, '_defer_cme_coordinate_tracking')
+        previous_defer_tracking = getattr(
+            model, '_defer_cme_coordinate_tracking', False)
+        model._defer_cme_coordinate_tracking = True
+        try:
+            model.solve([], streak_carr=streak_carr)
+        finally:
+            if had_defer_tracking:
+                model._defer_cme_coordinate_tracking = previous_defer_tracking
+            else:
+                del model._defer_cme_coordinate_tracking
 
         # Collect output — offset time_out by elapsed time
         if model.nt_out > 0:

@@ -264,7 +264,7 @@ def build_generated_code(request: SimulationRequest) -> str:
                 else f"{function_prefix}_forecast"
             )
             forecast_datetime = ambient.get("forecast_datetime")
-            forecast_time = (
+            forecast_time_expression = (
                 f"datetime.datetime.fromisoformat({forecast_datetime!r})"
                 if forecast_datetime
                 else "start_time + datetime.timedelta(days=5)"
@@ -275,10 +275,18 @@ def build_generated_code(request: SimulationRequest) -> str:
                 raw_omni_start = "start_time - datetime.timedelta(days=28)"
                 raw_omni_end = "start_time + datetime.timedelta(days=simtime.to_value(u.day) + 28)"
             else:
-                call_start = forecast_time
-                second = "simtime=simtime, buffertime=5*u.day"
-                raw_omni_start = f"{forecast_time} - datetime.timedelta(days=28)"
-                raw_omni_end = f"{forecast_time} + datetime.timedelta(days=28)"
+                lines.extend(
+                    [
+                        f"forecast_time = {forecast_time_expression}",
+                        "if forecast_time < start_time:",
+                        "    raise ValueError('Forecast time must not be before the model start time')",
+                        "forecast_buffer = ((forecast_time - start_time).total_seconds()/86400)*u.day",
+                    ]
+                )
+                call_start = "forecast_time"
+                second = "simtime=simtime, buffertime=forecast_buffer"
+                raw_omni_start = "forecast_time - datetime.timedelta(days=28)"
+                raw_omni_end = "forecast_time + datetime.timedelta(days=28)"
             longitude_args = ""
             if not state.get("is_1d", False):
                 longitude_args = (
@@ -288,7 +296,7 @@ def build_generated_code(request: SimulationRequest) -> str:
             if spacecraft == "OMNI":
                 lines.extend(_raw_omni_gap_fill_lines(raw_omni_start, raw_omni_end))
             elif spacecraft == "SWPC":
-                swpc_end = raw_omni_end if fn.endswith("reconstruction") else forecast_time
+                swpc_end = raw_omni_end if fn.endswith("reconstruction") else "forecast_time"
                 lines.extend(_raw_swpc_gap_fill_lines(raw_omni_start, swpc_end))
             if spacecraft in {"OMNI", "SWPC"}:
                 if omni_icme_list != "None":
@@ -489,9 +497,11 @@ def build_generated_code(request: SimulationRequest) -> str:
         donki_query_feature = "" if donki_feature == "NULL" else donki_feature
         lines.extend(
             [
-                "donki_end_time = start_time + datetime.timedelta(days=simtime.to_value(u.day))",
+                "donki_start_time = model.time_init.to_datetime()",
+                "donki_end_time = donki_start_time + datetime.timedelta(days=simtime.to_value(u.day))",
+                "print(f'Querying DONKI cone CMEs from {donki_start_time} through {donki_end_time}')",
                 "try:",
-                f"    donki_cmes = sin.get_DONKI_cme_list(model, start_time, donki_end_time, feature={donki_query_feature!r})",
+                f"    donki_cmes = sin.get_DONKI_cme_list(model, donki_start_time, donki_end_time, feature={donki_query_feature!r})",
                 "except Exception as exc:",
                 "    raise RuntimeError('DONKI CME data could not be accessed') from exc",
                 "print(f'Loaded {len(donki_cmes)} DONKI cone CMEs for this run')",

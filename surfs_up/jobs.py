@@ -172,7 +172,12 @@ def process_one() -> bool:
         )
         code = build_generated_code(simulation)
         _raise_if_cancelled(job_id)
-        update_status(job_id, state="running", message="Grabbing and processing input data")
+        update_status(
+            job_id,
+            state="running",
+            message="Grabbing and processing input data",
+            code=code,
+        )
         result = run_generated_code(
             code,
             before_solve=lambda: (
@@ -197,6 +202,7 @@ def process_one() -> bool:
                 "model": result.model,
                 "ambient_model": getattr(result, "ambient_model", None),
                 "simulation": simulation,
+                "code": code,
                 "owner_session_id": payload["owner_session_id"],
             }
             if not _write_run_cache(job_id, retained):

@@ -225,7 +225,7 @@
           </label>
           <span class="pb-2 text-sm font-medium text-slate-600">Solver</span>
           <label><span class="sr-only">Solver</span>
-            <select name="solver"><option value="huxt">HUXt</option><option value="hydro">hydro</option><option value="huxt-pui">HUXt + PUI</option><option value="hydro-pui">hydro + PUI</option></select>
+            <select name="solver"><option value="huxt">HUXt</option><option value="hydro" selected>hydro</option><option value="huxt-pui">HUXt + PUI</option><option value="hydro-pui">hydro + PUI</option></select>
           </label>
           <label class="pb-2"><span><input name="include_bpol" type="checkbox"> Include B polarity</span></label>
         </div>
@@ -298,13 +298,13 @@
     </section>
 
     <section class="tab-panel form-grid" data-panel="ambient" role="tabpanel">
-    <input type="hidden" name="ambient_source" id="ambient-source" value="wsa_iswa">
+    <input type="hidden" name="ambient_source" id="ambient-source" value="insitu_backmapped">
     <div class="inner-tabs wide" id="ambient-source-tabs">
       {% for value, label in [
         ("mas", "MAS (PredSci)"), ("wsa_iswa", "WSA (ISWA)"),
         ("omni_group", "In Situ"), ("user_specified_group", "User specified")
       ] %}
-      <button type="button" class="inner-tab-button ambient-tab-button {% if value == 'wsa_iswa' %}active{% endif %}"
+      <button type="button" class="inner-tab-button ambient-tab-button {% if value == 'omni_group' %}active{% endif %}"
               data-ambient-tab="{{ value }}">{{ label }}</button>
       {% endfor %}
     </div>
@@ -318,7 +318,7 @@
       </div>
       <div class="mt-4"><button type="button" onclick="showAmbientPlot(this)">Plot MAS input</button></div>
     </fieldset>
-    <fieldset class="group-box source-panel active" data-source-panel="wsa_iswa">
+    <fieldset class="group-box source-panel" data-source-panel="wsa_iswa">
       <legend class="group-title px-1">WSA map from ISWA</legend>
       <div class="control-row">
         <div class="datetime-sync-row">
@@ -332,7 +332,7 @@
       </div>
       <div class="mt-4"><button type="button" onclick="showAmbientPlot(this)">Plot WSA input</button></div>
     </fieldset>
-    <fieldset class="group-box source-panel" data-source-panel="omni_group">
+    <fieldset class="group-box source-panel active" data-source-panel="omni_group">
       <legend class="group-title px-1">In Situ boundary conditions</legend>
       <div class="inner-tabs" data-inner-tabs="omni-boundaries">
         <button type="button" class="inner-tab-button active" data-inner-tab="omni-backmapped"
@@ -480,7 +480,7 @@
             Grab DONKI CMEs at run start</span>
         </label>
         <label>
-          <span><input name="run_ambient_solution" type="checkbox">
+          <span><input name="run_ambient_solution" type="checkbox" checked>
             Also run ambient solution (no CMEs)</span>
         </label>
         <label>DONKI feature<select name="donki_feature" id="donki-feature"><option value="LE">Leading edge (LE) (default)</option><option value="SH">Shock (SH)</option><option value="null">Unspecified / null (for early DONKI catalogue use)</option></select></label>
@@ -593,7 +593,7 @@
             <label class="grid items-center gap-3 sm:grid-cols-[10rem_1fr]">Longitude (deg)
               <input id="radial-lon" type="number" min="-360" max="360" step="1" value="0">
             </label>
-            {% if ambient_model_available %}<label><span><input id="radial-show-ambient" class="show-ambient-solution" type="checkbox"> Show ambient solution</span></label>{% endif %}
+            {% if ambient_model_available %}<label><span><input id="radial-show-ambient" class="show-ambient-solution" type="checkbox" checked> Show ambient solution</span></label>{% endif %}
             <div><button type="button" onclick="showPlot('radial', this)">Plot Radial Profile</button></div>
           </div>
         </section>
@@ -616,7 +616,7 @@
               <select id="timeseries-insitu-source"><option value="OMNI"{% if default_insitu_source == "OMNI" %} selected{% endif %}>OMNI</option><option value="SWPC"{% if default_insitu_source == "SWPC" %} selected{% endif %}>SWPC real-time L1</option></select>
             </label>
             <p class="text-sm text-slate-500">Standard locations follow each observer's ephemeris throughout the run. Custom longitude is fixed on the SURF model grid: HEEQ/model longitude at run start for sidereal runs, or corotating model longitude for synodic runs.</p>
-            {% if ambient_model_available %}<label><span><input id="timeseries-show-ambient" class="show-ambient-solution" type="checkbox"> Show ambient solution</span></label>{% endif %}
+            {% if ambient_model_available %}<label><span><input id="timeseries-show-ambient" class="show-ambient-solution" type="checkbox" checked> Show ambient solution</span></label>{% endif %}
             <div class="hidden grid-cols-1 items-end gap-3 sm:grid-cols-[10rem_1fr_1fr]" id="timeseries-custom-coordinates">
               <span class="pb-2 text-sm font-medium text-slate-700">Custom coordinates</span>
               <label>Radius (AU)<input id="plot-radius" type="number" min="0.1" max="10" step="0.1" value="1"></label>
@@ -675,7 +675,7 @@
             <div class="flex flex-wrap items-center gap-4">
               <label><span><input id="movie-ts-omni" type="checkbox" checked> Plot observations</span></label>
               <label>Earth observations <select id="movie-ts-insitu-source"><option value="OMNI"{% if default_insitu_source == "OMNI" %} selected{% endif %}>OMNI</option><option value="SWPC"{% if default_insitu_source == "SWPC" %} selected{% endif %}>SWPC real-time L1</option></select></label>
-              {% if ambient_model_available %}<label><span><input id="movie-ts-ambient" type="checkbox"> Show ambient solution</span></label>{% endif %}
+              {% if ambient_model_available %}<label><span><input id="movie-ts-ambient" type="checkbox" checked> Show ambient solution</span></label>{% endif %}
             </div>
             <label class="grid items-center gap-3 sm:grid-cols-[6rem_1fr]">Field
               <select id="movie-ts-field"><option>P_DYN</option><option selected>V</option><option>n</option><option>T</option></select>
@@ -901,7 +901,7 @@
   <dialog id="generated-code-dialog">
     <div class="p-5 sm:p-7">
       <div class="mb-4 flex items-center justify-between gap-3">
-        <h2 class="m-0">Generated Code</h2>
+        <h2 class="m-0">{% if code_is_executed %}Executed Code{% else %}Generated Code{% endif %}</h2>
         <div class="button-group">
           <button type="button" class="secondary-button" id="copy-generated-code">Copy Code</button>
           <button type="button" class="secondary-button" onclick="this.closest('dialog').close()">Close</button>
@@ -1089,6 +1089,7 @@
     const generatedCodeButton = document.getElementById("show-generated-code");
     const copyGeneratedCodeButton = document.getElementById("copy-generated-code");
     const generatedCodePre = generatedCodeDialog ? generatedCodeDialog.querySelector("pre") : null;
+    let codeIsExecuted = {{ code_is_executed|tojson }};
     let baseGeneratedCodeText = generatedCodePre ? generatedCodePre.textContent : "";
     let generatedCodeUpdateTimer = null;
     let generatedCodeRequestId = 0;
@@ -1105,6 +1106,7 @@
         codeText +=
           "\n\n# Plotting code run from the web interface\n" +
           "import matplotlib.pyplot as plt\n" +
+          "import numpy as np\n" +
           "import surf.surf_analysis as sa\n\n" +
           plotCodeHistory.join("\n\n") +
           "\n";
@@ -1119,6 +1121,10 @@
 
     async function updateGeneratedCode(showBusy = false) {
       if (!generatedCodePre || !runForm) return;
+      if (codeIsExecuted) {
+        refreshGeneratedCodeDialog();
+        return;
+      }
       const requestId = ++generatedCodeRequestId;
       if (showBusy) {
         generatedCodePre.textContent = "Generating code...";
@@ -1152,6 +1158,7 @@
 
     function scheduleGeneratedCodeUpdate() {
       if (!generatedCodePre || !runForm) return;
+      if (codeIsExecuted) return;
       window.clearTimeout(generatedCodeUpdateTimer);
       generatedCodeUpdateTimer = window.setTimeout(() => {
         updateGeneratedCode(false);
@@ -1159,6 +1166,7 @@
     }
 
     function resetGeneratedCodeForCurrentState() {
+      if (codeIsExecuted) return;
       plotCodeHistory.length = 0;
       baseGeneratedCodeText = "";
       generatedCodeRequestId += 1;
@@ -1254,18 +1262,38 @@
       if (kind === "radial") {
         const radialTime = document.getElementById("radial-time").value;
         const radialLon = document.getElementById("radial-lon").value;
-        return [
+        const showAmbient = document.getElementById("radial-show-ambient")?.checked;
+        const lines = [
           "# Plot variables along a radial line at fixed longitude.",
-          "sa.plot_radial(",
+          "from surfs_up.core import plot_radial",
+          "figure, axes = plot_radial(",
           "    model,",
           `    ${Number(radialTime).toFixed(1)} * u.day,`,
           `    lon=${Number(radialLon).toFixed(1)} * u.deg,`,
           ")",
-          "plt.show()",
-        ].join("\n");
+        ];
+        if (showAmbient) {
+          lines.push(
+            "# Overlay the separately evolved, CME-free ambient solution.",
+            `time = ${Number(radialTime).toFixed(1)} * u.day`,
+            `lon = ${Number(radialLon).toFixed(1)} * u.deg`,
+            "ti = int(np.argmin(np.abs(ambient_model.time_out - time)))",
+            "li = 0 if ambient_model.lon.size == 1 else int(np.argmin(np.abs(ambient_model.lon - lon)))",
+            "axes = np.atleast_1d(axes)",
+            "axes[0].plot(ambient_model.r, ambient_model.v_grid[ti, :, li], 'b--', label='Ambient (no CMEs)')",
+            "if getattr(ambient_model, 'compressible', False):",
+            "    axes[1].semilogy(ambient_model.r, ambient_model.rho_grid[ti, :, li].value / 1.6726e-27 / 1e6, 'b--', label='Ambient (no CMEs)')",
+            "    axes[2].semilogy(ambient_model.r, ambient_model.temp_grid[ti, :, li].value, 'b--', label='Ambient (no CMEs)')",
+            "for axis in axes:",
+            "    axis.legend()",
+          );
+        }
+        lines.push("plt.show()");
+        return lines.join("\n");
       }
       if (kind === "timeseries") {
         const observer = document.getElementById("timeseries-observer").value;
+        const showAmbient = document.getElementById("timeseries-show-ambient")?.checked;
         if (observer === "Earth") {
           const plotOmni = document.getElementById("timeseries-plot-omni").checked;
           const insituSource = document.getElementById("timeseries-insitu-source").value;
@@ -1284,13 +1312,25 @@
           } else {
             lines.push("sa.plot_earth_timeseries(model, plot_omni=False)");
           }
+          if (showAmbient) {
+            lines.push(
+              "ambient_series = sa.get_observer_timeseries(ambient_model, observer='Earth')",
+              "ambient_times = ambient_series['time']",
+              "for axis, key in zip(np.atleast_1d(plt.gcf().axes), ('vsw', 'bpol', 'n', 'T')):",
+              "    if key not in ambient_series:",
+              "        continue",
+              "    values = np.sign(ambient_series[key]) if key == 'bpol' else ambient_series[key]",
+              "    axis.plot(ambient_times, values, 'b--', label='Ambient (no CMEs)')",
+              "    axis.legend()",
+            );
+          }
           lines.push("plt.show()");
           return lines.join("\n");
         }
         if (observer === "custom") {
           const radius = document.getElementById("plot-radius").value;
           const lon = document.getElementById("timeseries-lon").value;
-          return [
+          const lines = [
             "# Plot a time series at a fixed radius and SURF model longitude.",
             "# In sidereal runs this is HEEQ/model longitude at run start;",
             "# in synodic runs this is the corotating model longitude.",
@@ -1299,8 +1339,21 @@
             `    ${Number(radius).toFixed(1)} * u.AU,`,
             `    lon=${Number(lon).toFixed(1)} * u.deg,`,
             ")",
-            "plt.show()",
-          ].join("\n");
+          ];
+          if (showAmbient) {
+            lines.push(
+              "from surfs_up.core import sample_custom_timeseries",
+              `ambient_series = sample_custom_timeseries(ambient_model, ${Number(radius).toFixed(1)} * u.AU, ${Number(lon).toFixed(1)} * u.deg)`,
+              "ambient_times = ambient_series.get('time', ambient_series.get('time_days'))",
+              "ambient_keys = [key for key in ('vsw', 'bpol', 'n', 'T') if key in ambient_series]",
+              "for axis, key in zip(np.atleast_1d(plt.gcf().axes), ambient_keys):",
+              "    values = np.sign(ambient_series[key]) if key == 'bpol' else ambient_series[key]",
+              "    axis.plot(ambient_times, values, 'b--', label='Ambient (no CMEs)')",
+              "    axis.legend()",
+            );
+          }
+          lines.push("plt.show()");
+          return lines.join("\n");
         }
         const lines = [
           "# Sample the moving observer and plot the available model variables.",
@@ -1333,6 +1386,17 @@
             "import surf.surf_insitu as sinsit",
             `observations = sinsit.${grabber}(time_series['time'].iloc[0], time_series['time'].iloc[-1])`,
             "# Overlay observations on the corresponding SURF time-series panels.",
+          );
+        }
+        if (showAmbient) {
+          lines.push(
+            `ambient_series = sa.get_observer_timeseries(ambient_model, observer=${JSON.stringify(observer)})`,
+            "ambient_times = ambient_series['time']",
+            "ambient_keys = [key for key in ('vsw', 'bpol', 'n', 'T') if key in ambient_series]",
+            "for axis, key in zip(np.atleast_1d(plt.gcf().axes), ambient_keys):",
+            "    values = np.sign(ambient_series[key]) if key == 'bpol' else ambient_series[key]",
+            "    axis.plot(ambient_times, values, 'b--', label='Ambient (no CMEs)')",
+            "    axis.legend()",
           );
         }
         lines.push("plt.show()");
@@ -1451,7 +1515,7 @@
         invalidateCompletedRun();
       });
     });
-    showAmbientPanel("wsa_iswa");
+    showAmbientPanel("insitu_backmapped");
 
     const speedProfileText = document.getElementById("speed-profile");
     const speedProfileCanvas = document.getElementById("speed-profile-canvas");
@@ -1947,6 +2011,7 @@
     function invalidateCompletedRun() {
       if (!runIsCurrent) return;
       runIsCurrent = false;
+      codeIsExecuted = false;
       if (grabDonkiAtRunStart.checked && cmes.length) {
         cmes.splice(0, cmes.length);
         selectedCmeIndex = -1;
@@ -1998,7 +2063,7 @@
         speedProfile = loadedProfile;
         renderSpeedProfile();
       }
-      showAmbientPanel(ambientSourceInput.value || "wsa_iswa");
+      showAmbientPanel(ambientSourceInput.value || "insitu_backmapped");
       if (invalidateRun) invalidateCompletedRun();
     }
     let runInProgress = false;
@@ -2183,14 +2248,6 @@
       forecast.setUTCDate(forecast.getUTCDate() + 5);
       omniForecastDatetime.value = forecast.toISOString().slice(0, 19);
     }
-    function syncModelStartFromOmniForecastTime() {
-      if (!omniForecastDatetime?.value) return;
-      const modelStart = utcInputDate(omniForecastDatetime);
-      if (!Number.isFinite(modelStart.getTime())) return;
-      modelStart.setUTCDate(modelStart.getUTCDate() - 5);
-      modelStartInput.value = modelStart.toISOString().slice(0, 19);
-      modelStartInput.dispatchEvent(new Event("change", {bubbles: true}));
-    }
     let insituSpacecraftManuallySelected = restoredPreRunConfiguration;
     function syncDefaultInsituSpacecraft() {
       if (!insituSpacecraft || insituSpacecraftManuallySelected || !omniForecastDatetime?.value) return;
@@ -2367,13 +2424,11 @@
     modelStartInput.addEventListener("change", () => {
       syncModelEndFromDuration();
       clearCmesForStartTimeChange();
-      syncOmniForecastTime();
       syncDefaultInsituSpacecraft();
       updateCoordinates({datetime: modelStartInput.value}).catch(console.error);
     });
     modelStartInput.addEventListener("input", () => {
       syncModelEndFromDuration();
-      syncOmniForecastTime();
       syncDefaultInsituSpacecraft();
     });
     modelStartInput.addEventListener("input", syncOmniIcmeDefault);
@@ -2405,7 +2460,6 @@
       insituMode.addEventListener("change", syncOmniForecastTimeState);
       syncOmniForecastTimeState();
     }
-    omniForecastDatetime?.addEventListener("change", syncModelStartFromOmniForecastTime);
     if (iswaUseModelStart) {
       iswaUseModelStart.addEventListener("change", syncIswaMapDateState);
       iswaMapDate.addEventListener("change", syncModelStartFromIswaMapDate);
