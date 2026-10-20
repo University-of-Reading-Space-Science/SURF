@@ -682,7 +682,10 @@ class ConeCME:
 
         if not hit:
             hit_id = False
-            t_arrive = Time("0000-01-01T00:00:00")
+            # Use a masked Time for a non-arrival.  The previous year-zero
+            # sentinel triggered ERFA "dubious year" warnings whenever a CME
+            # missed the requested body/location.
+            t_arrive = Time(np.ma.array(0.0, mask=True), format='jd')
             t_transit = np.nan * u.day
             hit_lon = np.nan * u.deg
             hit_rad = np.nan * u.solRad

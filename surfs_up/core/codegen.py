@@ -487,6 +487,7 @@ def build_generated_code(request: SimulationRequest) -> str:
         ]
     )
     lines.append("cme_list = []")
+    default_cme_profile = "square"
     if state.get("grab_donki_at_run_start"):
         donki_defaults = state.get("donki_cme_defaults", {})
         donki_feature = str(donki_defaults.get("feature", "LE")).strip().upper()
@@ -506,7 +507,7 @@ def build_generated_code(request: SimulationRequest) -> str:
                 "    raise RuntimeError('DONKI CME data could not be accessed') from exc",
                 "print(f'Loaded {len(donki_cmes)} DONKI cone CMEs for this run')",
                 "for donki_cme in donki_cmes:",
-                f"    donki_cme.profile_type = {donki_defaults.get('profile_type', 'sinusoidal' if solver in {'hydro', 'hydro-pui'} else 'square')!r}",
+                f"    donki_cme.profile_type = {donki_defaults.get('profile_type', default_cme_profile)!r}",
                 f"    donki_cme.cme_expansion = {bool(donki_defaults.get('cme_expansion', False))}",
                 f"    donki_cme.cme_fixed_duration = {bool(donki_defaults.get('cme_fixed_duration', True))}",
                 f"    donki_cme.fixed_duration = {float(donki_defaults.get('fixed_duration_hr', 12))}*u.hour",
@@ -540,7 +541,7 @@ def build_generated_code(request: SimulationRequest) -> str:
             f"cme_fixed_duration={bool(cme.get('cme_fixed_duration', True))}",
             f"fixed_duration={float(cme.get('fixed_duration_hr', 12))}*u.hour",
             *plasma,
-            f"profile_type={cme.get('profile_type', 'square')!r}",
+            f"profile_type={cme.get('profile_type', default_cme_profile)!r}",
         ]
         lines.extend(
             [f"cme_{index} = s.ConeCME(" + ", ".join(args) + ")", f"cme_list.append(cme_{index})"]

@@ -39,6 +39,28 @@ def _is_compressible_solver(solver):
     return solver in ("hydro", "hydro-pui", "hydro-pcm", "hydro-pcm-pui")
 
 
+def _fill_insitu_data_gaps(data):
+    """Fill ordinary gaps without masking any ICME intervals.
+
+    ICME removal also interpolates its newly masked speed and magnetic-field
+    samples.  Keep that catalogue-dependent operation separate from the basic
+    cleanup required by every in-situ boundary, including ``icme_list=None``.
+    """
+    filled = data.sort_values('datetime').copy()
+    columns = [
+        column for column in ('V', 'BX_GSE', 'BR', 'B', 'N', 'T')
+        if column in filled.columns
+    ]
+    if columns:
+        filled[columns] = (
+            filled[columns]
+            .interpolate(method='linear', limit_direction='both')
+            .ffill()
+            .bfill()
+        )
+    return filled
+
+
 def get_omni(starttime, endtime):
     """
     A function to grab and process the OMNI COHO1HR data using FIDO
@@ -1678,6 +1700,9 @@ def omniSURF_forecast(ftime, simtime=27.27*u.day, rmin=21.5*u.solRad, rmax=230*u
                 pre_icme_buffer=pre_icme_buffer,
                 post_icme_buffer=post_icme_buffer
             )
+
+    # Gap filling is required whether or not ICME masking was requested.
+    omni_input = _fill_insitu_data_gaps(omni_input)
     
     # cut out the precise bit of the OMNI data that is required
     mask = (omni_input['datetime'] <= ftime)
@@ -2044,6 +2069,9 @@ def omniSURF_reconstruction(start_time, end_time, rmin=21.5*u.solRad, rmax=230*u
                 pre_icme_buffer=pre_icme_buffer,
                 post_icme_buffer=post_icme_buffer
             )
+
+    # Gap filling is required whether or not ICME masking was requested.
+    omni_input = _fill_insitu_data_gaps(omni_input)
     
     # Determine if we need density and temperature from OMNI
     need_compressible = _is_compressible_solver(solver)

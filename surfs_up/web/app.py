@@ -673,9 +673,7 @@ def _fetch_donki_cmes(
                 "cme_expansion": False,
                 "cme_fixed_duration": True,
                 "fixed_duration_hr": 12,
-                "profile_type": (
-                    "sinusoidal" if str(solver).strip().lower() in {"hydro", "hydro-pui"} else "square"
-                ),
+                "profile_type": "square",
                 "cme_density_pcc": 600.0,
                 "cme_temperature_k": 1000000.0,
                 "source": "donki",
@@ -1249,6 +1247,8 @@ def _request_from_form() -> SimulationRequest:
             raise ValueError("Minimum DONKI ICME quality must be -1, 0, 1, or 2.")
         ambient["donki_icme_min_quality"] = donki_min_quality
 
+    solver = request.form.get("solver", "hydro").strip().lower()
+    default_cme_profile = "square"
     cmes_text = request.form.get("cmes_json", "").strip()
     cmes = json.loads(cmes_text) if cmes_text else []
     if not isinstance(cmes, list):
@@ -1275,7 +1275,7 @@ def _request_from_form() -> SimulationRequest:
                     "cme_expansion": False,
                     "cme_fixed_duration": True,
                     "fixed_duration_hr": 12,
-                    "profile_type": "square",
+                    "profile_type": default_cme_profile,
                     "cme_density_pcc": 600.0,
                     "cme_temperature_k": 1000000.0,
                 }
@@ -1283,7 +1283,7 @@ def _request_from_form() -> SimulationRequest:
     simtime_days = _float("simtime_days", 10.0)
     return SimulationRequest.from_mappings(
         {
-            "solver": request.form.get("solver", "hydro"),
+            "solver": solver,
             "rmin": _float("rmin", 21.5),
             "rmax": _float("rmax", 240.0),
             "lon_min": _float("lon_min", 0.0),
@@ -1304,7 +1304,7 @@ def _request_from_form() -> SimulationRequest:
                 "fixed_duration_hr": _float("donki_fixed_duration_hr", 12.0),
                 "profile_type": request.form.get(
                     "donki_profile_type",
-                    "sinusoidal" if request.form.get("solver", "hydro") in {"hydro", "hydro-pui"} else "square",
+                    default_cme_profile,
                 ),
                 "cme_density_pcc": _float("donki_cme_density_pcc", 600.0),
                 "cme_temperature_k": _float("donki_cme_temperature_k", 1000000.0),

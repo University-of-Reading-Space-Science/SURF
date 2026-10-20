@@ -68,6 +68,33 @@ def test_surfs_up_defaults_to_hydro_insitu_and_ambient_comparison():
     assert 'showAmbientPanel("insitu_backmapped")' in template
 
 
+def test_surfs_up_defaults_all_cme_profiles_to_square():
+    template = (
+        Path(app.__file__).with_name("templates") / "index.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="donki-profile"><option selected>square</option>' in template
+    assert 'id="cme-profile"><option selected>square</option>' in template
+    assert 'document.getElementById("donki-profile").value = "square";' in template
+
+    simulation = SimulationRequest.from_mappings(
+        {
+            "solver": "hydro",
+            "start_datetime": "2026-10-01T00:00:00",
+            "simtime_days": 5,
+            "rmin": 21.5,
+            "rmax": 240,
+            "latitude": 0,
+            "cr_num": 2300,
+            "cr_lon_init_deg": 0,
+        },
+        {"source": "user_specified", "speed_profile_kms": [400.0] * 8},
+        [{"t_launch_day": 1, "longitude": 0, "latitude": 0, "width": 60, "speed": 900}],
+    )
+
+    assert "profile_type='square'" in build_generated_code(simulation)
+
+
 def test_completed_run_code_is_not_regenerated_but_accepts_plot_history():
     template = (
         Path(app.__file__).with_name("templates") / "index.html"
@@ -157,6 +184,36 @@ def test_insitu_forecast_uses_gui_start_to_compute_buffer():
     assert "forecast_buffer = ((forecast_time - start_time).total_seconds()/86400)*u.day" in code
     assert "buffertime=forecast_buffer" in code
     assert "buffertime=5*u.day" not in code
+
+
+def test_insitu_without_icme_removal_still_fills_observation_gaps():
+    simulation = SimulationRequest.from_mappings(
+        {
+            "solver": "hydro",
+            "start_datetime": "2026-09-28T00:00:00",
+            "simtime_days": 15,
+            "rmin": 21.5,
+            "rmax": 240,
+            "latitude": 0,
+            "cr_num": 2300,
+            "cr_lon_init_deg": 0,
+        },
+        {
+            "source": "insitu_backmapped",
+            "mode": "forecast",
+            "spacecraft": "OMNI",
+            "forecast_datetime": "2026-10-07T00:00:00",
+            "icme_list": "None",
+        },
+        [],
+    )
+
+    code = build_generated_code(simulation)
+
+    assert "omni_input[omni_numeric].interpolate(" in code
+    assert "limit_direction='both'" in code
+    assert "sinsit.removeICMEs(" not in code
+    assert "icme_list='None'" in code
 
 
 def test_run_start_donki_query_uses_constructed_model_interval():
