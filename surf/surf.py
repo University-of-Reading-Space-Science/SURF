@@ -221,9 +221,10 @@ class Observer:
 
             # Ensure model times are within the span of the synth_heeq_pos times, as otherwise
             # interpolation will give incorrect results.
-            time_check = (self.time.jd[0] >= synth_heeq_pos['time'].jd[0]) & (
-                        self.time.jd[-1] <=
-                        synth_heeq_pos['time'].jd[-1])
+            time_check = (
+                    (self.time.jd[0] >= synth_heeq_pos['time'].jd[0]) &
+                    (self.time.jd[-1] <= synth_heeq_pos['time'].jd[-1])
+            )
 
             if not time_check:
                 raise ValueError(
@@ -2242,13 +2243,18 @@ class SURF3d:
             solver: SURF solver to use. Defaults to 'huxt'.
             track_cmes: Boolean, whether to track CMEs in the simulation.
         """
-
         # Define latitude grid
         self.latitude_min = latitude_min.to(u.rad)
         self.latitude_max = latitude_max.to(u.rad)
+        #print(f"nlat: {nlat}, nlon: {nlon}")
         self.lat, self.nlat = latitude_grid(
             self.latitude_min, self.latitude_max, nlat=nlat)
+
         self.track_cmes = track_cmes
+        # print(
+        #     f"self.latitude_min = {self.latitude_min}, self.latitude_max = {self.latitude_max},"
+        #     f" self.nlat={self.nlat}, nlat={nlat}"
+        # )
 
         assert len(v_map_lat) == len(v_map[:, 1])
         assert len(v_map_long) == len(v_map[1, :])
@@ -2293,6 +2299,21 @@ class SURF3d:
             model.solve(cme_list)
 
         return
+
+    def get_observer(self, body):
+        """
+        Returns an instance of the Observer class, giving the HEEQ and Carrington coordinates at
+        each model timestep. This is only well-defined if the model was initialised with a
+        Carrington rotation number.
+        Args:
+            body: String specifying which body to look up. Valid bodies are Earth, Venus, Mercury,
+                  STA, and STB.
+        Returns:
+            obs: An Observer instance for body at times from SURF.time_init + SURF.time_out
+        """
+        times = self.SURFlat[0].time_init + self.SURFlat[0].time_out
+        obs = Observer(body, times)
+        return obs
 
 
 def surf_constants():
