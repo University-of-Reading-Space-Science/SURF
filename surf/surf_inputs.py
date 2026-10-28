@@ -770,7 +770,7 @@ def _find_previous_iswa_wsa_map(timestamp, version, timeout, base_url):
     """Find the latest GONG_Z WSA map URL at or before ``timestamp``."""
     root_url = (
         f'{base_url}/{version}/R21.5/WSA_VEL/GONG_Z/')
-
+    print(f"root_url: {root_url}")
     year_pattern = re.compile(r'^(\d{4})/$')
     years = []
     for link in _iswa_directory_links(root_url, timeout):
@@ -780,10 +780,11 @@ def _find_previous_iswa_wsa_map(timestamp, version, timeout, base_url):
 
     month_pattern = re.compile(r'^(\d{2})/$')
     filename_pattern = re.compile(
-        r'^vel_(\d{12})R\d+_gongz\.fits$', re.IGNORECASE)
+        r'^vel_(\d{12})R\d+_gong(z|_z)\.fits$', re.IGNORECASE)
 
     for year in sorted(years, reverse=True):
         year_url = f'{root_url}{year:04d}/'
+        print(f"year_url: {year_url}")
         months = []
         for link in _iswa_directory_links(year_url, timeout):
             match = month_pattern.match(link)
@@ -794,15 +795,18 @@ def _find_previous_iswa_wsa_map(timestamp, version, timeout, base_url):
 
         for month in sorted(months, reverse=True):
             month_url = f'{year_url}{month:02d}/'
+            print(f"month_url: {month_url}")
             candidates = []
             for link in _iswa_directory_links(month_url, timeout):
                 filename = urllib.parse.unquote(Path(link).name)
                 match = filename_pattern.match(filename)
+                print(f"filename: {filename}, match: {match}")
                 if match:
                     file_time = datetime.datetime.strptime(
                         match.group(1), '%Y%m%d%H%M')
                     if file_time <= timestamp:
                         candidates.append((file_time, filename))
+            print(f"candidates: {candidates}")
 
             if candidates:
                 file_time, filename = max(candidates)
@@ -862,6 +866,7 @@ def get_WSA_from_ISWA(
     selected = None
     selected_version = None
     for version in versions:
+        print(f"WSA version = {version}")
         version_result = _find_previous_iswa_wsa_map(
             timestamp, version, timeout, base_url)
         if (version_result is not None and
