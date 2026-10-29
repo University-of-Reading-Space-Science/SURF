@@ -1,0 +1,74 @@
+{
+  "reference": {
+    "dr_solRad": 1.5,
+    "radial_cells": 211,
+    "cme_peak_factor": 1.0,
+    "boundary_peak_speed_kms": 2388.357187927886,
+    "output_cadence_seconds": 347.85,
+    "interpolation_radii_AU": [
+      0.9975252274763827,
+      1.004500928367826
+    ],
+    "vr_kms": {
+      "ambient": 469.9057784229094,
+      "peak": 2241.780494300432,
+      "peak_time_hours": 27.538125,
+      "prearrival_relative_drift": 0.0
+    },
+    "number_density_cm3": {
+      "ambient": 1.122987080686521,
+      "peak": 113.9623112313711,
+      "peak_time_hours": 26.08875,
+      "prearrival_relative_drift": 0.0
+    },
+    "Bt_nT": {
+      "ambient": 1.85776169752733,
+      "peak": 65.10834579095584,
+      "peak_time_hours": 25.412375,
+      "prearrival_relative_drift": 0.0
+    },
+    "temperature_K": {
+      "ambient": 91259.42096230281,
+      "peak": 37545808.787657075,
+      "peak_time_hours": 23.576500000000003,
+      "prearrival_relative_drift": 0.0
+    },
+    "arrival_speed_plus50_hours": 23.286625
+  },
+  "half_speed": {
+    "dr_solRad": 1.5,
+    "radial_cells": 211,
+    "cme_peak_factor": 0.5,
+    "boundary_peak_speed_kms": 1194.178593963943,
+    "output_cadence_seconds": 347.85,
+    "interpolation_radii_AU": [
+      0.9975252274763827,
+      1.004500928367826
+    ],
+    "vr_kms": {
+      "ambient": 469.9057784229094,
+      "peak": 1112.4008811150886,
+      "peak_time_hours": 39.423,
+      "prearrival_relative_drift": 0.0
+    },
+    "number_density_cm3": {
+      "ambient": 1.122987080686521,
+      "peak": 49.21410576379392,
+      "peak_time_hours": 40.389250000000004,
+      "prearrival_relative_drift": 0.0
+    },
+    "Bt_nT": {
+      "ambient": 1.85776169752733,
+      "peak": 28.939324819369062,
+      "peak_time_hours": 40.002750000000006,
+      "prearrival_relative_drift": 0.0
+    },
+    "temperature_K": {
+      "ambient": 91259.42096230281,
+      "peak": 6476411.995417864,
+      "peak_time_hours": 37.490500000000004,
+      "prearrival_relative_drift": 0.0
+    },
+    "arrival_speed_plus50_hours": 36.52425
+  }
+}

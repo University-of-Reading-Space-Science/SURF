@@ -405,8 +405,9 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
                       annotateplot=True, plot_rmax=None, plotHCS=False,
                       show_body_latitudes=False, bodies=None):
     """
-    Make three contour plots on polar axes of the compressible solar wind solution at a specific
-    time. Shows velocity, density, and temperature in separate subplots.
+    Plot a compressible solar-wind solution in the ecliptic plane. Hydro solutions use three
+    panels (velocity, density, and temperature). MHD solutions use a 2x2 layout with magnetic
+    field magnitude, ``B``, in the fourth panel.
     
     Args:
         model: An instance of the SURF class with a completed compressible solution.
@@ -425,7 +426,7 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
                 model-radius and model-date dependent defaults.
     Returns:
         fig: Figure handle.
-        axes: Array of axes handles [ax_v, ax_rho, ax_T].
+        axes: Array of axes handles [ax_v, ax_rho, ax_T], plus ax_Brr for MHD.
     """
     
     if not hasattr(model, 'rho_grid') or not hasattr(model, 'temp_grid'):
@@ -435,16 +436,30 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
     if (time < model.time_out.min()) | (time > (model.time_out.max())):
         print("Error, input time outside span of model times. Defaulting to closest time")
 
-    # Create figure with 3 subplots
+    is_mhd = bool(getattr(model, 'mhd', False)) and hasattr(model, 'br_grid')
+
+    # MHD gets a fourth magnetic-field-magnitude panel.
     if isinstance(fighandle, float):
-        fig, axes = plt.subplots(1, 3, figsize=(24, 8),
-                                 subplot_kw={"projection": "polar"})
+        if is_mhd:
+            fig, axes = plt.subplots(2, 2, figsize=(16, 14),
+                                     subplot_kw={"projection": "polar"})
+            axes = axes.ravel()
+        else:
+            fig, axes = plt.subplots(1, 3, figsize=(24, 8),
+                                     subplot_kw={"projection": "polar"})
     else:
         fig = fighandle
-        axes = [fig.add_subplot(1, 3, i+1, projection='polar') for i in range(3)]
+        if is_mhd:
+            axes = [fig.add_subplot(2, 2, i+1, projection='polar') for i in range(4)]
+        else:
+            axes = [fig.add_subplot(1, 3, i+1, projection='polar') for i in range(3)]
 
-    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.15, top=0.95,
-                        wspace=-0.3)
+    if is_mhd:
+        fig.subplots_adjust(left=0.04, right=0.96, bottom=0.08, top=0.94,
+                            wspace=0.12, hspace=0.32)
+    else:
+        fig.subplots_adjust(left=0.02, right=0.98, bottom=0.15, top=0.95,
+                            wspace=-0.3)
 
     id_t = np.argmin(np.abs(model.time_out - time))
 
@@ -457,6 +472,11 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
     v_sub = model.v_grid.value[id_t, :, :].copy()
     rho_sub = model.rho_grid.value[id_t, :, :].copy()
     temp_sub = model.temp_grid.value[id_t, :, :].copy()
+    if is_mhd:
+        bmag_sub = np.sqrt(
+            model.br_grid[id_t].to_value(u.nT) ** 2
+            + model.bt_grid[id_t].to_value(u.nT) ** 2
+            + model.bn_grid[id_t].to_value(u.nT) ** 2)
     
     # Convert density to number density (protons/cm³)
     m_p = 1.6726e-27  # kg
@@ -467,18 +487,24 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
         v = np.zeros((model.nr, nlon)) * np.nan
         n = np.zeros((model.nr, nlon)) * np.nan
         temp = np.zeros((model.nr, nlon)) * np.nan
+        if is_mhd:
+            bmag = np.zeros((model.nr, nlon)) * np.nan
         if model.lon.size != 1:
             for i, lo in enumerate(model.lon):
                 id_match = np.argmin(np.abs(lon_arr - lo))
                 v[:, id_match] = v_sub[:, i]
                 n[:, id_match] = n_sub[:, i]
                 temp[:, id_match] = temp_sub[:, i]
+                if is_mhd:
+                    bmag[:, id_match] = bmag_sub[:, i]
         else:
             print('Warning: Trying to contour single radial solution will fail.')
     else:
         v = v_sub
         n = n_sub
         temp = temp_sub
+        if is_mhd:
+            bmag = bmag_sub
 
     # Pad out to fill the full 2pi of contouring
     pad = lon[:, 0].reshape((lon.shape[0], 1)) + model.twopi
@@ -492,6 +518,8 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
     n = np.concatenate((n, pad_n), axis=1)
     pad_temp = temp[:, 0].reshape((temp.shape[0], 1))
     temp = np.concatenate((temp, pad_temp), axis=1)
+    if is_mhd:
+        bmag = np.concatenate((bmag, bmag[:, 0].reshape((-1, 1))), axis=1)
 
     # Define colormaps and levels for each quantity
     # Velocity
@@ -519,6 +547,14 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
     Tmin, Tmax, dT = 4, 6, 0.05  # log10 scale: 10^4 to 10^6 K
     levels_T = np.arange(Tmin, Tmax + dT, dT)
 
+    if is_mhd:
+        cmap_b = mpl.cm.cividis.copy()
+        finite_b = bmag[np.isfinite(bmag)]
+        b_limit = np.nanpercentile(finite_b, 99) if finite_b.size else 1.0
+        if not np.isfinite(b_limit) or b_limit <= 0:
+            b_limit = 1.0
+        levels_b = np.linspace(0, b_limit, 41)
+
     # Plot 1: Velocity
     cnt_v = axes[0].contourf(lon, rad, v, levels=levels_v, cmap=cmap_v, extend='both')
     cnt_v.set(edgecolor="face")
@@ -545,6 +581,15 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
     axes[2].set_xticklabels([])
     axes[2].plot(0, 0, 'o', color=[1.0, 0.5, 0.25], markersize=16)
     # Title removed - info in colorbars instead
+
+    if is_mhd:
+        cnt_b = axes[3].contourf(lon, rad, bmag, levels=levels_b,
+                                 cmap=cmap_b, extend='max')
+        cnt_b.set(edgecolor="face")
+        axes[3].set_ylim(0, model.r.value.max())
+        axes[3].set_yticklabels([])
+        axes[3].set_xticklabels([])
+        axes[3].plot(0, 0, 'o', color=[1.0, 0.5, 0.25], markersize=16)
 
     # Add CME boundaries to all plots
     if model.track_cmes:
@@ -642,10 +687,11 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
         # No titles now, so less space needed at top
         for ax in axes:
             ax.patch.set_facecolor('slategrey')
-            pos = ax.get_position()
-            # Adjust positioning with titles removed - can make plots bigger
-            new_pos = [pos.x0, pos.y0 + 0.08, pos.width, pos.height * 0.90]
-            ax.set_position(new_pos)
+            if not is_mhd:
+                pos = ax.get_position()
+                # Adjust positioning with titles removed - can make plots bigger
+                new_pos = [pos.x0, pos.y0 + 0.08, pos.width, pos.height * 0.90]
+                ax.set_position(new_pos)
 
         # Add colorbars below each plot
         for i, (ax, cnt, label, ticks) in enumerate([
@@ -667,6 +713,16 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
             # Position label below colorbar with larger font
             cbaxes.text(0.5, -2.2, label, fontsize=16, transform=cbaxes.transAxes, 
                        horizontalalignment='center', verticalalignment='top')
+
+        if is_mhd:
+            pos = axes[3].get_position()
+            cbaxes = fig.add_axes([pos.x0, pos.y0 - 0.035, pos.width, 0.02])
+            cbar = fig.colorbar(cnt_b, cax=cbaxes, orientation='horizontal')
+            cbar.set_ticks(np.linspace(0, b_limit, 5))
+            cbar.ax.tick_params(labelsize=16)
+            cbaxes.text(0.5, -2.2, r"$B$ [nT]", fontsize=16,
+                       transform=cbaxes.transAxes, horizontalalignment='center',
+                       verticalalignment='top')
 
     # Add observer labels in a box below colorbars
     if annotateplot and not minimalplot and len(observers_list) > 0:
@@ -738,7 +794,7 @@ def plot_compressible(model, time, save=False, tag='', fighandle=np.nan, minimal
     if annotateplot:
         # Get positions of left and right panels for alignment
         pos_left = axes[0].get_position()
-        pos_right = axes[2].get_position()
+        pos_right = axes[1].get_position() if is_mhd else axes[2].get_position()
         
         # Add time label at top right, aligned with right edge of right panel
         time_label = f"{model.time_out[id_t].to(u.day).value:3.2f} days"
@@ -1626,12 +1682,24 @@ def plot_timeseries(model, radius, lon, save=False, tag=''):
     return fig, axes if is_compressible else ax
 
 
+def _sample_mhd_components(model, time_index, radial_index, longitude):
+    """Sample physical RTN vectors with the same longitude rule as vsw."""
+    values = {}
+    for key in ('br', 'bt', 'bn', 'vt', 'vn'):
+        unit = u.nT if key.startswith('b') else u.km/u.s
+        profile = getattr(model, key + '_grid')[time_index, radial_index].to_value(unit)
+        values[key] = (profile[0] if model.nlon == 1 else
+                       np.interp(longitude, model.lon.value, profile, period=2*np.pi))
+    return values
+
+
 def get_observer_timeseries(model, observer='Earth', suppress_warning=False):
     """
     Compute the solar wind time series at an observer location. Returns a pandas dataframe with the 
     solar wind speed time series interpolated from the model solution using the
     observer ephemeris. Nearest neighbour interpolation in r, linear interpolation in longitude.
     For compressible models, also includes density and temperature.
+    MHD models additionally return br/bt/bn in nT and vt/vn in km/s (RTN).
     Args:
         model: A SURF instance with a solution generated by SURF.solve().
         observer: String name of the observer. Can be any permitted by Observer class.
@@ -1669,6 +1737,8 @@ def get_observer_timeseries(model, observer='Earth', suppress_warning=False):
     rad = np.ones(model.nt_out) * np.nan
     speed = np.ones(model.nt_out) * np.nan
     bpol = np.ones(model.nt_out) * np.nan
+    mhd_data = {key: np.full(model.nt_out, np.nan) for key in
+                ('br', 'bt', 'bn', 'vt', 'vn')} if getattr(model, 'mhd', False) else {}
     
     # Add density and temperature arrays for compressible models
     is_compressible = hasattr(model, 'compressible') and model.compressible
@@ -1698,6 +1768,9 @@ def get_observer_timeseries(model, observer='Earth', suppress_warning=False):
         else:
             # find the nearest R coord
             id_r = np.argmin(np.abs(model.r.value - obs_pos.r[t].value))
+            if mhd_data:
+                for key, value in _sample_mhd_components(model, t, id_r, model_lon_obs[t]).items():
+                    mhd_data[key][t] = value
             rad[t] = model.r[id_r].value
             lon[t] = model_lon_obs[t]
             # then interpolate the values in longitude
@@ -1724,6 +1797,7 @@ def get_observer_timeseries(model, observer='Earth', suppress_warning=False):
     time = pd.to_datetime(time, unit='D', origin='julian')
 
     data_dict = {'time': time, 'r': rad, 'lon': lon, 'vsw': speed, 'bpol': bpol, 'mjd': mjd}
+    data_dict.update(mhd_data)
     if is_compressible:
         data_dict['n'] = density  # protons/cm³
         data_dict['T'] = temperature  # K
@@ -1737,6 +1811,7 @@ def get_SURF_at_position_HEEQ(model, target_mjd, target_r, target_lon_heeq):
     Extract and return SURF fields at a generic set of locations. Assumes the 
     object is in the lat plane of the model. For compressible models, also includes
     density and temperature.
+    MHD models additionally return br/bt/bn in nT and vt/vn in km/s (RTN).
     
     Args:
         model: The SURF model class for the solved run.
@@ -1769,6 +1844,8 @@ def get_SURF_at_position_HEEQ(model, target_mjd, target_r, target_lon_heeq):
     rad = np.ones(nt) * np.nan
     speed = np.ones(nt) * np.nan
     bpol = np.ones(nt) * np.nan
+    mhd_data = {key: np.full(nt, np.nan) for key in
+                ('br', 'bt', 'bn', 'vt', 'vn')} if getattr(model, 'mhd', False) else {}
     
     # Add density and temperature arrays for compressible models
     is_compressible = hasattr(model, 'compressible') and model.compressible
@@ -1806,6 +1883,9 @@ def get_SURF_at_position_HEEQ(model, target_mjd, target_r, target_lon_heeq):
             else:
                 # find the nearest R coord
                 id_r = np.argmin(np.abs(model.r.value - target_r[t]))
+                if mhd_data:
+                    for key, value in _sample_mhd_components(model, id_t, id_r, model_lon_obs).items():
+                        mhd_data[key][t] = value
                 rad[t] = model.r[id_r].value
                 lon[t] = model_lons[id_lon]
                 # then interpolate the values in longitude
@@ -1839,6 +1919,7 @@ def get_SURF_at_position_HEEQ(model, target_mjd, target_r, target_lon_heeq):
 
     data_dict = {'time': datetimes, 'r': rad, 'lon': lon, 'vsw': speed, 'bpol': bpol,
                  'mjd': target_mjd}
+    data_dict.update(mhd_data)
     if is_compressible:
         data_dict['n'] = density  # protons/cm³
         data_dict['T'] = temperature  # K

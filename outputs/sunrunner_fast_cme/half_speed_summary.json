@@ -1,0 +1,36 @@
+{
+  "dr_solRad": 0.25,
+  "radial_cells": 1258,
+  "cme_peak_factor": 0.5,
+  "boundary_peak_speed_kms": 1194.178593963943,
+  "output_cadence_seconds": 289.875,
+  "interpolation_radii_AU": [
+    0.9998504611068638,
+    1.0010130779221045
+  ],
+  "vr_kms": {
+    "ambient": 469.75843170088217,
+    "peak": 1112.1738061416308,
+    "peak_time_hours": 39.21364583333333,
+    "prearrival_relative_drift": 0.0
+  },
+  "number_density_cm3": {
+    "ambient": 1.1717758908603382,
+    "peak": 59.63910232287661,
+    "peak_time_hours": 39.93833333333333,
+    "prearrival_relative_drift": 0.0
+  },
+  "Bt_nT": {
+    "ambient": 1.8980080977020173,
+    "peak": 34.0401329787702,
+    "peak_time_hours": 39.61625,
+    "prearrival_relative_drift": 0.0
+  },
+  "temperature_K": {
+    "ambient": 92923.37549162169,
+    "peak": 7110416.532400354,
+    "peak_time_hours": 36.7175,
+    "prearrival_relative_drift": 0.0
+  },
+  "arrival_speed_plus50_hours": 36.63697916666667
+}

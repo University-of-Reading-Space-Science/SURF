@@ -1,0 +1,114 @@
+{
+  "parameters": {
+    "speed_background_kms": 410.9823061068116,
+    "speed_enhancement_kms": 1977.3748818210747,
+    "density_background_cm3": 69.38831795273691,
+    "density_enhancement_cm3": 1870.90823707962,
+    "bt_background_nT": 15.615101018053847,
+    "bt_enhancement_nT": 126.60359637505454,
+    "temperature_K": 714993.5756101364,
+    "mean_molecular_weight": 0.6,
+    "gamma": 1.5,
+    "pulse_duration_hours": 19.6,
+    "spinup_hours": 332.0,
+    "inner_radius_solRad": 30.0,
+    "outer_radius_AU": 1.6,
+    "run_hours": 120.0,
+    "input_cadence_seconds": 60.0
+  },
+  "fine_run": {
+    "dr_solRad": 0.25,
+    "radial_cells": 1258,
+    "output_cadence_seconds": 289.875,
+    "interpolation_radii_AU": [
+      0.9998504611068638,
+      1.0010130779221045
+    ],
+    "vr_kms": {
+      "ambient": 469.75843170088217,
+      "peak": 2268.997288333072,
+      "peak_time_hours": 27.135520833333334,
+      "prearrival_relative_drift": 0.0
+    },
+    "number_density_cm3": {
+      "ambient": 1.1717758908603382,
+      "peak": 144.5299947496281,
+      "peak_time_hours": 25.041979166666668,
+      "prearrival_relative_drift": 0.0
+    },
+    "Bt_nT": {
+      "ambient": 1.8980080977020173,
+      "peak": 84.26397263848413,
+      "peak_time_hours": 25.041979166666668,
+      "prearrival_relative_drift": 0.0
+    },
+    "temperature_K": {
+      "ambient": 92923.37549162169,
+      "peak": 41570061.19655358,
+      "peak_time_hours": 23.351041666666667,
+      "prearrival_relative_drift": 0.0
+    },
+    "arrival_speed_plus50_hours": 23.351041666666667
+  },
+  "coarse_run": {
+    "dr_solRad": 0.5,
+    "radial_cells": 630,
+    "output_cadence_seconds": 347.85,
+    "interpolation_radii_AU": [
+      0.9998504611068638,
+      1.002175694737345
+    ],
+    "vr_kms": {
+      "ambient": 469.79069039229256,
+      "peak": 2261.569821863957,
+      "peak_time_hours": 27.248250000000002,
+      "prearrival_relative_drift": 0.0
+    },
+    "number_density_cm3": {
+      "ambient": 1.161915184958804,
+      "peak": 134.89991090142507,
+      "peak_time_hours": 25.1225,
+      "prearrival_relative_drift": 0.0
+    },
+    "Bt_nT": {
+      "ambient": 1.8899391575450128,
+      "peak": 77.24705866704993,
+      "peak_time_hours": 25.1225,
+      "prearrival_relative_drift": 0.0
+    },
+    "temperature_K": {
+      "ambient": 92558.82120792991,
+      "peak": 41602969.46643986,
+      "peak_time_hours": 23.383250000000004,
+      "prearrival_relative_drift": 0.0
+    },
+    "arrival_speed_plus50_hours": 23.286625
+  },
+  "resolution_comparison": {
+    "vr_kms": {
+      "relative_peak_difference": 0.0032734576225834644,
+      "mean_abs_difference_normalized_by_peak": 0.00043373451595773126
+    },
+    "number_density_cm3": {
+      "relative_peak_difference": 0.0666303480110505,
+      "mean_abs_difference_normalized_by_peak": 0.0007773460005191511
+    },
+    "Bt_nT": {
+      "relative_peak_difference": 0.08327300211133792,
+      "mean_abs_difference_normalized_by_peak": 0.0008387232066161539
+    },
+    "temperature_K": {
+      "relative_peak_difference": 0.0007916339052445043,
+      "mean_abs_difference_normalized_by_peak": 0.0007323329521685942
+    }
+  },
+  "source_paper": "https://doi.org/10.3390/universe8090447",
+  "source_configuration": "https://github.com/predsci/sunRunner1D-manuscript/blob/main/pluto_1.ini",
+  "notes": [
+    "30 Rs inner boundary and 19.6 h duration follow the paper; repository configuration uses 0.13 AU and about 19.45 h.",
+    "Input density is rho/mp, as in the reference plotting script.",
+    "SURF internal T=T_paper/0.6 matches reference thermal pressure; plotted T=0.6*T_SURF.",
+    "HLL/PLM/RK2 differs from the reference Roe/LimO3/RK3 scheme.",
+    "Radial interpolation samples exactly 1 AU; no observed data or PLUTO outputs are plotted."
+  ]
+}

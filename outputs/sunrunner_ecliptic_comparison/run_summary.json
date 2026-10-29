@@ -1,0 +1,40 @@
+{
+  "case": "half-speed sunRunner-like CME",
+  "boundary": {
+    "ambient_speed_kms": 410.9823061068116,
+    "nose_peak_speed_kms": 1194.178593963943,
+    "ambient_density_cm-3": 69.38831795273691,
+    "nose_peak_density_cm-3": 1940.296555032357,
+    "ambient_Bt_nT": 15.615101018053847,
+    "nose_peak_Bt_nT": 142.21869739310839,
+    "paper_temperature_K": 714993.5756101364,
+    "SURF_internal_temperature_K": 1191655.9593502274,
+    "launch_hour": 12.0,
+    "duration_hour": 19.6,
+    "cone_width_deg": 60.0,
+    "cone_centre_deg": 0.0,
+    "temporal_profile": "sine-squared",
+    "angular_profile": "cosine-squared"
+  },
+  "grid": {
+    "r_min_solRad": 30,
+    "r_max_solRad": 240,
+    "dr_solRad": 1.5,
+    "nlon_full": 128,
+    "lon_start_deg": 315,
+    "lon_stop_deg": 45,
+    "nlon_solved": 32,
+    "simtime_hour": 72
+  },
+  "snapshot_hour": 52.0,
+  "runtime_seconds": {
+    "huxt": 0.20404169987887144,
+    "hydro": 7.951195999979973,
+    "mhd": 167.11794549995102
+  },
+  "limitations": [
+    "SURF ecliptic mode advances independent radial longitude slices; it has no lateral fluxes.",
+    "HUXt evolves speed only; hydro also receives density and temperature; MHD additionally receives Bt.",
+    "The 60 degree angular extent is an assumption because the source 1-D event has no width."
+  ]
+}

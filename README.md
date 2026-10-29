@@ -66,6 +66,13 @@ The four tests should take around 1 minute to complete on a modest laptop. These
 
 ## Usage
 
+SURF also includes a native spherical ideal-MHD solver: select `solver='mhd'`
+and provide physical fields through `mhd_boundary`, for example
+`{'br': 10*u.nT, 'bt': -20*u.nT}`. It uses the existing simulation, tracer,
+restart and HDF5 framework without an external MHD code. See the
+[MHD guide and model review](docs/mhd.md) for examples, equations, units,
+boundary constraints and verification.
+
 Some examples of how to use HUXt can be found in [`surf_examples.ipynb`](huxt/notebooks/HUXt_examples.ipynb), which can be opened using the `surf-open-examples` command after installation.
 
 `SURF` requires an inner boundary condition for longitudinal solar wind speed profile. This can either be prescribed by the user or derived from other sources. For convenience,  [`surf_inputs.py`](code/huxt_inputs.py) provides some functions for downloading and generating longitudinal solar wind speed profiles from the [HelioMAS](https://doi.org/10.1029/2000JA000121), Wang-Sheeley-Arge (WSA), and Potential Field Source Surface (PFSS) models, as well as from Coronal Tomography (CorTom). Examples of each is provided in the examples workbook. Routines for plotting and animating HUXt solutions can be found in  [`surf_analysis.py`](code/huxt_analysis.py). Again, examples are provided in the workbook.

@@ -670,6 +670,10 @@ class CompressibleSolver:
     def _get_dt(self):
         """Compute CFL-limited timestep."""
         return _get_dt(self.U, self.nr, self.min_dx, self.gamma, self.cfl)
+
+    def _snapshot(self):
+        """Snapshot hook shared by the hydro and MHD integration drivers."""
+        return _extract_snapshot(self.U, self.nr, self.gamma, M_P_SI, K_B_SI)
     
     def _step(self, dt, bc_func):
         """Advance solution by dt."""
@@ -866,8 +870,7 @@ class CompressibleSolver:
         
         # Save first snapshot
         if abs(t_grid[0] - self.time) < 1e-5:
-            v_snap, rho_snap, T_snap = _extract_snapshot(
-                self.U, self.nr, self.gamma, M_P_SI, K_B_SI)
+            v_snap, rho_snap, T_snap = self._snapshot()
             v_out[0, :] = v_snap
             rho_out[0, :] = rho_snap
             T_out[0, :] = T_snap
@@ -906,8 +909,7 @@ class CompressibleSolver:
                 
             
             # Save snapshot
-            v_snap, rho_snap, T_snap = _extract_snapshot(
-                self.U, self.nr, self.gamma, M_P_SI, K_B_SI)
+            v_snap, rho_snap, T_snap = self._snapshot()
             v_out[t_idx, :] = v_snap
             rho_out[t_idx, :] = rho_snap
             T_out[t_idx, :] = T_snap
@@ -1043,7 +1045,7 @@ class CompressibleSolver:
 # =============================================================================
 
 def create_solver(r_grid, gamma=1.5, method='hllc-plm', cfl=None, verbose=False,
-                  pui=False):
+                  pui=False, **kwargs):
     """
     Create a compressible solver with specified method.
     
@@ -1054,7 +1056,8 @@ def create_solver(r_grid, gamma=1.5, method='hllc-plm', cfl=None, verbose=False,
     gamma : float, optional
         Adiabatic index (default 1.5)
     method : str, optional
-        Solver configuration: 'hllc-{pcm|plm}[-{euler|rk2}]'
+        Solver configuration: 'hllc-{pcm|plm}[-{euler|rk2}]' for hydro,
+        or 'mhd-{pcm|plm}[-{euler|rk2}]' for native ideal MHD (HLL flux).
         Examples: 'hllc-plm', 'hllc-pcm', 'hllc-plm-rk2'
     cfl : float, optional
         CFL number (default depends on reconstruction)
@@ -1067,6 +1070,17 @@ def create_solver(r_grid, gamma=1.5, method='hllc-plm', cfl=None, verbose=False,
         Configured solver instance
     """
     parts = method.lower().split('-')
+
+    if parts[0] == 'mhd':
+        from surf.surf_mhd import MHDSolver
+        if len(parts) > 3:
+            raise ValueError('MHD method format is mhd-{pcm|plm}-{euler|rk2}')
+        return MHDSolver(
+            r_grid, gamma=gamma, cfl=cfl, verbose=verbose, pui=pui,
+            reconstruction=parts[1] if len(parts) > 1 else 'plm',
+            time_integration=parts[2] if len(parts) > 2 else 'rk2', **kwargs)
+    if kwargs:
+        raise TypeError(f"Unexpected hydro solver options: {', '.join(kwargs)}")
     
     reconstruction = parts[1] if len(parts) > 1 else 'plm'
     time_int = parts[2] if len(parts) > 2 else 'euler'
@@ -1198,9 +1212,12 @@ def list_available_methods():
     print("  'hllc-plm'    -> HLLC + PLM + Euler")
     print("  'hllc-pcm'    -> HLLC + PCM + Euler (1st order)")
     print("  'hllc-plm-rk2'-> HLLC + PLM + RK2 (full 2nd order)")
+    print("  'mhd'        -> ideal MHD, HLL + PLM + RK2")
+    print("  'mhd-pcm-euler' -> ideal MHD, HLL + PCM + Euler")
     print()
     
     return {
+        'physics': ['hydro', 'mhd'],
         'reconstruction': ['pcm', 'plm'],
         'time_integrator': ['euler', 'rk2'],
     }

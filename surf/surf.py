@@ -757,7 +757,7 @@ class SURF:
                  input_iscme_ts=np.nan, input_t_ts=np.nan * u.s,
                  track_cmes=True, solver='huxt', parallel=False,
                  nlon=128, dr=1.5 * u.solRad, v_max=3000 * (u.km / u.s),
-                 gamma=1.5):
+                 gamma=1.5, mhd_boundary=None, mhd_gravity=False):
         """
         Initialise the SURF model instance.
 
@@ -813,6 +813,8 @@ class SURF:
                      'hydro-pui': Compressible HLLC+PLM with pick-up ion deceleration
                      'hydro-pcm': Compressible HLLC+PCM solver
                      'hydro-pcm-pui': Compressible HLLC+PCM with pick-up ion deceleration
+                     'mhd': Ideal MHD with HLL+PLM+RK2 and physical vector fields
+                     'mhd-pcm': Ideal MHD with HLL+PCM+Euler
             parallel: Boolean flag to enable parallel computation across longitude slices
                       (default True). Uses joblib threading backend for parallelization. Set to
                       False for debugging or if running on a single-core system.
@@ -824,6 +826,12 @@ class SURF:
                            solar wind temperature scaled from 1 AU (10⁵ K) using r⁻⁰·⁶⁷ scaling to
                            r_min.
             gamma: Effective adiabatic index used by the compressible solver. Defaults to 1.5.
+            mhd_boundary: Physical MHD boundary dict: br, bt, bn (tesla), vt, vn (m/s).
+                          Quantities are accepted. br must be a constant scalar. Other
+                          components accept scalars or Carrington maps of length nlon.
+                          With a 'time' key (seconds), arrays are time series of shape
+                          (nt,) or (nt, number of solved longitudes). See docs/mhd.md.
+            mhd_gravity: Include solar gravity in MHD momentum and energy (default False).
         """
 
         # some constants and units
@@ -849,7 +857,11 @@ class SURF:
         self.pui = solver.endswith('-pui')
         
         # Auto-determine compressible mode based on solver choice
-        compressible = solver in ('hydro', 'hydro-pui', 'hydro-pcm', 'hydro-pcm-pui')
+        self.mhd = solver in ('mhd', 'mhd-pcm')
+        compressible = self.mhd or solver in ('hydro', 'hydro-pui', 'hydro-pcm', 'hydro-pcm-pui')
+        if not self.mhd and (mhd_boundary is not None or mhd_gravity):
+            raise ValueError('mhd_boundary and mhd_gravity require an MHD solver')
+        self.mhd_gravity = bool(mhd_gravity)
         
         # Store parallel computation flag
         self.parallel = parallel
@@ -1070,6 +1082,11 @@ class SURF:
 
         self.track_cmes = track_cmes  # If true, cmes are tracked, which costs a extra compute
         self.compressible = compressible  # If true, use compressible solver
+
+        if self.mhd:
+            from surf.surf_mhd import normalize_boundary
+            self.mhd_boundary = normalize_boundary(mhd_boundary, self.nlon_full, self.nlon)
+            self._allocate_mhd_grids()
         
         # Initialize density and temperature grids for compressible solver
         if self.compressible:
@@ -1170,6 +1187,13 @@ class SURF:
                 self.input_temp_ts_flag = True
 
         return
+
+    def _allocate_mhd_grids(self):
+        """Physical vector components, separate from the passive b_grid polarity."""
+        for key in ('br', 'bt', 'bn', 'vt', 'vn'):
+            unit = u.T if key.startswith('b') else self.kms
+            setattr(self, key + '_grid', np.zeros(
+                (self.nt_out, self.nr, self.nlon), order='F') * unit)
 
     def ts_from_vlong(self):
         """
@@ -1543,6 +1567,15 @@ class SURF:
         if hasattr(self, '_temp_init') and self._temp_init is not None:
             T_init_lon = self._temp_init.get(i)
         
+        mhd_options = None
+        extra_output = {}
+        if self.mhd:
+            from surf.surf_mhd import boundary_for_longitude
+            mhd_options = boundary_for_longitude(self, i)
+            if getattr(self, '_mhd_init', None) is not None:
+                mhd_options['mhd_init'] = {
+                    key: value[:, i] for key, value in self._mhd_init.items()}
+
         v_out_kms, rho_out_kgm3, temp_out_K, particle_data = solve_radial_compressible(
             v_bc_kms=v_bc_kms,
             rho_bc_kgm3=rho_bc_kgm3,
@@ -1562,8 +1595,15 @@ class SURF:
             particle_initial_positions=particle_initial_positions,
             v_init_kms=v_init_lon,
             rho_init_kgm3=rho_init_lon,
-            T_init_K=T_init_lon
+            T_init_K=T_init_lon,
+            mhd_options=mhd_options,
+            extra_output=extra_output,
         )
+
+        if self.mhd:
+            for key, values in extra_output.items():
+                unit = u.T if key.startswith('b') else u.m/u.s
+                getattr(self, key + '_grid')[:, :, i] = values * unit
         
         # Extract particle positions at output times
         # Particle positions and velocities are populated from trajectories.
@@ -1772,6 +1812,11 @@ class SURF:
             temp = self.temp_grid[-1, :, :].value.copy()
 
         state = {'v': v, 'rho': rho, 'temp': temp}
+        if self.mhd:
+            state['mhd'] = {
+                key: getattr(self, key + '_grid')[-1].to_value(
+                    u.T if key.startswith('b') else u.m/u.s).copy()
+                for key in ('br', 'bt', 'bn', 'vt', 'vn')}
         if hasattr(self, 'cme_particles_r') and self.cme_particles_r.shape[1]:
             state['cme_r'] = self.cme_particles_r[:, -1, :, :].value.copy()
             state['cme_v'] = self.cme_particles_v[:, -1, :, :].value.copy()
@@ -1808,6 +1853,20 @@ class SURF:
         """
         v = state['v']
         expected_shape = (self.nr, self.nlon)
+        if self.mhd:
+            fields = state.get('mhd', {})
+            if set(fields) != {'br', 'bt', 'bn', 'vt', 'vn'}:
+                raise ValueError('MHD restart requires all five physical vector components')
+            for key, value in fields.items():
+                if np.shape(value) != expected_shape or not np.all(np.isfinite(value)):
+                    raise ValueError(f'MHD restart {key} must be finite with shape {expected_shape}')
+            expected_br = float(self.mhd_boundary['br'])*(self.r[0]/self.r).value**2
+            if not np.allclose(fields['br'], expected_br[:, None], rtol=1e-10, atol=1e-30):
+                raise ValueError('MHD restart Br does not match the prescribed radial flux')
+            if state.get('rho') is None or state.get('temp') is None:
+                raise ValueError('MHD restart requires density and temperature')
+            self._mhd_init = {key: np.array(value, copy=True) for key, value in fields.items()
+                              if key != 'br'}
         if v.shape != expected_shape:
             raise ValueError(
                 f"state['v'] shape {v.shape} does not match model grid {expected_shape}")
@@ -2175,6 +2234,8 @@ class SURF:
         # This section handles all solvers using unified process_longitude
 
         if True:  # Always execute
+            if self.mhd:
+                self._allocate_mhd_grids()
             self._final_v_state = {}
             self._final_cme_r_state = {}
             self._final_cme_v_state = {}
@@ -2284,6 +2345,7 @@ class SURF:
         self._temp_init = None
         self._cme_r_init = None
         self._cme_v_init = None
+        self._mhd_init = None
         return
 
     def save(self, tag=''):
@@ -2353,7 +2415,14 @@ class SURF:
                 'dt_scale', 'time_out', 'dt_out', 'r', 'dr', 'lon', 'dlon', 'r_grid', 'lon_grid',
                 'v_grid', 'latitude', 'v_boundary', '_v_boundary_init_', 'cme_particles_r',
                 'cme_particles_v', 'streak_particles_r', 'streak_lon_r0', 'hcs_particles_r',
-                'frame', 'track_cmes', 'track_b', 'track_streak', 'compressible', 'solver']
+                'frame', 'track_cmes', 'track_b', 'track_streak', 'compressible', 'solver',
+                'mhd_gravity', 'br_grid', 'bt_grid', 'bn_grid', 'vt_grid', 'vn_grid']
+
+        if self.mhd:
+            group = out_file.create_group('mhd_boundary')
+            for key, value in self.mhd_boundary.items():
+                dataset = group.create_dataset(key, data=value)
+                dataset.attrs['unit'] = 's' if key == 'time' else ('T' if key.startswith('b') else 'm / s')
 
         # Handle keys to magnetic field arrays seperately
         mag_keys = ['_b_boundary_init_', 'b_boundary_lons', 'b_boundary', 'b_grid']
@@ -2387,7 +2456,7 @@ class SURF:
                     dset.dims[1].label = 'longitude'
 
                 # Add on the dimensions of the output speed fields.
-                if k == 'v_grid':
+                if k in ('v_grid', 'br_grid', 'bt_grid', 'bn_grid', 'vt_grid', 'vn_grid'):
                     dset.dims[0].label = 'time'
                     dset.dims[1].label = 'radius'
                     dset.dims[2].label = 'longitude'
@@ -2471,7 +2540,7 @@ class SURF3d:
                  lon_stop=np.nan * u.rad, simtime=5.0 * u.day, dt_scale=1.0,
                  nlon=128, nlat=45, dr=1.5 * u.solRad,
                  v_max=3000 * (u.km / u.s), gamma=1.5, solver='huxt',
-                 track_cmes=True):
+                 track_cmes=True, mhd_boundary=None, mhd_gravity=False):
         """
         Initialise the SURF3D instance.
 
@@ -2501,6 +2570,8 @@ class SURF3d:
             gamma: Effective adiabatic index passed to each SURF model. Defaults to 1.5.
             solver: SURF solver to use. Defaults to 'huxt'.
             track_cmes: Boolean, whether to track CMEs in the simulation.
+            mhd_boundary: MHD boundary configuration shared by all radial latitude slices.
+            mhd_gravity: Include solar gravity in each MHD slice.
         """
 
         # Define latitude grid
@@ -2537,7 +2608,8 @@ class SURF3d:
                                      lon_out=lon_out, lon_start=lon_start, lon_stop=lon_stop,
                                      simtime=simtime, dt_scale=dt_scale,
                                      nlon=nlon, dr=dr, v_max=v_max, gamma=gamma, solver=solver,
-                                     track_cmes=self.track_cmes))
+                                     track_cmes=self.track_cmes,
+                                     mhd_boundary=mhd_boundary, mhd_gravity=mhd_gravity))
         return
 
     def solve(self, cme_list):
@@ -2584,7 +2656,7 @@ def surf_constants():
     n_sw_21p5 = 600 * (u.cm ** -3)  # Reference ambient proton density at 21.5 Rs
     T_sw_21p5 = 1e6 * u.K  # Reference ambient temperature at 21.5 Rs
     valid_solvers = ("huxt", "huxt-pui", "hydro", "hydro-pui",
-                     "hydro-pcm", "hydro-pcm-pui")
+                     "hydro-pcm", "hydro-pcm-pui", "mhd", "mhd-pcm")
     
     boltzmann_constant = 1.380649e-23  # J/K
     proton_mass = 1.67262192e-27  # kg
@@ -2750,6 +2822,7 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
 
     # Accumulators for concatenating chunk outputs
     v_chunks = []
+    mhd_chunks = {key: [] for key in ('br', 'bt', 'bn', 'vt', 'vn')} if model.mhd else {}
     rho_chunks = []
     temp_chunks = []
     b_chunks = []
@@ -2813,6 +2886,8 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
         ideal_end = ideal_elapsed + this_chunk
 
         chunk_start = t_elapsed
+        if model.mhd:
+            model._mhd_time_offset = chunk_start.to_value(u.s)
         model.simtime = (ideal_end - chunk_start).to(u.s)
 
         if verbose:
@@ -2943,6 +3018,8 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
         # Collect output — offset time_out by elapsed time
         if model.nt_out > 0:
             v_chunks.append(model.v_grid.value.copy())
+            for key in mhd_chunks:
+                mhd_chunks[key].append(getattr(model, key + '_grid').value.copy())
             time_out_chunks.append((model.time_out + chunk_start).copy())
             if model.compressible:
                 rho_chunks.append(model.rho_grid.value.copy())
@@ -2970,6 +3047,11 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
     model.v_grid = np.concatenate(v_chunks, axis=0) * model.kms
     model.time_out = np.concatenate([t.value for t in time_out_chunks]) * model.dt.unit
     model.nt_out = model.v_grid.shape[0]
+    for key, chunks in mhd_chunks.items():
+        unit = u.T if key.startswith('b') else model.kms
+        setattr(model, key + '_grid', np.concatenate(chunks, axis=0) * unit)
+    if model.mhd:
+        model._mhd_time_offset = 0.0
     if model.compressible:
         model.rho_grid = np.concatenate(rho_chunks, axis=0) * (u.kg / u.m ** 3)
         model.temp_grid = np.concatenate(temp_chunks, axis=0) * u.K
@@ -3059,6 +3141,8 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
 def _compressible_method_from_solver(solver_name):
     """Map public solver names to internal compressible method strings."""
     method_map = {
+        'mhd': 'mhd-plm-rk2',
+        'mhd-pcm': 'mhd-pcm-euler',
         'hydro': 'hllc-plm-rk2',
         'hydro-pui': 'hllc-plm-rk2',
         'hydro-pcm': 'hllc-pcm',
@@ -3615,7 +3699,7 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
                               particle_release_rate=None, solver_instance=None,
                               particle_initial_positions=None,
                               v_init_kms=None, rho_init_kgm3=None, T_init_K=None,
-                              pui=False):
+                              pui=False, mhd_options=None, extra_output=None):
     """
     Solve 1D radial solar wind expansion using a compressible solver with selectable Riemann solver.
     
@@ -3716,6 +3800,14 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
     spinup_sampled = np.linspace(model_time_seconds[0], time_out_seconds[0], n_spinup_snaps,
                                  endpoint=False)
     t_grid_combined = np.concatenate([spinup_sampled, time_out_seconds])
+    if spinup_time_seconds <= 0:
+        spinup_sampled = np.array([], dtype=float)
+        t_grid_combined = np.asarray(time_out_seconds)
+    elif riemann.startswith('mhd') and v_init_si is not None:
+        # A restart already contains a relaxed state. Extra spin-up samples
+        # would subdivide its first physical step and change the trajectory.
+        spinup_sampled = np.asarray([model_time_seconds[0]])
+        t_grid_combined = np.concatenate([spinup_sampled, time_out_seconds])
     
     # Boundary condition functions (MUST return plain floats, no units)
     def v_bc_func(t):
@@ -3728,6 +3820,8 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
         return float(np.interp(t, model_time_seconds, T_bc_K))
     
     # Initialize solver with selected method string.
+    options = dict(mhd_options or {})
+    mhd_init = options.pop('mhd_init', None)
     if solver_instance is None:
         method = riemann
             
@@ -3735,9 +3829,10 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
             r_grid=r_grid_m,
             gamma=gamma,
             method=method,
-            cfl=0.7 if 'plm' in method else 0.8, # Lower CFL for PLM
+            cfl=0.35 if method.startswith('mhd') else (0.7 if 'plm' in method else 0.8),
             pui=pui,
-            verbose=verbose
+            verbose=verbose,
+            **options,
         )
     else:
         solver = solver_instance
@@ -3755,11 +3850,15 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
         particle_step_times=model_time_seconds,
         v_init=v_init_si,
         rho_init=rho_init_si,
-        T_init=T_init_si
+        T_init=T_init_si,
+        **({'mhd_init': mhd_init} if riemann.startswith('mhd') else {}),
     )
     
     # Extract output times (skip spin-up)
     n_spinup = len(spinup_sampled)
+    if extra_output is not None and riemann.startswith('mhd'):
+        for key in ('br', 'bt', 'bn', 'vt', 'vn'):
+            extra_output[key] = results[key][n_spinup:]
     
     # Skip spin-up snapshots, extract only output times
     v_out_si = results['v'][n_spinup:]
@@ -4464,6 +4563,10 @@ def load_SURF_run(filepath):
             'dr': dr,
             'v_max': v_max
         }
+        if solver in ('mhd', 'mhd-pcm'):
+            constructor_kwargs['mhd_boundary'] = {
+                key: dataset[()] for key, dataset in data['mhd_boundary'].items()}
+            constructor_kwargs['mhd_gravity'] = bool(data['mhd_gravity'][()])
         
         if track_b:
             constructor_kwargs['b_boundary'] = b_boundary
@@ -4489,6 +4592,10 @@ def load_SURF_run(filepath):
         model.nlon = nlon
 
         model.v_grid = data['v_grid'][()] * u.Unit(data['v_boundary'].attrs['unit'])
+        if model.mhd:
+            for key in ('br', 'bt', 'bn', 'vt', 'vn'):
+                dataset = data[key + '_grid']
+                setattr(model, key + '_grid', dataset[()] * u.Unit(dataset.attrs['unit']))
         model.cme_particles_r = data['cme_particles_r'][()]
         model.cme_particles_v = data['cme_particles_v'][()]
 
