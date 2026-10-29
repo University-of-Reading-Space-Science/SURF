@@ -19,6 +19,8 @@
   "fine_run": {
     "dr_solRad": 0.25,
     "radial_cells": 1258,
+    "cme_peak_factor": 1.0,
+    "boundary_peak_speed_kms": 2388.357187927886,
     "output_cadence_seconds": 289.875,
     "interpolation_radii_AU": [
       0.9998504611068638,
@@ -26,25 +28,25 @@
     ],
     "vr_kms": {
       "ambient": 469.75843170088217,
-      "peak": 2268.997288333072,
+      "peak": 2268.997288333114,
       "peak_time_hours": 27.135520833333334,
       "prearrival_relative_drift": 0.0
     },
     "number_density_cm3": {
       "ambient": 1.1717758908603382,
-      "peak": 144.5299947496281,
+      "peak": 144.52999474964014,
       "peak_time_hours": 25.041979166666668,
       "prearrival_relative_drift": 0.0
     },
     "Bt_nT": {
       "ambient": 1.8980080977020173,
-      "peak": 84.26397263848413,
+      "peak": 84.26397263850251,
       "peak_time_hours": 25.041979166666668,
       "prearrival_relative_drift": 0.0
     },
     "temperature_K": {
       "ambient": 92923.37549162169,
-      "peak": 41570061.19655358,
+      "peak": 41570061.19655373,
       "peak_time_hours": 23.351041666666667,
       "prearrival_relative_drift": 0.0
     },
@@ -53,6 +55,8 @@
   "coarse_run": {
     "dr_solRad": 0.5,
     "radial_cells": 630,
+    "cme_peak_factor": 1.0,
+    "boundary_peak_speed_kms": 2388.357187927886,
     "output_cadence_seconds": 347.85,
     "interpolation_radii_AU": [
       0.9998504611068638,
@@ -60,46 +64,154 @@
     ],
     "vr_kms": {
       "ambient": 469.79069039229256,
-      "peak": 2261.569821863957,
+      "peak": 2261.569821863919,
       "peak_time_hours": 27.248250000000002,
       "prearrival_relative_drift": 0.0
     },
     "number_density_cm3": {
       "ambient": 1.161915184958804,
-      "peak": 134.89991090142507,
+      "peak": 134.89991090142212,
       "peak_time_hours": 25.1225,
       "prearrival_relative_drift": 0.0
     },
     "Bt_nT": {
       "ambient": 1.8899391575450128,
-      "peak": 77.24705866704993,
+      "peak": 77.24705866705132,
       "peak_time_hours": 25.1225,
       "prearrival_relative_drift": 0.0
     },
     "temperature_K": {
       "ambient": 92558.82120792991,
-      "peak": 41602969.46643986,
+      "peak": 41602969.46644154,
       "peak_time_hours": 23.383250000000004,
       "prearrival_relative_drift": 0.0
     },
     "arrival_speed_plus50_hours": 23.286625
   },
-  "resolution_comparison": {
+  "half_speed_run": {
+    "dr_solRad": 0.25,
+    "radial_cells": 1258,
+    "cme_peak_factor": 0.5,
+    "boundary_peak_speed_kms": 1194.178593963943,
+    "output_cadence_seconds": 289.875,
+    "interpolation_radii_AU": [
+      0.9998504611068638,
+      1.0010130779221045
+    ],
     "vr_kms": {
-      "relative_peak_difference": 0.0032734576225834644,
-      "mean_abs_difference_normalized_by_peak": 0.00043373451595773126
+      "ambient": 469.75843170088217,
+      "peak": 1112.1738061416308,
+      "peak_time_hours": 39.21364583333333,
+      "prearrival_relative_drift": 0.0
     },
     "number_density_cm3": {
-      "relative_peak_difference": 0.0666303480110505,
-      "mean_abs_difference_normalized_by_peak": 0.0007773460005191511
+      "ambient": 1.1717758908603382,
+      "peak": 59.63910232287661,
+      "peak_time_hours": 39.93833333333333,
+      "prearrival_relative_drift": 0.0
     },
     "Bt_nT": {
-      "relative_peak_difference": 0.08327300211133792,
-      "mean_abs_difference_normalized_by_peak": 0.0008387232066161539
+      "ambient": 1.8980080977020173,
+      "peak": 34.0401329787702,
+      "peak_time_hours": 39.61625,
+      "prearrival_relative_drift": 0.0
     },
     "temperature_K": {
-      "relative_peak_difference": 0.0007916339052445043,
-      "mean_abs_difference_normalized_by_peak": 0.0007323329521685942
+      "ambient": 92923.37549162169,
+      "peak": 7110416.532400354,
+      "peak_time_hours": 36.7175,
+      "prearrival_relative_drift": 0.0
+    },
+    "arrival_speed_plus50_hours": 36.63697916666667
+  },
+  "standard_resolution_run": {
+    "dr_solRad": 1.5,
+    "radial_cells": 211,
+    "cme_peak_factor": 1.0,
+    "boundary_peak_speed_kms": 2388.357187927886,
+    "output_cadence_seconds": 347.85,
+    "interpolation_radii_AU": [
+      0.9975252274763827,
+      1.004500928367826
+    ],
+    "vr_kms": {
+      "ambient": 469.9057784229094,
+      "peak": 2241.780494300432,
+      "peak_time_hours": 27.538125,
+      "prearrival_relative_drift": 0.0
+    },
+    "number_density_cm3": {
+      "ambient": 1.122987080686521,
+      "peak": 113.9623112313711,
+      "peak_time_hours": 26.08875,
+      "prearrival_relative_drift": 0.0
+    },
+    "Bt_nT": {
+      "ambient": 1.85776169752733,
+      "peak": 65.10834579095584,
+      "peak_time_hours": 25.412375,
+      "prearrival_relative_drift": 0.0
+    },
+    "temperature_K": {
+      "ambient": 91259.42096230281,
+      "peak": 37545808.787657075,
+      "peak_time_hours": 23.576500000000003,
+      "prearrival_relative_drift": 0.0
+    },
+    "arrival_speed_plus50_hours": 23.286625
+  },
+  "standard_resolution_half_speed_run": {
+    "dr_solRad": 1.5,
+    "radial_cells": 211,
+    "cme_peak_factor": 0.5,
+    "boundary_peak_speed_kms": 1194.178593963943,
+    "output_cadence_seconds": 347.85,
+    "interpolation_radii_AU": [
+      0.9975252274763827,
+      1.004500928367826
+    ],
+    "vr_kms": {
+      "ambient": 469.9057784229094,
+      "peak": 1112.4008811150886,
+      "peak_time_hours": 39.423,
+      "prearrival_relative_drift": 0.0
+    },
+    "number_density_cm3": {
+      "ambient": 1.122987080686521,
+      "peak": 49.21410576379392,
+      "peak_time_hours": 40.389250000000004,
+      "prearrival_relative_drift": 0.0
+    },
+    "Bt_nT": {
+      "ambient": 1.85776169752733,
+      "peak": 28.939324819369062,
+      "peak_time_hours": 40.002750000000006,
+      "prearrival_relative_drift": 0.0
+    },
+    "temperature_K": {
+      "ambient": 91259.42096230281,
+      "peak": 6476411.995417864,
+      "peak_time_hours": 37.490500000000004,
+      "prearrival_relative_drift": 0.0
+    },
+    "arrival_speed_plus50_hours": 36.52425
+  },
+  "resolution_comparison": {
+    "vr_kms": {
+      "relative_peak_difference": 0.0032734576226185474,
+      "mean_abs_difference_normalized_by_peak": 0.0004337345159585905
+    },
+    "number_density_cm3": {
+      "relative_peak_difference": 0.06663034801114875,
+      "mean_abs_difference_normalized_by_peak": 0.0007773460005203866
+    },
+    "Bt_nT": {
+      "relative_peak_difference": 0.08327300211152122,
+      "mean_abs_difference_normalized_by_peak": 0.0008387232066156787
+    },
+    "temperature_K": {
+      "relative_peak_difference": 0.0007916339052813637,
+      "mean_abs_difference_normalized_by_peak": 0.0007323329521685719
     }
   },
   "source_paper": "https://doi.org/10.3390/universe8090447",

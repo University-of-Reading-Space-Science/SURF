@@ -826,7 +826,7 @@ class SURF:
                            solar wind temperature scaled from 1 AU (10⁵ K) using r⁻⁰·⁶⁷ scaling to
                            r_min.
             gamma: Effective adiabatic index used by the compressible solver. Defaults to 1.5.
-            mhd_boundary: Physical MHD boundary dict: br, bt, bn (tesla), vt, vn (m/s).
+            mhd_boundary: Physical MHD boundary dict: br, bt, bn (tesla).
                           Quantities are accepted. br must be a constant scalar. Other
                           components accept scalars or Carrington maps of length nlon.
                           With a 'time' key (seconds), arrays are time series of shape
@@ -1190,8 +1190,8 @@ class SURF:
 
     def _allocate_mhd_grids(self):
         """Physical vector components, separate from the passive b_grid polarity."""
-        for key in ('br', 'bt', 'bn', 'vt', 'vn'):
-            unit = u.T if key.startswith('b') else self.kms
+        for key in ('br', 'bt', 'bn'):
+            unit = u.T
             setattr(self, key + '_grid', np.zeros(
                 (self.nt_out, self.nr, self.nlon), order='F') * unit)
 
@@ -1814,9 +1814,8 @@ class SURF:
         state = {'v': v, 'rho': rho, 'temp': temp}
         if self.mhd:
             state['mhd'] = {
-                key: getattr(self, key + '_grid')[-1].to_value(
-                    u.T if key.startswith('b') else u.m/u.s).copy()
-                for key in ('br', 'bt', 'bn', 'vt', 'vn')}
+                key: getattr(self, key + '_grid')[-1].to_value(u.T).copy()
+                for key in ('br', 'bt', 'bn')}
         if hasattr(self, 'cme_particles_r') and self.cme_particles_r.shape[1]:
             state['cme_r'] = self.cme_particles_r[:, -1, :, :].value.copy()
             state['cme_v'] = self.cme_particles_v[:, -1, :, :].value.copy()
@@ -1855,8 +1854,8 @@ class SURF:
         expected_shape = (self.nr, self.nlon)
         if self.mhd:
             fields = state.get('mhd', {})
-            if set(fields) != {'br', 'bt', 'bn', 'vt', 'vn'}:
-                raise ValueError('MHD restart requires all five physical vector components')
+            if set(fields) != {'br', 'bt', 'bn'}:
+                raise ValueError('MHD restart requires br, bt, and bn')
             for key, value in fields.items():
                 if np.shape(value) != expected_shape or not np.all(np.isfinite(value)):
                     raise ValueError(f'MHD restart {key} must be finite with shape {expected_shape}')
@@ -2416,7 +2415,7 @@ class SURF:
                 'v_grid', 'latitude', 'v_boundary', '_v_boundary_init_', 'cme_particles_r',
                 'cme_particles_v', 'streak_particles_r', 'streak_lon_r0', 'hcs_particles_r',
                 'frame', 'track_cmes', 'track_b', 'track_streak', 'compressible', 'solver',
-                'mhd_gravity', 'br_grid', 'bt_grid', 'bn_grid', 'vt_grid', 'vn_grid']
+                'mhd_gravity', 'br_grid', 'bt_grid', 'bn_grid']
 
         if self.mhd:
             group = out_file.create_group('mhd_boundary')
@@ -2456,7 +2455,7 @@ class SURF:
                     dset.dims[1].label = 'longitude'
 
                 # Add on the dimensions of the output speed fields.
-                if k in ('v_grid', 'br_grid', 'bt_grid', 'bn_grid', 'vt_grid', 'vn_grid'):
+                if k in ('v_grid', 'br_grid', 'bt_grid', 'bn_grid'):
                     dset.dims[0].label = 'time'
                     dset.dims[1].label = 'radius'
                     dset.dims[2].label = 'longitude'
@@ -2822,7 +2821,7 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
 
     # Accumulators for concatenating chunk outputs
     v_chunks = []
-    mhd_chunks = {key: [] for key in ('br', 'bt', 'bn', 'vt', 'vn')} if model.mhd else {}
+    mhd_chunks = {key: [] for key in ('br', 'bt', 'bn')} if model.mhd else {}
     rho_chunks = []
     temp_chunks = []
     b_chunks = []
@@ -3857,7 +3856,7 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
     # Extract output times (skip spin-up)
     n_spinup = len(spinup_sampled)
     if extra_output is not None and riemann.startswith('mhd'):
-        for key in ('br', 'bt', 'bn', 'vt', 'vn'):
+        for key in ('br', 'bt', 'bn'):
             extra_output[key] = results[key][n_spinup:]
     
     # Skip spin-up snapshots, extract only output times
@@ -4593,7 +4592,7 @@ def load_SURF_run(filepath):
 
         model.v_grid = data['v_grid'][()] * u.Unit(data['v_boundary'].attrs['unit'])
         if model.mhd:
-            for key in ('br', 'bt', 'bn', 'vt', 'vn'):
+            for key in ('br', 'bt', 'bn'):
                 dataset = data[key + '_grid']
                 setattr(model, key + '_grid', dataset[()] * u.Unit(dataset.attrs['unit']))
         model.cme_particles_r = data['cme_particles_r'][()]

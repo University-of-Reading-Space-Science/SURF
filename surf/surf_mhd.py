@@ -1,10 +1,8 @@
-"""Native radial ideal MHD in an expanding spherical flux tube.
+"""Native radial-flow ideal MHD in an expanding spherical flux tube.
 
-One spatial dimension, three vector components (local RTN basis). Radial
-magnetic flux is prescribed: r**2 Br = constant, including in time. Evolving
-states are [rho, rho*vr, E', rho*vt, rho*vn, Bt, Bn], in SI units, where E'
-excludes the time-independent Br**2/(2 mu0). See docs/mhd.md for equations,
-the reduction's limitations, boundary conventions, and literature review.
+The plasma velocity is strictly radial. Radial magnetic flux is prescribed as
+``r**2 Br = constant``. The evolved SI state is ``[rho, rho*vr, E, Bt, Bn]``;
+there are no transverse momentum or transverse velocity degrees of freedom.
 """
 
 import numpy as np
@@ -17,7 +15,7 @@ from surf.surf_solvers import (
 
 MU0 = 4e-7 * np.pi
 GM_SUN = 1.32712440018e20  # m^3 s^-2
-MHD_COMPONENTS = ('br', 'bt', 'bn', 'vt', 'vn')
+MHD_COMPONENTS = ('br', 'bt', 'bn')
 
 
 def normalize_boundary(boundary, nlon_full, nlon):
@@ -29,7 +27,7 @@ def normalize_boundary(boundary, nlon_full, nlon):
         raise ValueError(f'Unknown mhd_boundary keys: {sorted(unknown)}')
     result = {}
     for key, value in boundary.items():
-        unit = u.s if key == 'time' else (u.T if key.startswith('b') else u.m/u.s)
+        unit = u.s if key == 'time' else u.T
         value = np.asarray(value.to_value(unit) if isinstance(value, u.Quantity)
                            else value, dtype=float)
         if not np.all(np.isfinite(value)):
@@ -55,7 +53,7 @@ def boundary_for_longitude(model, i):
     config = model.mhd_boundary
     offset = getattr(model, '_mhd_time_offset', 0.0)
     boundary = {}
-    for key in ('bt', 'bn', 'vt', 'vn'):
+    for key in ('bt', 'bn'):
         value = config[key]
         if value.ndim == 0:
             boundary[key] = float(value)
@@ -75,13 +73,11 @@ def boundary_for_longitude(model, i):
 
 @njit(cache=NUMBA_CACHE)
 def _primitive(U, gamma):
-    """Primitive order: rho, vr, p, vt, vn, Bt, Bn; no pressure clipping."""
+    """Primitive order: rho, vr, p, Bt, Bn; no pressure clipping."""
     q = U.copy()
     q[1] = U[1] / U[0]
-    q[3] = U[3] / U[0]
-    q[4] = U[4] / U[0]
-    kinetic = 0.5 * (U[1]**2 + U[3]**2 + U[4]**2) / U[0]
-    q[2] = (gamma - 1) * (U[2] - kinetic - (U[5]**2 + U[6]**2)/(2*MU0))
+    kinetic = 0.5 * U[1]**2 / U[0]
+    q[2] = (gamma - 1) * (U[2] - kinetic - (U[3]**2 + U[4]**2)/(2*MU0))
     return q
 
 
@@ -89,36 +85,30 @@ def _primitive(U, gamma):
 def _conserved(q, gamma):
     U = q.copy()
     U[1] *= q[0]
-    U[3] *= q[0]
-    U[4] *= q[0]
-    U[2] = (q[2]/(gamma-1) + 0.5*q[0]*(q[1]**2+q[3]**2+q[4]**2)
-            + (q[5]**2+q[6]**2)/(2*MU0))
+    U[2] = q[2]/(gamma-1) + 0.5*q[0]*q[1]**2 + (q[3]**2+q[4]**2)/(2*MU0)
     return U
 
 
 @njit(cache=NUMBA_CACHE)
 def _fast_speed(q, br, gamma):
     a2 = gamma*q[2]/q[0]
-    ca2 = br**2/(MU0*q[0])
-    bt2 = (q[5]**2+q[6]**2)/(MU0*q[0])
-    # Algebraically equivalent discriminant without cancellation for B_t=0.
-    disc = (a2-ca2)**2 + bt2*(2*(a2+ca2)+bt2)
-    return np.sqrt(0.5*(a2+ca2+bt2+np.sqrt(disc)))
+    bt2 = (q[3]**2+q[4]**2)/(MU0*q[0])
+    # With transverse momentum removed, force-free Br has no radial wave
+    # characteristic. Only gas and transverse magnetic pressure contribute.
+    return np.sqrt(a2 + bt2)
 
 
 @njit(cache=NUMBA_CACHE)
 def _flux(q, br, gamma):
     U = _conserved(q, gamma)
-    pt = q[2] + (q[5]**2+q[6]**2)/(2*MU0)
-    F = np.empty(7)
+    pt = q[2] + (q[3]**2+q[4]**2)/(2*MU0)
+    F = np.empty(5)
     F[0] = U[1]
     # The analytic radial background stress cancels its geometric source.
     F[1] = U[1]*q[1] + pt
-    F[2] = (U[2]+pt)*q[1] - br*(q[3]*q[5]+q[4]*q[6])/MU0
-    F[3] = U[3]*q[1] - br*q[5]/MU0
-    F[4] = U[4]*q[1] - br*q[6]/MU0
-    F[5] = q[1]*q[5] - q[3]*br
-    F[6] = q[1]*q[6] - q[4]*br
+    F[2] = (U[2]+pt)*q[1]
+    F[3] = q[1]*q[3]
+    F[4] = q[1]*q[4]
     return F
 
 
@@ -146,7 +136,7 @@ def _rhs(U, bc, r, faces, magnetic_flux, gamma, plm, gravity):
         q[i] = _primitive(U[i], gamma)
     if plm:
         for i in range(1, nr-1):
-            for k in range(7):
+            for k in range(5):
                 slopes[i, k] = _mc_limiter(
                     (q[i, k]-q[i-1, k])/(r[i]-r[i-1]),
                     (q[i+1, k]-q[i, k])/(r[i+1]-r[i]))
@@ -155,7 +145,7 @@ def _rhs(U, bc, r, faces, magnetic_flux, gamma, plm, gravity):
                 if (q[i, 0]+slopes[i, 0]*(face-r[i]) <= SMALL_RHO or
                         q[i, 2]+slopes[i, 2]*(face-r[i]) <= SMALL_P):
                     slopes[i, :] = 0.0
-    fluxes = np.empty((nr+1, 7))
+    fluxes = np.empty((nr+1, 5))
     for j in range(nr+1):
         if j == 0:
             ql, qr = bc, q[0]
@@ -170,17 +160,14 @@ def _rhs(U, bc, r, faces, magnetic_flux, gamma, plm, gravity):
         lo, hi = faces[i], faces[i+1]
         # Difference-of-powers factorizations avoid cancellation for thin shells.
         w2 = (hi-lo)*(hi*hi+hi*lo+lo*lo)/3
-        w3 = (hi-lo)*(hi+lo)*(hi*hi+lo*lo)/4
         w1 = (hi-lo)*(hi+lo)/2
-        for k in range(7):
-            if k == 3 or k == 4:  # angular momentum: d(r^3 F)/dr
-                result[i, k] = -(hi**3*fluxes[i+1, k]-lo**3*fluxes[i, k])/w3
-            elif k == 5 or k == 6:  # induction: d(r F)/dr
+        for k in range(5):
+            if k == 3 or k == 4:  # transverse induction: d(r F)/dr
                 result[i, k] = -(hi*fluxes[i+1, k]-lo*fluxes[i, k])/w1
             else:
                 result[i, k] = -(hi**2*fluxes[i+1, k]-lo**2*fluxes[i, k])/w2
         inv_r = w1/w2
-        result[i, 1] += (2*q[i, 2]+q[i, 0]*(q[i, 3]**2+q[i, 4]**2))*inv_r
+        result[i, 1] += 2*q[i, 2]*inv_r
         if gravity:
             acceleration = -GM_SUN/r[i]**2
             result[i, 1] += U[i, 0]*acceleration
@@ -208,13 +195,10 @@ def _mhd_dt(U, br, dx, gamma, cfl):
 
 
 class MHDSolver(CompressibleSolver):
-    """SI-unit MHD solver using SURF's output and particle integration driver.
+    """SI radial-flow MHD propagation solver.
 
-    ``br`` is the constant radial field (tesla) at r_grid[0]. ``boundary``
-    maps bt/bn (tesla) and vt/vn (m/s) to scalars or functions of seconds.
-    ``solve(..., mhd_init=...)`` accepts profiles with those same four keys.
-    Prescribed inflow / extrapolated outflow are intended for super-fast solar
-    wind. This is a propagation solver, not a transcritical coronal wind model.
+    ``br`` fixes radial magnetic flux. ``boundary`` and ``mhd_init`` accept
+    only the two transverse magnetic components ``bt`` and ``bn``.
     """
 
     def __init__(self, r_grid, gamma=1.5, cfl=None, reconstruction='plm',
@@ -243,13 +227,13 @@ class MHDSolver(CompressibleSolver):
         self.br = self.magnetic_flux/self.r**2
         self.gravity = bool(gravity)
         self.boundary = dict(boundary or {})
-        if set(self.boundary)-{'bt', 'bn', 'vt', 'vn'}:
-            raise ValueError('MHD boundary keys must be bt, bn, vt, vn; specify br separately')
-        self.U = np.zeros((self.nr, 7))
+        if set(self.boundary)-{'bt', 'bn'}:
+            raise ValueError('MHD boundary keys must be bt and bn; specify br separately')
+        self.U = np.zeros((self.nr, 5))
 
     def _boundary_values(self, t):
         values = {}
-        for key in ('vt', 'vn', 'bt', 'bn'):
+        for key in ('bt', 'bn'):
             value = self.boundary.get(key, 0.0)
             values[key] = float(value(t) if callable(value) else value)
         if not all(np.isfinite(v) for v in values.values()):
@@ -258,10 +242,10 @@ class MHDSolver(CompressibleSolver):
 
     def _set_initial_conditions(self, rho, v, T):
         b = self._boundary_values(self._initial_time)
-        q = np.zeros((self.nr, 7))
+        q = np.zeros((self.nr, 5))
         q[:, 0], q[:, 1] = rho, v
         q[:, 2] = np.asarray(rho)*K_B_SI*np.asarray(T)/M_P_SI
-        for k, key in ((3, 'vt'), (4, 'vn'), (5, 'bt'), (6, 'bn')):
+        for k, key in ((3, 'bt'), (4, 'bn')):
             profile = self._mhd_init.get(key, b[key]*self.r[0]/self.r)
             profile = np.asarray(profile, dtype=float)
             if profile.shape != (self.nr,):
@@ -282,7 +266,7 @@ class MHDSolver(CompressibleSolver):
         rho, vr, temperature = bc_func(t)
         b = self._boundary_values(t)
         q = np.array([rho, vr, rho*K_B_SI*temperature/M_P_SI,
-                      b['vt'], b['vn'], b['bt'], b['bn']], dtype=float)
+                      b['bt'], b['bn']], dtype=float)
         if not np.all(np.isfinite(q)) or q[0] <= SMALL_RHO or q[2] <= SMALL_P:
             raise ValueError('MHD inflow density and temperature must be positive and finite')
         return q
@@ -322,7 +306,7 @@ class MHDSolver(CompressibleSolver):
 
     def _snapshot(self):
         q = np.array([_primitive(row, self.gamma) for row in self.U])
-        self._extra_snapshots.append(np.column_stack((self.br, q[:, 5:7], q[:, 3:5])))
+        self._extra_snapshots.append(np.column_stack((self.br, q[:, 3:5])))
         return q[:, 1], q[:, 0], q[:, 2]*M_P_SI/(q[:, 0]*K_B_SI)
 
     def solve(self, t_grid, v_bc_func, rho_bc_func, T_bc_func, *, mhd_init=None, **kwargs):
@@ -332,8 +316,8 @@ class MHDSolver(CompressibleSolver):
             raise ValueError('MHD output times must be finite and strictly increasing')
         self._initial_time = t_grid[0]
         self._mhd_init = dict(mhd_init or {})
-        if set(self._mhd_init)-{'bt', 'bn', 'vt', 'vn'}:
-            raise ValueError('mhd_init keys must be bt, bn, vt, vn')
+        if set(self._mhd_init)-{'bt', 'bn'}:
+            raise ValueError('mhd_init keys must be bt and bn')
         supplied = [kwargs.get(key) is not None for key in ('v_init', 'rho_init', 'T_init')]
         if any(supplied) and not all(supplied):
             raise ValueError('Provide all of v_init, rho_init and T_init for a restart')

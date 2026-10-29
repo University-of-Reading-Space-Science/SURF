@@ -1,0 +1,32 @@
+{
+  "wsa_file": "surf\\data\\example_inputs\\wsa_gong_2024050906.fits",
+  "carrington_rotation": 2284,
+  "wsa_equatorial_speed_kms": {
+    "min": 322.929450988769,
+    "max": 591.8373370170592,
+    "median": 442.76954925060545
+  },
+  "grid": {
+    "nlon_full": 128,
+    "lon_start_deg": 315,
+    "lon_stop_deg": 45,
+    "nlon_solved": 32,
+    "dr_solRad": 1.5
+  },
+  "cme": {
+    "peak_speed_kms": 1194.178593963943,
+    "duration_hour": 19.6,
+    "width_deg": 60.0,
+    "launch_hour": 0.0,
+    "density_cm-3": 600.0,
+    "temperature_K": 1000000.0,
+    "profile_type": "sinusoidal",
+    "interface": "SURF.solve([ConeCME])"
+  },
+  "runtime_seconds": {
+    "huxt": 1.4213983002118766,
+    "hydro": 15.203467500163242,
+    "mhd": 39.84434920013882
+  },
+  "magnetic_boundary_note": "WSA Br is used only as SURF polarity metadata. Physical MHD uses the explicit sunRunner Bt boundary; Br=Bn=0."
+}

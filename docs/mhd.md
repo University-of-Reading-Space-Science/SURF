@@ -43,32 +43,32 @@ this strictly radial solver would violate its equations. Use the transverse
 approximation (`br=0`, or a small constant) when appropriate; the existing
 `b_boundary`/`b_grid` polarity tracer remains a separate, passive quantity.
 
-Let `Bperp²=Bt²+Bn²`, `vperp²=vt²+vn²`, `P=p+Bperp²/(2 mu0)` and
+Let `Bperp²=Bt²+Bn²` and `P=p+Bperp²/(2 mu0)`. The flow is strictly radial,
+with no transverse velocity or transverse momentum variables. Define
 
 ```text
-E' = p/(gamma-1) + rho*(vr²+vt²+vn²)/2 + Bperp²/(2 mu0).
+E' = p/(gamma-1) + rho*vr²/2 + Bperp²/(2 mu0).
 ```
 
-The evolved variables are `[rho, rho*vr, E', rho*vt, rho*vn, Bt, Bn]`.
+The evolved variables are `[rho, rho*vr, E', Bt, Bn]`.
 The omitted radial magnetic energy is constant in time; add `Br²/(2 mu0)`
 when reporting full magnetic plus plasma energy. With `a` denoting either
 transverse component, the equations implemented are
 
 ```text
 dt rho      + r^-2 dr[r² rho vr] = 0
-dt(rho vr)  + r^-2 dr[r² (rho vr² + P)] = (2p + rho vperp²)/r + rho g
-dt E'       + r^-2 dr[r² ((E'+P)vr - Br(vt Bt+vn Bn)/mu0)] = rho vr g
-dt(rho va)  + r^-3 dr[r³ (rho vr va - Br Ba/mu0)] = 0
-dt Ba       + r^-1 dr[r (vr Ba - va Br)] = 0
+dt(rho vr)  + r^-2 dr[r² (rho vr² + P)] = 2p/r + rho g
+dt E'       + r^-2 dr[r² (E'+P)vr] = rho vr g
+dt Ba       + r^-1 dr[r vr Ba] = 0
 ```
 
 Here `g=0` by default, or `-GM_sun/r²` with `mhd_gravity=True`. The analytic
 radial magnetic stress cancels its geometric source before discretization;
 this avoids numerical radial acceleration from a force-free Br proportional
-to r^-2. Transverse magnetic tension is still present in momentum, energy,
-and induction. The density, radial momentum and energy use shell weights
-integral(r² dr); transverse momentum uses integral(r³ dr), and induction uses
-integral(r dr). The pressure/centrifugal source uses the shell average of 1/r.
+to r^-2. Transverse magnetic pressure remains in radial momentum and energy.
+The density, radial momentum and energy use shell weights integral(r² dr),
+while induction uses integral(r dr). The pressure source uses the shell
+average of 1/r.
 This preserves the respective finite-volume flux budgets up to roundoff.
 
 Thermal pressure follows SURF hydro's existing convention
@@ -80,9 +80,12 @@ must exceed 1. Effective gamma changes shock heating as well as expansion.
 The timestep uses `abs(vr)+cf`, where
 
 ```text
-a² = gamma p/rho,   b² = |B|²/(mu0 rho),   ar² = Br²/(mu0 rho)
-cf² = ((a²+b²) + sqrt((a²+b²)² - 4 a² ar²))/2.
+a² = gamma p/rho,   aperp² = Bperp²/(mu0 rho)
+cf² = a² + aperp².
 ```
+
+The prescribed force-free radial field does not contribute a wave
+characteristic because this reduced model has no transverse momentum.
 
 Both cell and boundary signal speeds are checked. The default CFL is 0.35
 (accepted range 0 < CFL <= 0.5). Nonphysical reconstructed states revert to
@@ -111,17 +114,17 @@ model = SURF(
 )
 model.solve([])
 # Existing outputs: v_grid (km/s), rho_grid (kg/m³), temp_grid (K).
-# New outputs: br_grid, bt_grid, bn_grid (tesla); vt_grid, vn_grid (km/s).
+# New outputs: br_grid, bt_grid, bn_grid (tesla).
 bt_at_outer_boundary = model.bt_grid[:, -1, 0].to_value(u.nT)
 ```
 
-`mhd_boundary` keys are `br`, `bt`, `bn`, `vt`, `vn`, optionally `time`.
+`mhd_boundary` keys are `br`, `bt`, `bn`, optionally `time`.
 Missing vector components default to **zero**. No magnetic magnitude or Parker
 spiral is inferred from speed, polarity, or a CME cone. Supply a nonzero field
 explicitly for a magnetized run. Plain numbers are SI (tesla, m/s, seconds);
 Astropy quantities are converted and checked.
 
-For the four evolving transverse components, choose either:
+For the two evolving transverse magnetic components, choose either:
 
 * Scalars, constant through time and across solved longitudes.
 * Arrays of length `nlon` (the constructor's full longitude count), interpreted
@@ -147,13 +150,13 @@ magnetic_pulse = {
 ConeCMEs continue to specify plasma enhancements and tracer trajectories.
 They do not automatically inject a magnetic flux rope. Magnetic pulses must
 be specified explicitly; a 1D time series does not describe a 3D flux rope.
-Transverse velocities are inertial RTN velocities. SURF's synodic/sidereal
-setting controls boundary longitude mapping, not additional Coriolis forces.
+SURF's synodic/sidereal setting controls boundary longitude mapping; it does
+not add transverse motion or Coriolis forces.
 
 The solver reuses SURF's spin-up, output schedule, radial tracers, independent
 longitude slices, threaded execution, CME/streak/HCS tracking, and plasma
 analysis functions. `get_observer_timeseries` and `get_SURF_at_position_HEEQ`
-also return `br`, `bt`, `bn` in nT and `vt`, `vn` in km/s. HDF5 saves include
+also return `br`, `bt`, `bn` in nT. HDF5 saves include
 the physical vector grids and boundary configuration. `get_final_state`,
 `set_initial_state` and `solve_chunked` retain all MHD components and preserve
 the boundary time origin. Restarts require compatible radial flux and grids.
@@ -178,10 +181,10 @@ result = solver.solve(
 )
 ```
 
-Low-level `mhd_init` accepts radial profiles for `bt/bn/vt/vn`, together with
+Low-level `mhd_init` accepts radial profiles for `bt/bn`, together with
 `v_init/rho_init/T_init` for restart. Default initialization uses constant vr,
 rho proportional to r^-2, T proportional to r^[-2(gamma-1)], and transverse
-fields and velocities proportional to r^-1. It is a startup estimate, not an
+fields proportional to r^-1. It is a startup estimate, not an
 exact steady MHD wind; allow spin-up before interpreting the solution.
 
 ## Scope and verification
