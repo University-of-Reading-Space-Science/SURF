@@ -1,43 +1,4 @@
-"""
-Compressible hydrodynamics solver for SURF.
-
-This module provides numerical methods for solving the 1D spherical 
-compressible Euler equations using a finite-volume formulation with
-area-weighted fluxes and geometric source terms.
-
-Spherical geometry is handled through:
-1. Interface areas: A = 4πr² 
-2. Cell volumes: V = 4/3 π(r³_out - r³_in)
-3. Geometric source term: S = [0, 2p/r, 0] for momentum equation
-
-The combination of area-weighted fluxes + the 2p/r source term ensures:
-- Mass, momentum, and energy are conserved correctly
-- Parker nozzle acceleration emerges naturally
-- Shocks and stream interactions are handled correctly by the Riemann solver
-
-Riemann Solver:
-- HLLC (Harten-Lax-van Leer-Contact) - fast, robust, captures contact waves
-
-Reconstruction Methods:
-- 'plm': Piecewise Linear Method (2nd order) with MC limiter [default]
-- 'pcm': Piecewise Constant Method (1st order, Godunov)
-
-Time Integration:
-- 'euler': Forward Euler (1st order) [default]
-- 'rk2': Runge-Kutta 2nd order (Heun's method)
-
-Example Usage:
-    from surf.surf_solvers import create_solver
-    
-    # Create solver with PLM reconstruction (default)
-    solver = create_solver(r_grid, gamma=1.5, method='hllc-plm')
-    
-    # Or specify all components
-    solver = create_solver(r_grid, gamma=1.5, method='hllc-plm-rk2')
-    
-    # Run simulation
-    result = solver.solve(t_grid, v_bc_func, rho_bc_func, T_bc_func)
-"""
+"""One-dimensional spherical hydrodynamic solvers for SURF."""
 
 import numpy as np
 from numba import njit
@@ -49,7 +10,8 @@ __all__ = [
     'create_solver',
     'benchmark_solvers',
     'list_available_methods',
-    'K_B_SI', 'M_P_SI',
+    'K_B_SI',
+    'M_P_SI',
 ]
 
 _CONSTANTS = surf_constants()
@@ -64,37 +26,34 @@ PUI_SLOWDOWN_PER_AU = 0.0027
 del _CONSTANTS
 
 
-# =============================================================================
-# Particle Advection
-# =============================================================================
+# Particle advection
 
 @njit(cache=NUMBA_CACHE)
 def _advect_particle_rk2(r_p, v_grid, r_grid, dt, behavior):
-    """
-    Advect a single particle using RK2 integration.
+    """Advect one particle using RK2 integration.
     
     Parameters
     ----------
     r_p : float
-        Current particle radius (m)
+        Current particle radius, in m.
     v_grid : ndarray
-        Velocity on radial grid (m/s)
+        Velocity on the radial grid, in m/s.
     r_grid : ndarray
-        Radial grid points (m)
+        Radial grid points, in m.
     dt : float
-        Time step (s)
+        Time step, in s.
     behavior : int
-        0: delete particle if out of bounds
-        1: clamp to outer boundary
+        If 0, deactivate particles beyond the grid; if 1, clamp them to the
+        outer boundary.
         
     Returns
     -------
     r_new : float
-        New particle radius (m)
+        New particle radius, in m.
     v_new : float
-        Velocity at new position (m/s)
+        Velocity at the new position, in m/s.
     is_active : bool
-        Whether particle is still active
+        Whether the particle remains active.
     """
     # Check current bounds
     if r_p < r_grid[0]: 
@@ -102,8 +61,7 @@ def _advect_particle_rk2(r_p, v_grid, r_grid, dt, behavior):
     elif r_p > r_grid[-1]:
         if behavior == 0:
             return r_p, 0.0, False
-        else:
-            r_new = r_grid[-1]
+        r_new = r_grid[-1]
     else:
         r_new = r_p
         
@@ -114,8 +72,10 @@ def _advect_particle_rk2(r_p, v_grid, r_grid, dt, behavior):
     r_mid = r_p + 0.5 * v_p * dt
     
     # Clamp intermediate position
-    if r_mid < r_grid[0]: r_mid = r_grid[0]
-    if r_mid > r_grid[-1]: r_mid = r_grid[-1]
+    if r_mid < r_grid[0]:
+        r_mid = r_grid[0]
+    if r_mid > r_grid[-1]:
+        r_mid = r_grid[-1]
     
     v_mid = np.interp(r_mid, r_grid, v_grid)
     r_final = r_p + v_mid * dt
@@ -127,15 +87,29 @@ def _advect_particle_rk2(r_p, v_grid, r_grid, dt, behavior):
     elif r_final > r_grid[-1]:
         if behavior == 0:
             is_active = False
-        else:
-            r_final = r_grid[-1]
+        r_final = r_grid[-1]
             
     return r_final, v_mid, is_active
 
 
 @njit(cache=NUMBA_CACHE)
 def _advect_cme_particle_huxt(r_p, v_grid, r_grid, dt):
-    """Advance a CME tracer using HUXt's grid and integration convention."""
+    """Advance a CME tracer using HUXt's integration convention.
+
+    Parameters
+    ----------
+    r_p : float
+        Current radius, in m.
+    v_grid, r_grid : ndarray
+        Radial velocity and position grids, in m/s and m.
+    dt : float
+        Time step, in s.
+
+    Returns
+    -------
+    tuple of float
+        Updated radius and sampled velocity.
+    """
     dr = r_grid[1] - r_grid[0]
     v_p = np.interp(r_p - 0.5 * dr, r_grid, v_grid)
     r_new = r_p + v_p * dt
@@ -148,7 +122,30 @@ def _advect_cme_particle_huxt(r_p, v_grid, r_grid, dt):
 def _advance_particles_huxt_batch(r_particles, v_particles, active, injected,
                                   injection_times, release_times, behaviors,
                                   require_positive_time, U, r_grid, time, dt):
-    """Advance all hydro tracers in one compiled HUXt-style batch."""
+    """Advance all hydro tracers in one compiled HUXt-style batch.
+
+    Parameters
+    ----------
+    r_particles, v_particles : ndarray
+        Particle radii and velocities, updated in place.
+    active, injected : ndarray
+        Particle state flags, updated in place.
+    injection_times, release_times : ndarray
+        Injection and release times, in s.
+    behaviors, require_positive_time : ndarray
+        Boundary behavior codes and positive-time requirements.
+    U : ndarray
+        Conserved hydrodynamic state.
+    r_grid : ndarray
+        Radial grid, in m.
+    time, dt : float
+        Current time and time step, in s.
+
+    Returns
+    -------
+    None
+        Input particle arrays are modified in place.
+    """
     dr = r_grid[1] - r_grid[0]
     n_grid = r_grid.size
     for particle_id in range(r_particles.size):
@@ -198,7 +195,30 @@ def _catch_up_particles_huxt_batch(
         release_times, behaviors, require_positive_time, U, r_grid,
         particle_step_times, particle_step_idx, previous_particle_time,
         plasma_time):
-    """Advance all fixed-clock particle steps crossed by a hydro CFL step."""
+    """Advance fixed-clock particle steps crossed by a hydro CFL step.
+
+    Parameters
+    ----------
+    r_particles, v_particles, active, injected : ndarray
+        Particle state arrays, updated in place.
+    injection_times, release_times : ndarray
+        Injection and release times, in s.
+    behaviors, require_positive_time : ndarray
+        Boundary behavior codes and positive-time requirements.
+    U, r_grid : ndarray
+        Conserved hydrodynamic state and radial grid.
+    particle_step_times : ndarray
+        Fixed particle-update times, in s.
+    particle_step_idx : int
+        Index of the next particle update.
+    previous_particle_time, plasma_time : float
+        Previous particle time and current plasma time, in s.
+
+    Returns
+    -------
+    tuple
+        Next particle-step index and most recent particle time.
+    """
     tolerance = 1e-7 * max(1.0, abs(plasma_time))
     while (particle_step_idx < particle_step_times.size
            and particle_step_times[particle_step_idx] <= plasma_time + tolerance):
@@ -213,20 +233,42 @@ def _catch_up_particles_huxt_batch(
     return particle_step_idx, previous_particle_time
 
 
-# =============================================================================
-# Equation of State
-# =============================================================================
+# Equation of state
 
 @njit(cache=NUMBA_CACHE)
 def _get_rhoe(p, gamma):
-    """Internal energy density from pressure: rho*e = p / (gamma - 1)"""
+    """Return internal energy density from pressure.
+
+    Parameters
+    ----------
+    p : float
+        Thermal pressure.
+    gamma : float
+        Adiabatic index.
+
+    Returns
+    -------
+    float
+        Internal energy density.
+    """
     return p / (gamma - 1.0)
 
 
 @njit(cache=NUMBA_CACHE)
 def _prim_to_cons(q, gamma):
-    """
-    Convert primitive [rho, v, p] to conserved [rho, rho*v, E] variables.
+    """Convert primitive variables to conserved variables.
+
+    Parameters
+    ----------
+    q : ndarray
+        Primitive state ``[rho, v, p]``.
+    gamma : float
+        Adiabatic index.
+
+    Returns
+    -------
+    ndarray
+        Conserved state ``[rho, rho*v, E]``.
     """
     rho, v, p = q[0], q[1], q[2]
     mom = rho * v
@@ -235,29 +277,23 @@ def _prim_to_cons(q, gamma):
     return np.array([rho, mom, ener])
 
 
-# =============================================================================
-# HLLC Riemann Solver
-# =============================================================================
+# HLLC Riemann solver
 
 @njit(cache=NUMBA_CACHE)
 def _riemann_hllc(U_l, U_r, gamma):
-    """
-    HLLC Riemann solver for the Euler equations.
-    
-    Computes the interface flux given left and right conserved states.
-    Resolves contact discontinuities accurately.
+    """Return the HLLC interface flux for two conserved states.
     
     Parameters
     ----------
     U_l, U_r : ndarray
-        Left and right conserved states [rho, rho*v, E]
+        Left and right conserved states ``[rho, rho*v, E]``.
     gamma : float
-        Adiabatic index
+        Adiabatic index.
         
     Returns
     -------
-    F : ndarray
-        Interface flux [mass flux, momentum flux, energy flux]
+    ndarray
+        Mass, momentum, and energy fluxes.
     """
     # Left state primitives
     rho_l = max(U_l[0], SMALL_RHO)
@@ -331,28 +367,44 @@ def _riemann_hllc(U_l, U_r, gamma):
     return F
 
 
-# =============================================================================
-# Slope Limiter
-# =============================================================================
+# Reconstruction
 
 @njit(cache=NUMBA_CACHE)
 def _mc_limiter(a, b):
-    """MC (Monotonized Central) slope limiter."""
+    """Return the monotonized-central slope for two differences.
+
+    Parameters
+    ----------
+    a, b : float
+        Adjacent one-sided differences.
+
+    Returns
+    -------
+    float
+        Limited central slope.
+    """
     c = 0.5 * (a + b)
     if a * b <= 0:
         return 0.0
-    else:
-        return np.sign(c) * min(abs(c), 2*abs(a), 2*abs(b))
-
-
-# =============================================================================
-# Flux Computation (JIT-compiled)
-# =============================================================================
+    return np.sign(c) * min(abs(c), 2 * abs(a), 2 * abs(b))
 
 @njit(cache=NUMBA_CACHE)
 def _compute_fluxes_pcm(U, nr, gamma):
-    """
-    Compute interface fluxes using PCM (1st order, Godunov).
+    """Compute first-order piecewise-constant interface fluxes.
+
+    Parameters
+    ----------
+    U : ndarray
+        Conserved cell states.
+    nr : int
+        Number of radial cells.
+    gamma : float
+        Adiabatic index.
+
+    Returns
+    -------
+    ndarray
+        HLLC flux at each cell interface.
     """
     fluxes = np.zeros((nr + 1, 3))
     
@@ -374,11 +426,21 @@ def _compute_fluxes_pcm(U, nr, gamma):
 
 @njit(cache=NUMBA_CACHE)
 def _compute_fluxes_plm(U, nr, gamma):
-    """
-    Compute interface fluxes using PLM (2nd order) reconstruction.
-    
-    Batch-converts all cells to primitives once, then applies MC limiter
-    for slope reconstruction at each interface.
+    """Compute second-order piecewise-linear interface fluxes.
+
+    Parameters
+    ----------
+    U : ndarray
+        Conserved cell states.
+    nr : int
+        Number of radial cells.
+    gamma : float
+        Adiabatic index.
+
+    Returns
+    -------
+    ndarray
+        Reconstructed HLLC flux at each cell interface.
     """
     fluxes = np.zeros((nr + 1, 3))
     
@@ -470,13 +532,28 @@ def _compute_fluxes_plm(U, nr, gamma):
     return fluxes
 
 
-# =============================================================================
-# Time Stepping (JIT-compiled)
-# =============================================================================
+# Time integration
 
 @njit(cache=NUMBA_CACHE)
 def _get_dt(U, nr, min_dx, gamma, cfl):
-    """Compute CFL-limited timestep."""
+    """Compute the CFL-limited time step.
+
+    Parameters
+    ----------
+    U : ndarray
+        Conserved cell states.
+    nr : int
+        Number of radial cells.
+    min_dx : float
+        Smallest cell width, in m.
+    gamma, cfl : float
+        Adiabatic index and CFL number.
+
+    Returns
+    -------
+    float
+        Stable time step, in s.
+    """
     max_speed = 0.0
     for i in range(nr):
         rho = max(U[i, 0], SMALL_RHO)
@@ -496,8 +573,23 @@ def _get_dt(U, nr, min_dx, gamma, cfl):
 
 @njit(cache=NUMBA_CACHE)
 def _extract_snapshot(U, nr, gamma, M_P_val, K_B_val):
-    """
-    Extract primitive variables (v, rho, T) from conserved state.
+    """Extract primitive fields from a conserved state.
+
+    Parameters
+    ----------
+    U : ndarray
+        Conserved cell states.
+    nr : int
+        Number of radial cells.
+    gamma : float
+        Adiabatic index.
+    M_P_val, K_B_val : float
+        Proton mass and Boltzmann constant in SI units.
+
+    Returns
+    -------
+    tuple of ndarray
+        Velocity, density, and temperature profiles.
     """
     v_out = np.zeros(nr)
     rho_out = np.zeros(nr)
@@ -515,7 +607,26 @@ def _extract_snapshot(U, nr, gamma, M_P_val, K_B_val):
 
 @njit(cache=NUMBA_CACHE)
 def _apply_pui_source(U, r, nr, dt, enabled):
-    """Apply the continuous 1 AU-anchored PUI trend, preserving internal energy."""
+    """Apply the 1 AU-anchored PUI trend while preserving internal energy.
+
+    Parameters
+    ----------
+    U : ndarray
+        Conserved states, updated in place.
+    r : ndarray
+        Radial cell centres, in m.
+    nr : int
+        Number of radial cells.
+    dt : float
+        Time step, in s.
+    enabled : bool
+        Whether to apply the source term.
+
+    Returns
+    -------
+    ndarray
+        Updated conserved states.
+    """
     if not enabled:
         return U
     for i in range(nr):
@@ -537,8 +648,25 @@ def _apply_pui_source(U, r, nr, dt, enabled):
 
 @njit(cache=NUMBA_CACHE)
 def _step_euler(U, U_bc, nr, A, V, r, dt, gamma, use_plm, pui):
-    """
-    Forward Euler time step with area-weighted fluxes and geometric source.
+    """Take an Euler step including spherical geometry and PUI forcing.
+
+    Parameters
+    ----------
+    U, U_bc : ndarray
+        Conserved cell states and inner-boundary state.
+    nr : int
+        Number of radial cells.
+    A, V, r : ndarray
+        Interface areas, cell volumes, and cell-centre radii.
+    dt, gamma : float
+        Time step and adiabatic index.
+    use_plm, pui : bool
+        Whether to use PLM reconstruction and PUI forcing.
+
+    Returns
+    -------
+    ndarray
+        Conserved state after one Euler step.
     """
     if use_plm:
         fluxes = _compute_fluxes_plm(U, nr, gamma)
@@ -576,8 +704,25 @@ def _step_euler(U, U_bc, nr, A, V, r, dt, gamma, use_plm, pui):
 
 @njit(cache=NUMBA_CACHE)
 def _step_rk2(U, U_bc, nr, A, V, r, dt, gamma, use_plm, pui):
-    """
-    RK2 (Heun's method) time step.
+    """Take a second-order Heun step.
+
+    Parameters
+    ----------
+    U, U_bc : ndarray
+        Conserved cell states and inner-boundary state.
+    nr : int
+        Number of radial cells.
+    A, V, r : ndarray
+        Interface areas, cell volumes, and cell-centre radii.
+    dt, gamma : float
+        Time step and adiabatic index.
+    use_plm, pui : bool
+        Whether to use PLM reconstruction and PUI forcing.
+
+    Returns
+    -------
+    ndarray
+        Conserved state after one RK2 step.
     """
     U1 = _step_euler(U, U_bc, nr, A, V, r, dt, gamma, use_plm, pui)
     U2 = _step_euler(U1, U_bc, nr, A, V, r, dt, gamma, use_plm, pui)
@@ -591,41 +736,51 @@ def _step_rk2(U, U_bc, nr, A, V, r, dt, gamma, use_plm, pui):
     return U_new
 
 
-# =============================================================================
-# Main Solver Class
-# =============================================================================
-
 class CompressibleSolver:
-    """
-    1D spherical compressible Euler solver using HLLC Riemann solver.
-    
-    Solves the compressible Euler equations in spherical geometry with
-    area-weighted fluxes and geometric source terms.
+    """Solve the 1D spherical Euler equations with an HLLC flux.
     
     Parameters
     ----------
     r_grid : ndarray
-        Radial grid cell centers in m (SI units)
+        Radial cell centres, in m.
     gamma : float, optional
-        Adiabatic index (default 1.5)
+        Adiabatic index.
     cfl : float, optional
-        CFL number (default 0.4 for PLM, 0.8 for PCM)
+        CFL number. Defaults to 0.4 for PLM and 0.8 for PCM.
     reconstruction : str, optional
-        'pcm' (1st order) or 'plm' (2nd order, default)
+        ``'pcm'`` or ``'plm'``.
     time_integration : str, optional
-        'euler' (1st order, default) or 'rk2' (2nd order)
+        ``'euler'`` or ``'rk2'``.
     verbose : bool, optional
-        Retained for compatibility; simulations run without terminal output
-        
-    Example
-    -------
-    >>> solver = CompressibleSolver(r_grid, gamma=1.5, reconstruction='plm')
-    >>> results = solver.solve(t_grid, v_bc_func, rho_bc_func, T_bc_func)
+        Retained for compatibility; the solver does not write terminal output.
     """
     
     def __init__(self, r_grid, gamma=1.5, cfl=None,
                  riemann='hllc', reconstruction='plm', time_integration='euler',
                  verbose=False, pui=False):
+        """Initialise a hydrodynamic solver.
+
+        Parameters
+        ----------
+        r_grid : ndarray
+            Radial cell centres, in m.
+        gamma : float
+            Adiabatic index.
+        cfl : float, optional
+            CFL number; selected from the reconstruction when omitted.
+        riemann : str
+            Riemann solver name retained for API compatibility.
+        reconstruction, time_integration : str
+            Spatial reconstruction and time-integration methods.
+        verbose : bool
+            Compatibility flag; no terminal output is produced.
+        pui : bool
+            Whether to apply empirical pick-up-ion deceleration.
+
+        Returns
+        -------
+        None
+        """
         self.r = r_grid.copy()
         self.nr = len(r_grid)
         self.gamma = gamma
@@ -661,22 +816,58 @@ class CompressibleSolver:
         self.min_dx = np.min(self.dx)
         
     def _set_initial_conditions(self, rho, v, T):
-        """Set initial conditions from primitive variables (SI units)."""
+        """Set initial conditions from primitive variables.
+
+        Parameters
+        ----------
+        rho, v, T : ndarray
+            Density, velocity, and temperature profiles in SI units.
+
+        Returns
+        -------
+        None
+            ``self.U`` is updated in place.
+        """
         for i in range(self.nr):
             p = rho[i] * K_B_SI * T[i] / M_P_SI
             p = max(p, SMALL_P)
             self.U[i] = _prim_to_cons(np.array([rho[i], v[i], p]), self.gamma)
     
     def _get_dt(self):
-        """Compute CFL-limited timestep."""
+        """Return the CFL-limited time step.
+
+        Returns
+        -------
+        float
+            Stable time step, in s.
+        """
         return _get_dt(self.U, self.nr, self.min_dx, self.gamma, self.cfl)
 
     def _snapshot(self):
-        """Snapshot hook shared by the hydro and MHD integration drivers."""
+        """Return the current primitive plasma fields.
+
+        Returns
+        -------
+        tuple of ndarray
+            Velocity, density, and temperature profiles.
+        """
         return _extract_snapshot(self.U, self.nr, self.gamma, M_P_SI, K_B_SI)
     
     def _step(self, dt, bc_func):
-        """Advance solution by dt."""
+        """Advance the solution by one time step.
+
+        Parameters
+        ----------
+        dt : float
+            Time step, in s.
+        bc_func : callable
+            Function returning ``(rho, v, T)`` at a requested time.
+
+        Returns
+        -------
+        ndarray
+            Updated conserved state.
+        """
         rho_bc, v_bc, T_bc = bc_func(self.time + dt)
         p_bc = rho_bc * K_B_SI * T_bc / M_P_SI
         U_bc = _prim_to_cons(np.array([rho_bc, v_bc, p_bc]), self.gamma)
@@ -698,40 +889,36 @@ class CompressibleSolver:
               particle_initial_positions=None,
               v_init=None, rho_init=None, T_init=None,
               particle_step_times=None):
-        """
-        Run simulation over time grid.
+        """Run the solver and optional tracers over an output-time grid.
         
         Parameters
         ----------
         t_grid : ndarray
-            Output times (seconds)
+            Output times, in s.
         v_bc_func : callable
-            Velocity boundary condition v(t) in m/s
+            Velocity boundary condition, in m/s.
         rho_bc_func : callable
-            Density boundary condition rho(t) in kg/m³
+            Density boundary condition, in kg/m³.
         T_bc_func : callable
-            Temperature boundary condition T(t) in K
+            Temperature boundary condition, in K.
         num_particles : int or dict, optional
-            Number of tracer particles to track
+            Number of tracers, or a mapping of group names to tracer counts.
         particle_injection_rate : array or dict, optional
-            Particle injection times (seconds)
+            Injection times, in s, either as an array or by group.
         particle_release_rate : array or dict, optional
-            Particle release times (seconds)
-        v_init : ndarray or None, optional
-            Initial velocity profile (m/s), shape (nr,). If None, use
-            power-law scaling from boundary values.
-        rho_init : ndarray or None, optional
-            Initial density profile (kg/m³), shape (nr,). If None, use
-            1/r² scaling from boundary value.
-        T_init : ndarray or None, optional
-            Initial temperature profile (K), shape (nr,). If None, use
-            adiabatic scaling from boundary value.
+            Release times, in s, either as an array or by group.
+        particle_initial_positions : dict, optional
+            Initial tracer radii by group, in m.
+        v_init, rho_init, T_init : ndarray, optional
+            Initial plasma profiles. When all three are supplied they restart
+            the solution; otherwise profiles are derived from boundary values.
+        particle_step_times : ndarray, optional
+            Fixed tracer-update times, in s. Defaults to ``t_grid``.
             
         Returns
         -------
         dict
-            Results with keys 't', 'r', 'v', 'rho', 'T', 'solver_info',
-            and optionally 'particles'
+            Plasma results and, when requested, particle trajectories.
         """
         # Initialize state: use provided profiles or power-law scaling
         if v_init is not None and rho_init is not None and T_init is not None:
@@ -1040,34 +1227,32 @@ class CompressibleSolver:
         return results
 
 
-# =============================================================================
-# Factory Function
-# =============================================================================
-
 def create_solver(r_grid, gamma=1.5, method='hllc-plm', cfl=None, verbose=False,
                   pui=False, **kwargs):
-    """
-    Create a compressible solver with specified method.
+    """Create a configured hydrodynamic or MHD solver.
     
     Parameters
     ----------
     r_grid : ndarray
-        Radial grid in m (SI units)
+        Radial grid, in m.
     gamma : float, optional
-        Adiabatic index (default 1.5)
+        Adiabatic index.
     method : str, optional
-        Solver configuration: 'hllc-{pcm|plm}[-{euler|rk2}]' for hydro,
-        or 'mhd-{pcm|plm}[-{euler|rk2}]' for native ideal MHD (HLL flux).
-        Examples: 'hllc-plm', 'hllc-pcm', 'hllc-plm-rk2'
+        ``'hllc-{pcm|plm}[-{euler|rk2}]'`` for hydrodynamics or
+        ``'mhd-{pcm|plm}[-{euler|rk2}]'`` for ideal MHD.
     cfl : float, optional
-        CFL number (default depends on reconstruction)
+        CFL number. The default depends on the numerical method.
     verbose : bool, optional
-        Retained for compatibility; simulations run without terminal output
+        Retained for compatibility; solvers do not write terminal output.
+    pui : bool, optional
+        Apply empirical pick-up-ion deceleration to hydrodynamic solutions.
+    **kwargs
+        Additional MHD solver options.
         
     Returns
     -------
-    CompressibleSolver
-        Configured solver instance
+    CompressibleSolver or MHDSolver
+        Configured solver.
     """
     parts = method.lower().split('-')
 
@@ -1092,34 +1277,29 @@ def create_solver(r_grid, gamma=1.5, method='hllc-plm', cfl=None, verbose=False,
     )
 
 
-# =============================================================================
-# Benchmark and Utility Functions
-# =============================================================================
-
 def benchmark_solvers(r_grid, t_end, v_bc, rho_bc, T_bc, gamma=1.5,
                       methods=None, reference='hllc-plm-rk2'):
-    """
-    Compare different solver configurations on the same problem.
+    """Compare solver configurations on a constant-boundary problem.
     
     Parameters
     ----------
     r_grid : ndarray
-        Radial grid in m (SI units)
+        Radial grid, in m.
     t_end : float
-        End time in seconds
+        End time, in s.
     v_bc, rho_bc, T_bc : float
-        Boundary condition values (constant)
+        Constant boundary values.
     gamma : float, optional
-        Adiabatic index (default 1.5)
+        Adiabatic index.
     methods : list, optional
-        List of method strings to compare
+        Method strings to compare.
     reference : str, optional
-        Reference solution method for error calculation
+        Method used as the error reference.
         
     Returns
     -------
     dict
-        Results for each method including timing and errors
+        Results, timings, and errors by method.
     """
     import time as time_module
     
@@ -1182,39 +1362,30 @@ def benchmark_solvers(r_grid, t_end, v_bc, rho_bc, T_bc, gamma=1.5,
 
 
 def list_available_methods():
-    """
-    Print available solver methods and configurations.
-    
+    """Print solver choices and return the low-level configuration options.
+
+    SURF(solver='hydro') uses HLLC + PLM + RK2, whereas create_solver()
+    defaults to HLLC + PLM + Euler. Method strings below apply to the
+    low-level factory; they are not public SURF solver names.
+
     Returns
     -------
     dict
-        Dictionary of available options
+        Available physics, reconstruction, and time-integration options.
     """
-    print("="*70)
-    print("Available Compressible Solver Methods")
-    print("="*70)
+    print("""Available compressible solvers
     
-    print("\nReconstruction Methods:")
-    print("-" * 50)
-    print("  'pcm': Piecewise Constant Method (1st order, Godunov)")
-    print("  'plm': Piecewise Linear Method (2nd order) with MC limiter [DEFAULT]")
+SURF names:
+  hydro      HLLC + PLM + RK2       mhd      HLL + PLM + RK2
+  hydro-pcm  HLLC + PCM + Euler     mhd-pcm  HLL + PCM + Euler
+  hydro variants also accept the -pui suffix.
     
-    print("\nTime Integration:")
-    print("-" * 50)
-    print("  'euler': Forward Euler (1st order) [DEFAULT]")
-    print("  'rk2': Runge-Kutta 2nd order (Heun method)")
+create_solver() methods:
+  hllc[-{pcm|plm}[-{euler|rk2}]]
+  mhd[-{pcm|plm}[-{euler|rk2}]]
+  Defaults: hllc-plm uses Euler; mhd uses PLM + RK2.
     
-    print("\nMethod String Format:")
-    print("-" * 50)
-    print("  'hllc[-{reconstruction}[-{time_integrator}]]'")
-    print("\nExamples:")
-    print("  'hllc'        -> HLLC + PLM + Euler (default)")
-    print("  'hllc-plm'    -> HLLC + PLM + Euler")
-    print("  'hllc-pcm'    -> HLLC + PCM + Euler (1st order)")
-    print("  'hllc-plm-rk2'-> HLLC + PLM + RK2 (full 2nd order)")
-    print("  'mhd'        -> ideal MHD, HLL + PLM + RK2")
-    print("  'mhd-pcm-euler' -> ideal MHD, HLL + PCM + Euler")
-    print()
+SURF() defaults to the incompressible huxt solver.""")
     
     return {
         'physics': ['hydro', 'mhd'],

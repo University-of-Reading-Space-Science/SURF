@@ -28,6 +28,11 @@ build/
 dist/
 *.egg-info/
 
+# Local documentation, generated outputs, and utility scripts
+/docs/
+/outputs/
+/scripts/
+
 # IDE and temporary files
 .vscode/
 .venv/
