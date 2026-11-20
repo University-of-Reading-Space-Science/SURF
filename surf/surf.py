@@ -1202,10 +1202,8 @@ class SURF:
             None
         """
 
-        buffersteps = np.fix(self.buffertime.to(u.s) / self.dt)
-        buffertime = buffersteps * self.dt
-        model_time = np.arange(-buffertime.value, (self.simtime.to('s') + self.dt).value,
-                               self.dt.value) * self.dt.unit
+        model_time = model_time_grid(self.buffertime, self.simtime, self.dt)
+        buffertime = -model_time[0]
         dlondt = self.twopi * self.dt / self.rotation_period
         nlon = self.nlon  # Use the actual model longitude count
         self.model_time = model_time
@@ -2932,13 +2930,7 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
             model.buffertime = full_buffertime
         # else: set_initial_state already zeroed buffertime
 
-        buffersteps = np.fix(model.buffertime.to(u.s) / model.dt)
-        buffertime_exact = buffersteps * model.dt
-        chunk_model_time = np.arange(
-            -buffertime_exact.value,
-            (model.simtime.to(u.s) + model.dt).value,
-            model.dt.value
-        ) * model.dt.unit
+        chunk_model_time = model_time_grid(model.buffertime, model.simtime, model.dt)
         if state is not None and not model.compressible:
             chunk_model_time = chunk_model_time + full_dt_out
         model.model_time = chunk_model_time
@@ -3625,6 +3617,27 @@ def time_grid(simtime, dt_scale, dr=None, v_max=None):
     return time_grid_dict
 
 
+def model_time_grid(buffertime, simtime, dt):
+    """
+    Define the model time steps, from the start of the spin-up period to the end of the simulation.
+
+    The steps are whole multiples of dt, so t = 0 falls exactly on a model step. Building the grid
+    with np.arange(-buffertime, ...) instead accumulates rounding error, which left the t = 0 step
+    slightly negative or positive depending on the run configuration and so shifted the output by
+    one model step.
+    Args:
+        buffertime: Duration of the spin-up period. Rounded down to a whole number of steps.
+        simtime: Duration of the simulation.
+        dt: The model time step.
+    Returns:
+        model_time: Array of model times, in seconds, with t = 0 at the end of the spin-up period.
+    """
+    dt = dt.to(u.s)
+    n_buffer = int(np.fix((buffertime / dt).decompose().value))
+    n_sim = int(np.ceil((simtime / dt).decompose().value))
+    return np.arange(-n_buffer, n_sim + 1) * dt
+
+
 def _setup_dirs_():
     """
     Function to pull out the directories of boundary conditions, ephemeris, and to save figures and
@@ -3802,9 +3815,10 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
     if spinup_time_seconds <= 0:
         spinup_sampled = np.array([], dtype=float)
         t_grid_combined = np.asarray(time_out_seconds)
-    elif riemann.startswith('mhd') and v_init_si is not None:
+    elif v_init_si is not None:
         # A restart already contains a relaxed state. Extra spin-up samples
-        # would subdivide its first physical step and change the trajectory.
+        # would subdivide its first physical step and change the trajectory,
+        # so a chunked run would no longer reproduce a single solve().
         spinup_sampled = np.asarray([model_time_seconds[0]])
         t_grid_combined = np.concatenate([spinup_sampled, time_out_seconds])
     

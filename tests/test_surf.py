@@ -224,14 +224,15 @@ def reference():
         return {key: data[key] for key in data.files}
 
 
-def _assert_matches(actual, expected, name):
+def _assert_matches(actual, expected, name, rtol=RTOL):
+    actual, expected = _values(actual), _values(expected)
     assert actual.shape == expected.shape, f"{name}: shape {actual.shape} != {expected.shape}"
     nan_actual, nan_expected = np.isnan(actual), np.isnan(expected)
     assert np.array_equal(nan_actual, nan_expected), (
         f"{name}: NaN pattern differs at {np.count_nonzero(nan_actual != nan_expected)} points")
     finite = expected[~nan_expected]
     scale = np.max(np.abs(finite)) if finite.size else 0.0
-    np.testing.assert_allclose(actual, expected, rtol=RTOL, atol=RTOL * scale,
+    np.testing.assert_allclose(actual, expected, rtol=rtol, atol=rtol * scale,
                                equal_nan=True, err_msg=name)
 
 
@@ -330,16 +331,37 @@ def test_save_and_load_round_trip(solver, tmp_path):
                                           coords["r"].to_value(u.km))
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Known issue: solve_chunked() is offset by one model step at chunk joins, so "
-    "it does not reproduce a single solve() as its docstring claims. Remove this "
-    "marker once that is fixed."))
-def test_chunked_solve_matches_single_solve():
-    settings = dict(b_boundary=B_BOUNDARY, lon_start=300 * u.deg, lon_stop=60 * u.deg)
+@pytest.mark.parametrize("settings, chunk_simtime", [
+    (dict(b_boundary=B_BOUNDARY, lon_start=300 * u.deg, lon_stop=60 * u.deg), 1 * u.day),
+    (dict(b_boundary=B_BOUNDARY, lon_start=300 * u.deg, lon_stop=60 * u.deg, dt_scale=3),
+     0.7 * u.day),
+    (dict(solver="hydro", b_boundary=B_BOUNDARY, lon_start=350 * u.deg, lon_stop=10 * u.deg),
+     1 * u.day),
+    (dict(solver="mhd", lon_out=0 * u.deg, mhd_boundary=MHD_BOUNDARY), 1 * u.day),
+], ids=["huxt", "huxt-uneven-chunks", "hydro", "mhd"])
+def test_chunked_solve_matches_single_solve(settings, chunk_simtime):
+    """Splitting a run into chunks reproduces a single solve() to rounding error."""
+    streaks = {} if settings.get("solver") == "mhd" else {"streak_carr": STREAK_CARR}
     single = _model(**settings)
-    single.solve(make_cmes())
+    single.solve(make_cmes(), **streaks)
     chunked = _model(**settings)
-    s.solve_chunked(chunked, make_cmes(), chunk_simtime=1 * u.day, verbose=False)
+    s.solve_chunked(chunked, make_cmes(), chunk_simtime=chunk_simtime, verbose=False,
+                    **streaks)
 
-    np.testing.assert_array_equal(chunked.time_out.value, single.time_out.value)
-    np.testing.assert_allclose(chunked.v_grid.value, single.v_grid.value, rtol=1e-9)
+    np.testing.assert_allclose(chunked.time_out.value, single.time_out.value, rtol=1e-12)
+    fields = ["v_grid", "cme_particles_r", "cme_particles_v"]
+    if single.compressible:
+        fields += ["rho_grid", "temp_grid"]
+    if single.mhd:
+        fields += ["br_grid", "bt_grid", "bn_grid"]
+    if single.track_b:
+        fields += ["b_grid", "hcs_particles_r"]
+    if single.track_streak:
+        fields += ["streak_particles_r"]
+    for field in fields:
+        _assert_matches(getattr(chunked, field), getattr(single, field), field, rtol=1e-9)
+    for chunked_cme, single_cme in zip(chunked.cmes, single.cmes, strict=True):
+        np.testing.assert_allclose(
+            chunked_cme.compute_arrival_at_body("EARTH")["t_transit"].to_value(u.s),
+            single_cme.compute_arrival_at_body("EARTH")["t_transit"].to_value(u.s),
+            rtol=1e-9, equal_nan=True)

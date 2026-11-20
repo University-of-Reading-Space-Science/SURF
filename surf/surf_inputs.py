@@ -1490,9 +1490,7 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
         rotation_period = constants['sidereal_period']
 
     # compute the model time step
-    buffersteps = np.fix(buffertime.to(u.s) / dt)
-    buffertime = buffersteps * dt
-    model_time = np.arange(-buffertime.value, (simtime.to('s') + dt).value, dt.value) * dt.unit
+    model_time = s.model_time_grid(buffertime, simtime, dt)
 
     # interpolate the solar wind speed onto the model grid 
     # variables to store the input conditions.
