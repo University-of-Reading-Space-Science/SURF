@@ -58,11 +58,18 @@ separate persistent process.
 
 
 ### Testing
-For testing with a development installation, a small test suite is included in ['test_surf.py'](tests/test_surf.py), which compares a local version of HUXt against a simple analytical solution and some reference simulation data included in this repository. The test suite uses `pytest`, which is included in the `surf` environment. Using the anaconda prompt from the root directory of `surf`, these tests can be performed by calling pytest from within the HUXt root directory:
+With a development installation, run the test suite from the repository root with `pytest` (included in the `surf` environment):
+
 ```
 pytest
 ```
-The four tests should take around 1 minute to complete on a modest laptop. These tests are not an exhaustive test of all of the features in `surf`, but they do cover the core functionality and expected common use cases. They are mostly useful for anyone developing SURF, to check it is still working and how it differs from the latest available version. If you have installed SURF via pip or conda-forge, then the tests are completed as part of the conda-build process and not available to run locally.
+
+The suite takes around a minute on a modest laptop; the first run takes longer while Numba compiles and caches the solvers. [`tests/test_surf.py`](tests/test_surf.py) contains two kinds of test:
+
+* Verification tests check behaviour any correct version of SURF must show: the HUXt steady state matches its analytic acceleration profile, the hydro solver conserves mass flux, parallel runs match serial runs, and saved runs reload unchanged.
+* Regression tests rerun reference simulations covering the HUXt, hydro and MHD solvers (including CMEs, magnetic polarity, streaklines, time-dependent boundaries and chunked runs) and compare them with `tests/reference_data/surf_regression.npz`. They fail if SURF's numerical output changes.
+
+If a change to the output is intended, for example a bug fix, regenerate the reference data with `python tests/generate_reference_data.py` and record the reason in the commit message.
 
 ## Usage
 
