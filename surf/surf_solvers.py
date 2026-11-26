@@ -23,6 +23,7 @@ NUMBA_CACHE = _CONSTANTS['numba_cache']
 AU_M = 1.496e11
 PUI_REFERENCE_RADIUS_M = AU_M
 PUI_SLOWDOWN_PER_AU = 0.0027
+TWO_PI = 2 * np.pi
 del _CONSTANTS
 
 
@@ -169,138 +170,255 @@ def _catch_up_particles_huxt_batch(
     return particle_step_idx, previous_particle_time
 
 
-# Equation of state
+# Boundary conditions
 
 @njit(cache=NUMBA_CACHE)
-def _get_rhoe(p, gamma):
-    """Return internal energy density from pressure.
+def _eval_boundary(mode, xs, ys, params, t):
+    """Evaluate a tabulated boundary condition at a model time.
 
     Parameters
     ----------
-    p : float
-        Thermal pressure.
-    gamma : float
-        Adiabatic index.
+    mode : int
+        0 for a constant ``ys[0]``; 1 for a time series sampled at
+        ``xs + params[0]``; 2 for a Carrington longitude map, with ``xs`` and
+        ``ys`` padded as by :func:`periodic_boundary`.
+    xs, ys : ndarray
+        Sample positions and values.
+    params : ndarray
+        Time offset, longitude at the offset time (rad) and angular speed
+        (rad/s). Only the time offset is used for mode 1.
+    t : float
+        Model time, in s.
 
     Returns
     -------
     float
-        Internal energy density.
+        Boundary value at ``t``.
     """
-    return p / (gamma - 1.0)
+    if mode == 0:
+        return ys[0]
+    if mode == 1:
+        return np.interp(t + params[0], xs, ys)
+    lon = (params[1] - params[2] * (t + params[0])) % TWO_PI
+    return np.interp(lon, xs, ys)
 
+
+def constant_boundary(value):
+    """Return the tabulated form of a constant boundary condition.
+
+    Parameters
+    ----------
+    value : float
+        Boundary value.
+
+    Returns
+    -------
+    tuple
+        ``(mode, xs, ys, params)`` for :func:`_eval_boundary`.
+    """
+    return 0, np.zeros(1), np.array([float(value)]), np.zeros(3)
+
+
+def time_series_boundary(times, values, offset=0.0):
+    """Return the tabulated form of a boundary time series.
+
+    Parameters
+    ----------
+    times, values : array_like
+        Increasing sample times, in s, and boundary values.
+    offset : float, optional
+        Added to the model time before interpolating, in s.
+
+    Returns
+    -------
+    tuple
+        ``(mode, xs, ys, params)`` for :func:`_eval_boundary`.
+    """
+    return (1, np.ascontiguousarray(times, dtype=float),
+            np.ascontiguousarray(values, dtype=float), np.array([float(offset), 0.0, 0.0]))
+
+
+def periodic_boundary(lons, values, lon0, omega, offset=0.0):
+    """Return the tabulated form of a Carrington longitude map.
+
+    The boundary at time ``t`` is the map at longitude ``lon0 - omega * (t + offset)``,
+    interpolated periodically, as by ``np.interp(..., period=2*pi)``.
+
+    Parameters
+    ----------
+    lons, values : array_like
+        Map longitudes, in rad, and boundary values.
+    lon0 : float
+        Longitude at time ``-offset``, in rad.
+    omega : float
+        Rotation rate, in rad/s.
+    offset : float, optional
+        Added to the model time, in s.
+
+    Returns
+    -------
+    tuple
+        ``(mode, xs, ys, params)`` for :func:`_eval_boundary`.
+    """
+    xs = np.asarray(lons, dtype=float) % TWO_PI
+    order = np.argsort(xs)
+    xs = xs[order]
+    ys = np.asarray(values, dtype=float)[order]
+    xs = np.concatenate((xs[-1:] - TWO_PI, xs, xs[:1] + TWO_PI))
+    ys = np.concatenate((ys[-1:], ys, ys[:1]))
+    return 2, xs, ys, np.array([float(offset), float(lon0), float(omega)])
+
+
+def _plasma_boundary(t_grid, v_bc, rho_bc, T_bc, bc_times):
+    """Check and tabulate the velocity, density and temperature boundary conditions.
+
+    Parameters
+    ----------
+    t_grid : ndarray
+        Output times, in s.
+    v_bc, rho_bc, T_bc : float or array_like
+        Boundary values, constant or sampled at ``bc_times``.
+    bc_times : array_like or None
+        Sample times of array boundary conditions, in s.
+
+    Returns
+    -------
+    tuple of ndarray
+        Sample times, velocity, density and temperature, as contiguous float arrays.
+    """
+    values = (v_bc, rho_bc, T_bc)
+    if any(callable(value) for value in values):
+        raise TypeError('Boundary conditions must be numbers, or arrays sampled at bc_times')
+    if bc_times is None:
+        if any(np.ndim(value) != 0 for value in values):
+            raise ValueError('bc_times is required for array boundary conditions')
+        bc_times = [t_grid[0]]
+    bc_times = np.ascontiguousarray(bc_times, dtype=float)
+    if bc_times.ndim != 1 or np.any(np.diff(bc_times) <= 0):
+        raise ValueError('bc_times must be one-dimensional and strictly increasing')
+    tabulated = []
+    for value in values:
+        value = np.ascontiguousarray(np.broadcast_to(value, bc_times.shape), dtype=float)
+        tabulated.append(value)
+    return (bc_times, *tabulated)
+
+
+# Equation of state
 
 @njit(cache=NUMBA_CACHE)
-def _prim_to_cons(q, gamma):
+def _prim_to_cons(rho, v, p, gamma):
     """Convert primitive variables to conserved variables.
 
     Parameters
     ----------
-    q : ndarray
-        Primitive state ``[rho, v, p]``.
+    rho, v, p : float
+        Density, velocity and pressure.
     gamma : float
         Adiabatic index.
 
     Returns
     -------
-    ndarray
-        Conserved state ``[rho, rho*v, E]``.
+    tuple of float
+        Conserved state ``(rho, rho*v, E)``.
     """
-    rho, v, p = q[0], q[1], q[2]
     mom = rho * v
-    rhoe = _get_rhoe(p, gamma)
+    rhoe = p / (gamma - 1.0)
     ener = rhoe + 0.5 * rho * v**2
-    return np.array([rho, mom, ener])
+    return rho, mom, ener
 
 
 # HLLC Riemann solver
 
 @njit(cache=NUMBA_CACHE)
-def _riemann_hllc(U_l, U_r, gamma):
+def _riemann_hllc(rho_l, mom_l, E_l, rho_r, mom_r, E_r, gamma):
     """Return the HLLC interface flux for two conserved states.
-    
+
     Parameters
     ----------
-    U_l, U_r : ndarray
-        Left and right conserved states ``[rho, rho*v, E]``.
+    rho_l, mom_l, E_l : float
+        Left conserved state.
+    rho_r, mom_r, E_r : float
+        Right conserved state.
     gamma : float
         Adiabatic index.
-        
+
     Returns
     -------
-    ndarray
+    tuple of float
         Mass, momentum, and energy fluxes.
     """
+    U_l0 = rho_l
+    U_r0 = rho_r
     # Left state primitives
-    rho_l = max(U_l[0], SMALL_RHO)
-    v_l = U_l[1] / rho_l
-    E_l = U_l[2]
+    rho_l = max(U_l0, SMALL_RHO)
+    v_l = mom_l / rho_l
     p_l = max((E_l - 0.5*rho_l*v_l**2) * (gamma - 1.0), SMALL_P)
     c_l = np.sqrt(gamma * p_l / rho_l)
-    
+
     # Right state primitives
-    rho_r = max(U_r[0], SMALL_RHO)
-    v_r = U_r[1] / rho_r
-    E_r = U_r[2]
+    rho_r = max(U_r0, SMALL_RHO)
+    v_r = mom_r / rho_r
     p_r = max((E_r - 0.5*rho_r*v_r**2) * (gamma - 1.0), SMALL_P)
     c_r = np.sqrt(gamma * p_r / rho_r)
-    
+
     # Wave speed estimates
     S_l = min(v_l - c_l, v_r - c_r)
     S_r = max(v_l + c_l, v_r + c_r)
-    
-    F = np.zeros(3)
-    
+
     if S_l >= 0:
         # Supersonic flow to the right
-        F[0] = rho_l * v_l
-        F[1] = rho_l * v_l * v_l + p_l
-        F[2] = (E_l + p_l) * v_l
-        return F
+        return rho_l * v_l, rho_l * v_l * v_l + p_l, (E_l + p_l) * v_l
     elif S_r <= 0:
         # Supersonic flow to the left
-        F[0] = rho_r * v_r
-        F[1] = rho_r * v_r * v_r + p_r
-        F[2] = (E_r + p_r) * v_r
-        return F
-    
+        return rho_r * v_r, rho_r * v_r * v_r + p_r, (E_r + p_r) * v_r
+
     # Contact wave speed
     denom = rho_l * (S_l - v_l) - rho_r * (S_r - v_r)
     if abs(denom) < 1e-14:
         S_c = 0.5 * (v_l + v_r)
     else:
         S_c = (p_r - p_l + rho_l * v_l * (S_l - v_l) - rho_r * v_r * (S_r - v_r)) / denom
-    
+
     if S_c >= 0:
         # Left star state
         factor = rho_l * (S_l - v_l) / (S_l - S_c)
         U_star_0 = factor
         U_star_1 = factor * S_c
         U_star_2 = factor * (E_l/rho_l + (S_c - v_l) * (S_c + p_l/(rho_l*(S_l - v_l))))
-        
-        F_l_0 = rho_l * v_l
-        F_l_1 = rho_l * v_l * v_l + p_l
-        F_l_2 = (E_l + p_l) * v_l
-        
-        F[0] = F_l_0 + S_l * (U_star_0 - U_l[0])
-        F[1] = F_l_1 + S_l * (U_star_1 - U_l[1])
-        F[2] = F_l_2 + S_l * (U_star_2 - U_l[2])
-    else:
-        # Right star state
-        factor = rho_r * (S_r - v_r) / (S_r - S_c)
-        U_star_0 = factor
-        U_star_1 = factor * S_c
-        U_star_2 = factor * (E_r/rho_r + (S_c - v_r) * (S_c + p_r/(rho_r*(S_r - v_r))))
-        
-        F_r_0 = rho_r * v_r
-        F_r_1 = rho_r * v_r * v_r + p_r
-        F_r_2 = (E_r + p_r) * v_r
-        
-        F[0] = F_r_0 + S_r * (U_star_0 - U_r[0])
-        F[1] = F_r_1 + S_r * (U_star_1 - U_r[1])
-        F[2] = F_r_2 + S_r * (U_star_2 - U_r[2])
-    
-    return F
+        return (rho_l * v_l + S_l * (U_star_0 - U_l0),
+                rho_l * v_l * v_l + p_l + S_l * (U_star_1 - mom_l),
+                (E_l + p_l) * v_l + S_l * (U_star_2 - E_l))
+    # Right star state
+    factor = rho_r * (S_r - v_r) / (S_r - S_c)
+    U_star_0 = factor
+    U_star_1 = factor * S_c
+    U_star_2 = factor * (E_r/rho_r + (S_c - v_r) * (S_c + p_r/(rho_r*(S_r - v_r))))
+    return (rho_r * v_r + S_r * (U_star_0 - U_r0),
+            rho_r * v_r * v_r + p_r + S_r * (U_star_1 - mom_r),
+            (E_r + p_r) * v_r + S_r * (U_star_2 - E_r))
+
+
+@njit(cache=NUMBA_CACHE)
+def _set_flux(fluxes, i, U_l, U_r, gamma):
+    """Store the HLLC flux between two rows of conserved states.
+
+    Parameters
+    ----------
+    fluxes : ndarray
+        Interface fluxes, updated in place.
+    i : int
+        Interface index.
+    U_l, U_r : ndarray
+        Left and right conserved states.
+    gamma : float
+        Adiabatic index.
+
+    Returns
+    -------
+    None
+    """
+    fluxes[i, 0], fluxes[i, 1], fluxes[i, 2] = _riemann_hllc(
+        U_l[0], U_l[1], U_l[2], U_r[0], U_r[1], U_r[2], gamma)
 
 
 # Reconstruction
@@ -324,8 +442,9 @@ def _mc_limiter(a, b):
         return 0.0
     return np.sign(c) * min(abs(c), 2 * abs(a), 2 * abs(b))
 
+
 @njit(cache=NUMBA_CACHE)
-def _compute_fluxes_pcm(U, nr, gamma):
+def _compute_fluxes_pcm(U, nr, gamma, fluxes):
     """Compute first-order piecewise-constant interface fluxes.
 
     Parameters
@@ -336,32 +455,55 @@ def _compute_fluxes_pcm(U, nr, gamma):
         Number of radial cells.
     gamma : float
         Adiabatic index.
+    fluxes : ndarray
+        HLLC flux at each cell interface, filled in place.
 
     Returns
     -------
-    ndarray
-        HLLC flux at each cell interface.
+    None
     """
-    fluxes = np.zeros((nr + 1, 3))
-    
-    for i in range(nr + 1):
-        if i == 0:
-            U_l = U[0]
-            U_r = U[0]
-        elif i == nr:
-            U_l = U[nr-1]
-            U_r = U[nr-1]
-        else:
-            U_l = U[i-1]
-            U_r = U[i]
-        
-        fluxes[i] = _riemann_hllc(U_l, U_r, gamma)
-    
-    return fluxes
+    _set_flux(fluxes, 0, U[0], U[0], gamma)
+    for i in range(1, nr):
+        _set_flux(fluxes, i, U[i-1], U[i], gamma)
+    _set_flux(fluxes, nr, U[nr-1], U[nr-1], gamma)
 
 
 @njit(cache=NUMBA_CACHE)
-def _compute_fluxes_plm(U, nr, gamma):
+def _plm_face_flux(fluxes, i, q_l, dq_l, q_r, dq_r, gamma):
+    """Store the HLLC flux between two reconstructed primitive states.
+
+    The face states are ``q_l + 0.5 * dq_l`` and ``q_r - 0.5 * dq_r``, floored to the
+    minimum density and pressure.
+
+    Parameters
+    ----------
+    fluxes : ndarray
+        Interface fluxes, updated in place.
+    i : int
+        Interface index.
+    q_l, dq_l, q_r, dq_r : tuple of float
+        Cell primitives ``(rho, v, p)`` and their limited slopes either side of the face.
+    gamma : float
+        Adiabatic index.
+
+    Returns
+    -------
+    None
+    """
+    rho_l = max(q_l[0] + 0.5 * dq_l[0], SMALL_RHO)
+    v_l = q_l[1] + 0.5 * dq_l[1]
+    p_l = max(q_l[2] + 0.5 * dq_l[2], SMALL_P)
+    rho_r = max(q_r[0] - 0.5 * dq_r[0], SMALL_RHO)
+    v_r = q_r[1] - 0.5 * dq_r[1]
+    p_r = max(q_r[2] - 0.5 * dq_r[2], SMALL_P)
+    U_l = _prim_to_cons(rho_l, v_l, p_l, gamma)
+    U_r = _prim_to_cons(rho_r, v_r, p_r, gamma)
+    fluxes[i, 0], fluxes[i, 1], fluxes[i, 2] = _riemann_hllc(
+        U_l[0], U_l[1], U_l[2], U_r[0], U_r[1], U_r[2], gamma)
+
+
+@njit(cache=NUMBA_CACHE)
+def _compute_fluxes_plm(U, nr, gamma, fluxes, q_all, q_valid):
     """Compute second-order piecewise-linear interface fluxes.
 
     Parameters
@@ -372,17 +514,16 @@ def _compute_fluxes_plm(U, nr, gamma):
         Number of radial cells.
     gamma : float
         Adiabatic index.
+    fluxes : ndarray
+        Reconstructed HLLC flux at each cell interface, filled in place.
+    q_all, q_valid : ndarray
+        Work arrays for the cell primitives and their validity.
 
     Returns
     -------
-    ndarray
-        Reconstructed HLLC flux at each cell interface.
+    None
     """
-    fluxes = np.zeros((nr + 1, 3))
-    
     # Convert all cells to primitives [rho, v, p]
-    q_all = np.zeros((nr, 3))
-    q_valid = np.ones(nr, dtype=np.int32)
     for j in range(nr):
         rho = max(U[j, 0], SMALL_RHO)
         v = U[j, 1] / rho
@@ -391,81 +532,57 @@ def _compute_fluxes_plm(U, nr, gamma):
         q_all[j, 0] = rho
         q_all[j, 1] = v
         q_all[j, 2] = p
-        if rho <= 0 or p <= 0:
-            q_valid[j] = 0
-    
-    for i in range(nr + 1):
-        if i == 0:
-            U_l = U[0]
-            U_r = U[0]
-        elif i == nr:
-            # Outer boundary - 2nd order extrapolation
-            if nr >= 2:
-                q_last = q_all[nr-1]
-                q_prev = q_all[nr-2]
-                q_face = np.zeros(3)
-                q_face[0] = max(q_last[0] + 0.5 * (q_last[0] - q_prev[0]), SMALL_RHO)
-                q_face[1] = q_last[1] + 0.5 * (q_last[1] - q_prev[1])
-                q_face[2] = max(q_last[2] + 0.5 * (q_last[2] - q_prev[2]), SMALL_P)
-                U_face = _prim_to_cons(q_face, gamma)
-                U_l = U_face
-                U_r = U_face
-            else:
-                U_l = U[nr-1]
-                U_r = U[nr-1]
+        q_valid[j] = 0 if (rho <= 0 or p <= 0) else 1
+
+    # Inner boundary
+    _set_flux(fluxes, 0, U[0], U[0], gamma)
+
+    # First interior face: one-sided slope in the boundary cell
+    if nr >= 2:
+        if nr < 3 or q_valid[0] == 0 or q_valid[1] == 0 or q_valid[2] == 0:
+            _set_flux(fluxes, 1, U[0], U[1], gamma)
         else:
-            idx = i - 1  # left cell of interface
-            
-            if idx >= nr - 1:
-                U_l = U[idx].copy()
-                U_r = U[idx].copy()
-            elif idx == 0:
-                # Inner boundary special case
-                if nr < 3 or q_valid[0] == 0 or q_valid[1] == 0 or q_valid[2] == 0:
-                    U_l = U[0].copy()
-                    U_r = U[1].copy()
-                else:
-                    q_L = np.zeros(3)
-                    q_R = np.zeros(3)
-                    for n in range(3):
-                        slope_0 = q_all[1, n] - q_all[0, n]
-                        slope_L = q_all[1, n] - q_all[0, n]
-                        slope_R = q_all[2, n] - q_all[1, n]
-                        dq_1 = _mc_limiter(slope_L, slope_R)
-                        q_L[n] = q_all[0, n] + 0.5 * slope_0
-                        q_R[n] = q_all[1, n] - 0.5 * dq_1
-                    q_L[0] = max(q_L[0], SMALL_RHO); q_L[2] = max(q_L[2], SMALL_P)
-                    q_R[0] = max(q_R[0], SMALL_RHO); q_R[2] = max(q_R[2], SMALL_P)
-                    U_l = _prim_to_cons(q_L, gamma)
-                    U_r = _prim_to_cons(q_R, gamma)
-            else:
-                # Standard internal interface
-                if q_valid[idx-1] == 0 or q_valid[idx] == 0 or q_valid[idx+1] == 0:
-                    U_l = U[idx].copy()
-                    U_r = U[idx+1].copy()
-                else:
-                    dq_l = np.zeros(3)
-                    dq_r = np.zeros(3)
-                    for n in range(3):
-                        slope_l = q_all[idx, n] - q_all[idx-1, n]
-                        slope_r = q_all[idx+1, n] - q_all[idx, n]
-                        dq_l[n] = _mc_limiter(slope_l, slope_r)
-                        
-                        if idx < nr - 2:
-                            slope_l2 = q_all[idx+1, n] - q_all[idx, n]
-                            slope_r2 = q_all[idx+2, n] - q_all[idx+1, n]
-                            dq_r[n] = _mc_limiter(slope_l2, slope_r2)
-                    
-                    q_L = q_all[idx] + 0.5 * dq_l
-                    q_R = q_all[idx+1] - 0.5 * dq_r
-                    q_L[0] = max(q_L[0], SMALL_RHO); q_L[2] = max(q_L[2], SMALL_P)
-                    q_R[0] = max(q_R[0], SMALL_RHO); q_R[2] = max(q_R[2], SMALL_P)
-                    U_l = _prim_to_cons(q_L, gamma)
-                    U_r = _prim_to_cons(q_R, gamma)
-        
-        fluxes[i] = _riemann_hllc(U_l, U_r, gamma)
-    
-    return fluxes
+            q0 = (q_all[0, 0], q_all[0, 1], q_all[0, 2])
+            q1 = (q_all[1, 0], q_all[1, 1], q_all[1, 2])
+            slope_0 = (q_all[1, 0] - q_all[0, 0], q_all[1, 1] - q_all[0, 1],
+                       q_all[1, 2] - q_all[0, 2])
+            dq_1 = (_mc_limiter(q_all[1, 0] - q_all[0, 0], q_all[2, 0] - q_all[1, 0]),
+                    _mc_limiter(q_all[1, 1] - q_all[0, 1], q_all[2, 1] - q_all[1, 1]),
+                    _mc_limiter(q_all[1, 2] - q_all[0, 2], q_all[2, 2] - q_all[1, 2]))
+            _plm_face_flux(fluxes, 1, q0, slope_0, q1, dq_1, gamma)
+
+    # Standard internal interfaces
+    for i in range(2, nr):
+        idx = i - 1  # left cell of interface
+        if q_valid[idx-1] == 0 or q_valid[idx] == 0 or q_valid[idx+1] == 0:
+            _set_flux(fluxes, i, U[idx], U[idx+1], gamma)
+            continue
+        dq_l = (_mc_limiter(q_all[idx, 0] - q_all[idx-1, 0], q_all[idx+1, 0] - q_all[idx, 0]),
+                _mc_limiter(q_all[idx, 1] - q_all[idx-1, 1], q_all[idx+1, 1] - q_all[idx, 1]),
+                _mc_limiter(q_all[idx, 2] - q_all[idx-1, 2], q_all[idx+1, 2] - q_all[idx, 2]))
+        if idx < nr - 2:
+            dq_r = (_mc_limiter(q_all[idx+1, 0] - q_all[idx, 0],
+                                q_all[idx+2, 0] - q_all[idx+1, 0]),
+                    _mc_limiter(q_all[idx+1, 1] - q_all[idx, 1],
+                                q_all[idx+2, 1] - q_all[idx+1, 1]),
+                    _mc_limiter(q_all[idx+1, 2] - q_all[idx, 2],
+                                q_all[idx+2, 2] - q_all[idx+1, 2]))
+        else:
+            dq_r = (0.0, 0.0, 0.0)
+        q_l = (q_all[idx, 0], q_all[idx, 1], q_all[idx, 2])
+        q_r = (q_all[idx+1, 0], q_all[idx+1, 1], q_all[idx+1, 2])
+        _plm_face_flux(fluxes, i, q_l, dq_l, q_r, dq_r, gamma)
+
+    # Outer boundary - 2nd order extrapolation
+    if nr >= 2:
+        rho_f = max(q_all[nr-1, 0] + 0.5 * (q_all[nr-1, 0] - q_all[nr-2, 0]), SMALL_RHO)
+        v_f = q_all[nr-1, 1] + 0.5 * (q_all[nr-1, 1] - q_all[nr-2, 1])
+        p_f = max(q_all[nr-1, 2] + 0.5 * (q_all[nr-1, 2] - q_all[nr-2, 2]), SMALL_P)
+        U_f = _prim_to_cons(rho_f, v_f, p_f, gamma)
+        fluxes[nr, 0], fluxes[nr, 1], fluxes[nr, 2] = _riemann_hllc(
+            U_f[0], U_f[1], U_f[2], U_f[0], U_f[1], U_f[2], gamma)
+    else:
+        _set_flux(fluxes, nr, U[nr-1], U[nr-1], gamma)
 
 
 # Time integration
@@ -500,45 +617,11 @@ def _get_dt(U, nr, min_dx, gamma, cfl):
         speed = abs(v) + c
         if speed > max_speed:
             max_speed = speed
-    
+
     if max_speed == 0:
         return 1.0
-    
+
     return cfl * min_dx / max_speed
-
-
-@njit(cache=NUMBA_CACHE)
-def _extract_snapshot(U, nr, gamma, M_P_val, K_B_val):
-    """Extract primitive fields from a conserved state.
-
-    Parameters
-    ----------
-    U : ndarray
-        Conserved cell states.
-    nr : int
-        Number of radial cells.
-    gamma : float
-        Adiabatic index.
-    M_P_val, K_B_val : float
-        Proton mass and Boltzmann constant in SI units.
-
-    Returns
-    -------
-    tuple of ndarray
-        Velocity, density, and temperature profiles.
-    """
-    v_out = np.zeros(nr)
-    rho_out = np.zeros(nr)
-    T_out = np.zeros(nr)
-    for i in range(nr):
-        rho = max(U[i, 0], SMALL_RHO)
-        v = U[i, 1] / rho
-        eint = (U[i, 2] - 0.5 * rho * v * v) / rho
-        p = max(rho * eint * (gamma - 1.0), SMALL_P)
-        v_out[i] = v
-        rho_out[i] = rho
-        T_out[i] = p * M_P_val / (rho * K_B_val)
-    return v_out, rho_out, T_out
 
 
 @njit(cache=NUMBA_CACHE)
@@ -560,11 +643,10 @@ def _apply_pui_source(U, r, nr, dt, enabled):
 
     Returns
     -------
-    ndarray
-        Updated conserved states.
+    None
     """
     if not enabled:
-        return U
+        return
     for i in range(nr):
         if r[i] <= PUI_REFERENCE_RADIUS_M:
             continue
@@ -579,17 +661,20 @@ def _apply_pui_source(U, r, nr, dt, enabled):
         velocity_new = velocity * factor
         U[i, 1] = rho * velocity_new
         U[i, 2] = internal_energy + 0.5 * rho * velocity_new * velocity_new
-    return U
 
 
 @njit(cache=NUMBA_CACHE)
-def _step_euler(U, U_bc, nr, A, V, r, dt, gamma, use_plm, pui):
+def _step_euler(U, U_new, U_bc, nr, A, V, r, dt, gamma, use_plm, pui, fluxes, q_all, q_valid):
     """Take an Euler step including spherical geometry and PUI forcing.
 
     Parameters
     ----------
-    U, U_bc : ndarray
-        Conserved cell states and inner-boundary state.
+    U : ndarray
+        Conserved cell states.
+    U_new : ndarray
+        Conserved state after the step, filled in place.
+    U_bc : tuple of float
+        Conserved inner-boundary state.
     nr : int
         Number of radial cells.
     A, V, r : ndarray
@@ -598,83 +683,214 @@ def _step_euler(U, U_bc, nr, A, V, r, dt, gamma, use_plm, pui):
         Time step and adiabatic index.
     use_plm, pui : bool
         Whether to use PLM reconstruction and PUI forcing.
+    fluxes, q_all, q_valid : ndarray
+        Work arrays.
 
     Returns
     -------
-    ndarray
-        Conserved state after one Euler step.
+    None
     """
     if use_plm:
-        fluxes = _compute_fluxes_plm(U, nr, gamma)
+        _compute_fluxes_plm(U, nr, gamma, fluxes, q_all, q_valid)
     else:
-        fluxes = _compute_fluxes_pcm(U, nr, gamma)
-    
-    U_new = np.zeros_like(U)
-    
+        _compute_fluxes_pcm(U, nr, gamma, fluxes)
+
     for i in range(nr):
         if V[i] <= 0:
-            U_new[i] = U[i]
+            U_new[i, :] = U[i, :]
             continue
-        
+
         # Geometric source term (momentum equation only)
         rho = max(U[i, 0], SMALL_RHO)
         v = U[i, 1] / rho
         eint = (U[i, 2] - 0.5 * rho * v * v) / rho
         p = max(rho * eint * (gamma - 1.0), SMALL_P)
         S_mom = p * (A[i+1] - A[i]) / V[i]
-        
+
         inv_V = 1.0 / V[i]
         for j in range(3):
             dUdt = -(A[i+1] * fluxes[i+1, j] - A[i] * fluxes[i, j]) * inv_V
             if j == 1:
                 dUdt += S_mom
             U_new[i, j] = U[i, j] + dt * dUdt
-        
+
         # Reset if unphysical
         if U_new[i, 0] < SMALL_RHO or U_new[i, 2] < SMALL_P:
-            U_new[i] = U[i]
-    
-    U_new[0] = U_bc
-    return _apply_pui_source(U_new, r, nr, dt, pui)
+            U_new[i, :] = U[i, :]
+
+    U_new[0, 0], U_new[0, 1], U_new[0, 2] = U_bc
+    _apply_pui_source(U_new, r, nr, dt, pui)
 
 
-@njit(cache=NUMBA_CACHE)
-def _step_rk2(U, U_bc, nr, A, V, r, dt, gamma, use_plm, pui):
-    """Take a second-order Heun step.
+@njit(cache=NUMBA_CACHE, nogil=True)
+def _run_hydro(U, time, t_grid, bc_times, bc_v, bc_rho, bc_T, r, A, V, min_dx, gamma, cfl,
+               use_plm, rk2, pui, p_r, p_v, p_active, p_injected, p_inj_times, p_rel_times,
+               p_behaviors, p_positive_time, p_step_times, v_out, rho_out, T_out,
+               rec_r, rec_v, rec_t, rec_on):
+    """Advance the hydrodynamic solution through every output time.
 
     Parameters
     ----------
-    U, U_bc : ndarray
-        Conserved cell states and inner-boundary state.
-    nr : int
-        Number of radial cells.
-    A, V, r : ndarray
-        Interface areas, cell volumes, and cell-centre radii.
-    dt, gamma : float
-        Time step and adiabatic index.
-    use_plm, pui : bool
-        Whether to use PLM reconstruction and PUI forcing.
+    U : ndarray
+        Conserved cell states, updated in place.
+    time : float
+        Initial time, in s.
+    t_grid : ndarray
+        Output times, in s.
+    bc_times, bc_v, bc_rho, bc_T : ndarray
+        Inner-boundary sample times and values in SI units.
+    r, A, V : ndarray
+        Cell-centre radii, interface areas and cell volumes.
+    min_dx, gamma, cfl : float
+        Smallest cell width, adiabatic index and CFL number.
+    use_plm, rk2, pui : bool
+        PLM reconstruction, RK2 integration and PUI forcing switches.
+    p_r, p_v, p_active, p_injected : ndarray
+        Tracer state, updated in place.
+    p_inj_times, p_rel_times, p_behaviors, p_positive_time : ndarray
+        Tracer injection and release times and boundary behaviour.
+    p_step_times : ndarray
+        Fixed tracer-update times, in s.
+    v_out, rho_out, T_out : ndarray
+        Plasma output at each output time, filled in place.
+    rec_r, rec_v, rec_t, rec_on : ndarray
+        Tracer position, speed and time at each output time, and whether the
+        tracer was active, filled in place.
 
     Returns
     -------
-    ndarray
-        Conserved state after one RK2 step.
+    float
+        Final time, in s.
     """
-    U1 = _step_euler(U, U_bc, nr, A, V, r, dt, gamma, use_plm, pui)
-    U2 = _step_euler(U1, U_bc, nr, A, V, r, dt, gamma, use_plm, pui)
-    
-    U_new = np.zeros_like(U)
+    nr = r.size
+    nt = t_grid.size
+    U1 = np.empty_like(U)
+    U2 = np.empty_like(U)
+    fluxes = np.empty((nr + 1, 3))
+    q_all = np.empty((nr, 3))
+    q_valid = np.empty(nr, dtype=np.int32)
+
+    p_step_idx = np.searchsorted(p_step_times, time, side='right')
+    previous_particle_time = time
+
+    t_idx = 0
+    if abs(t_grid[0] - time) < 1e-5:
+        _hydro_snapshot(U, nr, gamma, time, 0, v_out, rho_out, T_out,
+                        p_r, p_v, p_active, rec_r, rec_v, rec_t, rec_on)
+        t_idx = 1
+
+    while t_idx < nt:
+        target_time = t_grid[t_idx]
+
+        while time < target_time:
+            dt = _get_dt(U, nr, min_dx, gamma, cfl)
+            if time + dt > target_time:
+                dt = target_time - time
+
+            t_bc = time + dt
+            rho_bc = np.interp(t_bc, bc_times, bc_rho)
+            v_bc = np.interp(t_bc, bc_times, bc_v)
+            T_bc = np.interp(t_bc, bc_times, bc_T)
+            p_bc = rho_bc * K_B_SI * T_bc / M_P_SI
+            U_bc = _prim_to_cons(rho_bc, v_bc, p_bc, gamma)
+
+            if rk2:
+                # Heun's method: average the state with the result of two Euler steps
+                _step_euler(U, U1, U_bc, nr, A, V, r, dt, gamma, use_plm, pui,
+                            fluxes, q_all, q_valid)
+                _step_euler(U1, U2, U_bc, nr, A, V, r, dt, gamma, use_plm, pui,
+                            fluxes, q_all, q_valid)
+                for i in range(nr):
+                    for j in range(3):
+                        U[i, j] = 0.5 * (U[i, j] + U2[i, j])
+                U[0, 0], U[0, 1], U[0, 2] = U_bc
+            else:
+                _step_euler(U, U1, U_bc, nr, A, V, r, dt, gamma, use_plm, pui,
+                            fluxes, q_all, q_valid)
+                U[:, :] = U1
+            time += dt
+
+            if (p_r.size
+                    and p_step_idx < p_step_times.size
+                    and p_step_times[p_step_idx] <= time + 1e-7 * max(1.0, abs(time))):
+                p_step_idx, previous_particle_time = _catch_up_particles_huxt_batch(
+                    p_r, p_v, p_active, p_injected, p_inj_times, p_rel_times,
+                    p_behaviors, p_positive_time, U, r, p_step_times,
+                    p_step_idx, previous_particle_time, time)
+
+        _hydro_snapshot(U, nr, gamma, time, t_idx, v_out, rho_out, T_out,
+                        p_r, p_v, p_active, rec_r, rec_v, rec_t, rec_on)
+        t_idx += 1
+    return time
+
+
+@njit(cache=NUMBA_CACHE)
+def _hydro_snapshot(U, nr, gamma, time, t_idx, v_out, rho_out, T_out,
+                    p_r, p_v, p_active, rec_r, rec_v, rec_t, rec_on):
+    """Store the plasma fields and active tracers at an output time.
+
+    Parameters
+    ----------
+    U : ndarray
+        Conserved cell states.
+    nr : int
+        Number of radial cells.
+    gamma, time : float
+        Adiabatic index and current time, in s.
+    t_idx : int
+        Output time index.
+    v_out, rho_out, T_out : ndarray
+        Plasma output, filled in place.
+    p_r, p_v, p_active : ndarray
+        Tracer positions, speeds and activity.
+    rec_r, rec_v, rec_t, rec_on : ndarray
+        Tracer output, filled in place.
+
+    Returns
+    -------
+    None
+    """
     for i in range(nr):
-        for j in range(3):
-            U_new[i, j] = 0.5 * (U[i, j] + U2[i, j])
-    
-    U_new[0] = U_bc
-    return U_new
+        rho = max(U[i, 0], SMALL_RHO)
+        v = U[i, 1] / rho
+        eint = (U[i, 2] - 0.5 * rho * v * v) / rho
+        p = max(rho * eint * (gamma - 1.0), SMALL_P)
+        v_out[t_idx, i] = v
+        rho_out[t_idx, i] = rho
+        T_out[t_idx, i] = p * M_P_SI / (rho * K_B_SI)
+    _record_particles(time, t_idx, p_r, p_v, p_active, rec_r, rec_v, rec_t, rec_on)
+
+
+@njit(cache=NUMBA_CACHE)
+def _record_particles(time, t_idx, p_r, p_v, p_active, rec_r, rec_v, rec_t, rec_on):
+    """Record the active tracers at an output time.
+
+    Parameters
+    ----------
+    time : float
+        Current time, in s.
+    t_idx : int
+        Output time index.
+    p_r, p_v, p_active : ndarray
+        Tracer positions, speeds and activity.
+    rec_r, rec_v, rec_t, rec_on : ndarray
+        Tracer output, filled in place.
+
+    Returns
+    -------
+    None
+    """
+    for k in range(p_r.size):
+        if p_active[k]:
+            rec_on[k, t_idx] = True
+            rec_r[k, t_idx] = p_r[k]
+            rec_v[k, t_idx] = p_v[k]
+            rec_t[k, t_idx] = time
 
 
 class CompressibleSolver:
     """Solve the 1D spherical Euler equations with an HLLC flux.
-    
+
     Parameters
     ----------
     r_grid : ndarray
@@ -690,7 +906,7 @@ class CompressibleSolver:
     verbose : bool, optional
         Retained for compatibility; the solver does not write terminal output.
     """
-    
+
     def __init__(self, r_grid, gamma=1.5, cfl=None,
                  reconstruction='plm', time_integration='euler',
                  verbose=False, pui=False):
@@ -715,21 +931,21 @@ class CompressibleSolver:
         -------
         None
         """
-        self.r = r_grid.copy()
+        self.r = np.ascontiguousarray(r_grid, dtype=float)
         self.nr = len(r_grid)
         self.gamma = gamma
         self.verbose = verbose
         self.pui = bool(pui)
-        
+
         self.reconstruction = reconstruction.lower()
         self.time_integration = time_integration.lower()
-        
+
         # Set CFL based on reconstruction order
         if cfl is None:
             self.cfl = 0.4 if self.reconstruction == 'plm' else 0.8
         else:
             self.cfl = cfl
-        
+
         # Grid geometry
         self.dr = np.diff(r_grid)
         self.r_int = np.zeros(self.nr + 1)
@@ -737,18 +953,18 @@ class CompressibleSolver:
         self.r_int[0] = self.r[0] - 0.5 * self.dr[0]
         self.r_int[-1] = self.r[-1] + 0.5 * self.dr[-1]
         self.dx = np.diff(self.r_int)
-        
+
         # Interface areas and cell volumes (spherical geometry)
         self.A = 4.0 * np.pi * self.r_int**2
         self.V = 4.0/3.0 * np.pi * (self.r_int[1:]**3 - self.r_int[:-1]**3)
-        
+
         # State array [rho, rho*v, E]
         self.U = np.zeros((self.nr, 3))
         self.time = 0.0
-        
+
         # Precompute min_dx for CFL
         self.min_dx = np.min(self.dx)
-        
+
     def _set_initial_conditions(self, rho, v, T):
         """Set initial conditions from primitive variables.
 
@@ -765,76 +981,52 @@ class CompressibleSolver:
         for i in range(self.nr):
             p = rho[i] * K_B_SI * T[i] / M_P_SI
             p = max(p, SMALL_P)
-            self.U[i] = _prim_to_cons(np.array([rho[i], v[i], p]), self.gamma)
-    
-    def _get_dt(self):
-        """Return the CFL-limited time step.
+            self.U[i] = _prim_to_cons(rho[i], v[i], p, self.gamma)
 
-        Returns
-        -------
-        float
-            Stable time step, in s.
-        """
-        return _get_dt(self.U, self.nr, self.min_dx, self.gamma, self.cfl)
-
-    def _snapshot(self):
-        """Return the current primitive plasma fields.
-
-        Returns
-        -------
-        tuple of ndarray
-            Velocity, density, and temperature profiles.
-        """
-        return _extract_snapshot(self.U, self.nr, self.gamma, M_P_SI, K_B_SI)
-    
-    def _step(self, dt, bc_func):
-        """Advance the solution by one time step.
+    def _run(self, t_grid, boundary, particles, outputs):
+        """Advance the solution through the output times in compiled code.
 
         Parameters
         ----------
-        dt : float
-            Time step, in s.
-        bc_func : callable
-            Function returning ``(rho, v, T)`` at a requested time.
+        t_grid : ndarray
+            Output times, in s.
+        boundary : tuple of ndarray
+            Boundary sample times, velocity, density and temperature.
+        particles : tuple of ndarray
+            Packed tracer state and settings.
+        outputs : tuple of ndarray
+            Plasma and tracer output arrays, filled in place.
 
         Returns
         -------
-        ndarray
-            Updated conserved state.
+        None
+            ``self.U`` and ``self.time`` are updated.
         """
-        rho_bc, v_bc, T_bc = bc_func(self.time + dt)
-        p_bc = rho_bc * K_B_SI * T_bc / M_P_SI
-        U_bc = _prim_to_cons(np.array([rho_bc, v_bc, p_bc]), self.gamma)
-        
-        use_plm = (self.reconstruction == 'plm')
-        
-        if self.time_integration == 'rk2':
-            self.U = _step_rk2(self.U, U_bc, self.nr, self.A, self.V, self.r,
-                               dt, self.gamma, use_plm, self.pui)
-        else:
-            self.U = _step_euler(self.U, U_bc, self.nr, self.A, self.V, self.r,
-                                 dt, self.gamma, use_plm, self.pui)
-        
-        self.time += dt
-        return self.U
-    
-    def solve(self, t_grid, v_bc_func, rho_bc_func, T_bc_func,
+        self.time = _run_hydro(
+            self.U, self.time, t_grid, *boundary, self.r, self.A, self.V, self.min_dx,
+            self.gamma, self.cfl, self.reconstruction == 'plm',
+            self.time_integration == 'rk2', self.pui, *particles, *outputs)
+
+    def solve(self, t_grid, v_bc, rho_bc, T_bc, bc_times=None,
               num_particles=None, particle_injection_rate=None, particle_release_rate=None,
               particle_initial_positions=None,
               v_init=None, rho_init=None, T_init=None,
               particle_step_times=None):
         """Run the solver and optional tracers over an output-time grid.
-        
+
         Parameters
         ----------
         t_grid : ndarray
             Output times, in s.
-        v_bc_func : callable
-            Velocity boundary condition, in m/s.
-        rho_bc_func : callable
-            Density boundary condition, in kg/m³.
-        T_bc_func : callable
-            Temperature boundary condition, in K.
+        v_bc : float or ndarray
+            Velocity boundary condition, in m/s. Constant, or sampled at ``bc_times``.
+        rho_bc : float or ndarray
+            Density boundary condition, in kg/m³. Constant, or sampled at ``bc_times``.
+        T_bc : float or ndarray
+            Temperature boundary condition, in K. Constant, or sampled at ``bc_times``.
+        bc_times : ndarray, optional
+            Increasing sample times of array boundary conditions, in s. The boundary is
+            interpolated linearly between them and held constant outside them.
         num_particles : dict or None, optional
             Number of tracers in each named group. None for no tracers.
         particle_injection_rate : dict, optional
@@ -848,190 +1040,88 @@ class CompressibleSolver:
             the solution; otherwise profiles are derived from boundary values.
         particle_step_times : ndarray, optional
             Fixed tracer-update times, in s. Defaults to ``t_grid``.
-            
+
         Returns
         -------
         dict
             Plasma results and, when requested, particle trajectories.
         """
+        t_grid = np.ascontiguousarray(t_grid, dtype=float)
+        boundary = _plasma_boundary(t_grid, v_bc, rho_bc, T_bc, bc_times)
+        bc_times, bc_v, bc_rho, bc_T = boundary
+
         # Initialize state: use provided profiles or power-law scaling
         if v_init is not None and rho_init is not None and T_init is not None:
             self._set_initial_conditions(rho_init, v_init, T_init)
         else:
-            v0 = v_bc_func(t_grid[0])
-            rho0 = rho_bc_func(t_grid[0])
-            T0 = T_bc_func(t_grid[0])
-            
+            v0 = np.interp(t_grid[0], bc_times, bc_v)
+            rho0 = np.interp(t_grid[0], bc_times, bc_rho)
+            T0 = np.interp(t_grid[0], bc_times, bc_T)
+
             r0 = self.r[0]
             v_def = np.ones_like(self.r) * v0
             rho_def = np.zeros_like(self.r)
             T_def = np.zeros_like(self.r)
             alpha = 2 * (self.gamma - 1)
-            
+
             for i, r in enumerate(self.r):
                 r_ratio = r0 / r
                 rho_def[i] = rho0 * r_ratio**2
                 T_def[i] = T0 * r_ratio**alpha
-            
+
             self._set_initial_conditions(rho_def, v_def, T_def)
         self.time = t_grid[0]
-        
-        # Output arrays
-        nt = len(t_grid)
-        v_out = np.zeros((nt, self.nr))
-        rho_out = np.zeros((nt, self.nr))
-        T_out = np.zeros((nt, self.nr))
-        
-        # Particle tracking setup
-        particles_enabled = False
-        particle_groups = {}
-        
-        if num_particles:
-            particles_enabled = True
-            v_initial = self.U[:, 1] / self.U[:, 0]
-            for group_name, n_p in num_particles.items():
-                inj_times = particle_injection_rate[group_name]
-                rel_times = particle_release_rate[group_name] \
-                    if particle_release_rate and group_name in particle_release_rate else inj_times
-                behavior = 1 if 'cme' in group_name.lower() else 0
-                
-                initial_positions = (
-                    particle_initial_positions.get(group_name, [])
-                    if particle_initial_positions else [])
-                initial_positions = list(initial_positions)
-                initial_velocities = [
-                    np.interp(r_p, self.r, v_initial)
-                    for r_p in initial_positions]
-                particle_groups[group_name] = {
-                    'n_particles': n_p,
-                    'injection_times': inj_times,
-                    'release_times': rel_times,
-                    'r': [[r_p] for r_p in initial_positions],
-                    'v': [[v_p] for v_p in initial_velocities],
-                    't': [[t_grid[0]] for _ in initial_positions],
-                    't_inject': [t_grid[0] for _ in initial_positions],
-                    'active': [True for _ in initial_positions],
-                    'r_current': initial_positions.copy(),
-                    'v_current': initial_velocities.copy(),
-                    'initial_velocities': initial_velocities.copy(),
-                    'particles_injected': len(initial_positions),
-                    'behavior': behavior,
-                    'huxt_cme': 'cme' in group_name.lower(),
-                }
 
-        # Pack every named group into flat arrays so one compiled call updates
-        # CME, HCS, and streakline tracers on each internal step.
-        cme_r_initial = []
-        cme_v_initial = []
-        cme_active_initial = []
-        cme_injected_initial = []
-        cme_injection_times = []
-        cme_release_times = []
-        particle_behaviors = []
-        require_positive_time = []
-        for group in particle_groups.values():
-            n_group = group['n_particles']
-            initial_positions = list(group.get('r_current', []))
-            initial_velocities = list(group.get('initial_velocities', []))
-            group['cme_batch_start'] = len(cme_r_initial)
-            for particle_id in range(n_group):
+        # Pack every named tracer group into flat arrays, so the compiled loop
+        # updates CME, HCS and streakline tracers together.
+        num_particles = dict(num_particles or {})
+        v_initial = self.U[:, 1] / self.U[:, 0]
+        p_r, p_v, p_active, p_inj_times, p_rel_times = [], [], [], [], []
+        p_behaviors, p_positive_time = [], []
+        groups = {}
+        for group_name, n_p in num_particles.items():
+            inj_times = list(particle_injection_rate[group_name])
+            rel_times = (particle_release_rate[group_name]
+                         if particle_release_rate and group_name in particle_release_rate
+                         else inj_times)
+            is_cme = 'cme' in group_name.lower()
+            initial_positions = list(
+                particle_initial_positions.get(group_name, [])
+                if particle_initial_positions else [])
+            groups[group_name] = {
+                'n_particles': n_p,
+                'injection_times': inj_times,
+                'release_times': rel_times,
+                'start': len(p_r),
+            }
+            for particle_id in range(n_p):
                 has_initial = particle_id < len(initial_positions)
-                cme_r_initial.append(
-                    initial_positions[particle_id] if has_initial else np.nan)
-                cme_v_initial.append(
-                    initial_velocities[particle_id] if has_initial else np.nan)
-                cme_active_initial.append(has_initial)
-                cme_injected_initial.append(has_initial)
-                cme_injection_times.append(group['injection_times'][particle_id])
-                cme_release_times.append(group['release_times'][particle_id])
-                particle_behaviors.append(group['behavior'])
-                require_positive_time.append(group['huxt_cme'])
-            group['r'] = [[] for _ in range(n_group)]
-            group['v'] = [[] for _ in range(n_group)]
-            group['t'] = [[] for _ in range(n_group)]
-            group['t_inject'] = list(group['injection_times'])
+                r_p = initial_positions[particle_id] if has_initial else np.nan
+                p_r.append(r_p)
+                p_v.append(np.interp(r_p, self.r, v_initial) if has_initial else np.nan)
+                p_active.append(has_initial)
+                p_inj_times.append(inj_times[particle_id])
+                p_rel_times.append(rel_times[particle_id])
+                p_behaviors.append(1 if is_cme else 0)
+                p_positive_time.append(is_cme)
 
-        cme_r_current = np.asarray(cme_r_initial, dtype=float)
-        cme_v_current = np.asarray(cme_v_initial, dtype=float)
-        cme_active = np.asarray(cme_active_initial, dtype=bool)
-        cme_injected = np.asarray(cme_injected_initial, dtype=bool)
-        cme_injection_times = np.asarray(cme_injection_times, dtype=float)
-        cme_release_times = np.asarray(cme_release_times, dtype=float)
-        particle_behaviors = np.asarray(particle_behaviors, dtype=np.int64)
-        require_positive_time = np.asarray(require_positive_time, dtype=bool)
+        p_active = np.asarray(p_active, dtype=bool)
         if particle_step_times is None:
-            particle_step_times = np.asarray(t_grid, dtype=float)
-        else:
-            particle_step_times = np.asarray(particle_step_times, dtype=float)
-        particle_step_idx = int(np.searchsorted(
-            particle_step_times, self.time, side='right'))
-        previous_particle_time = self.time
-        
-        # Time loop
-        t_idx = 0
-        
-        # Save first snapshot
-        if abs(t_grid[0] - self.time) < 1e-5:
-            v_snap, rho_snap, T_snap = self._snapshot()
-            v_out[0, :] = v_snap
-            rho_out[0, :] = rho_snap
-            T_out[0, :] = T_snap
-            for group in particle_groups.values():
-                batch_start = group['cme_batch_start']
-                for particle_id in range(group['n_particles']):
-                    batch_id = batch_start + particle_id
-                    if cme_active[batch_id]:
-                        group['r'][particle_id].append(cme_r_current[batch_id])
-                        group['v'][particle_id].append(cme_v_current[batch_id])
-                        group['t'][particle_id].append(self.time)
-            t_idx = 1
-        
-        while t_idx < nt:
-            target_time = t_grid[t_idx]
-            
-            while self.time < target_time:
-                dt = self._get_dt()
-                if self.time + dt > target_time:
-                    dt = target_time - self.time
-                self._step(dt, lambda t: (rho_bc_func(t), v_bc_func(t), T_bc_func(t)))
+            particle_step_times = t_grid
+        particles = (
+            np.asarray(p_r, dtype=float), np.asarray(p_v, dtype=float),
+            p_active, p_active.copy(),
+            np.asarray(p_inj_times, dtype=float), np.asarray(p_rel_times, dtype=float),
+            np.asarray(p_behaviors, dtype=np.int64), np.asarray(p_positive_time, dtype=bool),
+            np.ascontiguousarray(particle_step_times, dtype=float))
 
-                if (cme_r_current.size
-                        and particle_step_idx < particle_step_times.size
-                        and particle_step_times[particle_step_idx] <= self.time
-                        + 1e-7 * max(1.0, abs(self.time))):
-                    particle_step_idx, previous_particle_time = (
-                        _catch_up_particles_huxt_batch(
-                        cme_r_current, cme_v_current, cme_active,
-                        cme_injected, cme_injection_times, cme_release_times,
-                        particle_behaviors, require_positive_time,
-                        self.U, self.r, particle_step_times,
-                        particle_step_idx, previous_particle_time,
-                        self.time))
-                
-            
-            # Save snapshot
-            v_snap, rho_snap, T_snap = self._snapshot()
-            v_out[t_idx, :] = v_snap
-            rho_out[t_idx, :] = rho_snap
-            T_out[t_idx, :] = T_snap
-            for group in particle_groups.values():
-                batch_start = group['cme_batch_start']
-                for particle_id in range(group['n_particles']):
-                    batch_id = batch_start + particle_id
-                    if cme_active[batch_id]:
-                        group['r'][particle_id].append(cme_r_current[batch_id])
-                        group['v'][particle_id].append(cme_v_current[batch_id])
-                        group['t'][particle_id].append(self.time)
-            t_idx += 1
-
-        # Record each group's final tracer state
-        if particles_enabled:
-            for group in particle_groups.values():
-                batch_start = group['cme_batch_start']
-                batch_stop = batch_start + group['n_particles']
-                group['active'] = list(cme_active[batch_start:batch_stop])
-                group['particles_injected'] = int(np.sum(
-                    cme_injected[batch_start:batch_stop]))
+        nt = len(t_grid)
+        n_tracers = len(p_r)
+        outputs = (np.zeros((nt, self.nr)), np.zeros((nt, self.nr)), np.zeros((nt, self.nr)),
+                   np.full((n_tracers, nt), np.nan), np.full((n_tracers, nt), np.nan),
+                   np.full((n_tracers, nt), np.nan), np.zeros((n_tracers, nt), dtype=bool))
+        self._run(t_grid, boundary, particles, outputs)
+        v_out, rho_out, T_out, rec_r, rec_v, rec_t, rec_on = outputs
 
         results = {
             't': t_grid,
@@ -1045,32 +1135,26 @@ class CompressibleSolver:
                 'pui': self.pui,
             }
         }
-        
-        # Format particle data
-        if particles_enabled:
-            for name, g in particle_groups.items():
-                if len(g['r']) > 0:
-                    max_len = max(len(traj) for traj in g['r'])
-                    n_p = len(g['r'])
-                    
-                    r_arr = np.full((n_p, max_len), np.nan)
-                    v_arr = np.full((n_p, max_len), np.nan)
-                    t_arr = np.full((n_p, max_len), np.nan)
-                    
-                    for i in range(n_p):
-                        traj_len = len(g['r'][i])
-                        r_arr[i, :traj_len] = g['r'][i]
-                        v_arr[i, :traj_len] = g['v'][i]
-                        t_arr[i, :traj_len] = g['t'][i]
-                    
-                    g['r'] = r_arr
-                    g['v'] = v_arr
-                    g['t'] = t_arr
-                    g['t_inject'] = np.array(g['t_inject'])
-                    g['active'] = np.array(g['active'])
-            
-            results['particles'] = {'groups': particle_groups}
-        
+
+        # Each tracer's trajectory holds the output times at which it was active,
+        # padded with NaN to the longest trajectory in its group.
+        if groups:
+            p_active, p_injected = particles[2], particles[3]
+            for group in groups.values():
+                start = group.pop('start')
+                stop = start + group['n_particles']
+                lengths = [int(np.count_nonzero(rec_on[k])) for k in range(start, stop)]
+                max_len = max(lengths, default=0)
+                for key, record in (('r', rec_r), ('v', rec_v), ('t', rec_t)):
+                    trajectories = np.full((len(lengths), max_len), np.nan)
+                    for row, k in enumerate(range(start, stop)):
+                        trajectories[row, :lengths[row]] = record[k, rec_on[k]]
+                    group[key] = trajectories
+                group['t_inject'] = np.array(group['injection_times'])
+                group['active'] = p_active[start:stop]
+                group['particles_injected'] = int(np.sum(p_injected[start:stop]))
+            results['particles'] = {'groups': groups}
+
         return results
 
 
@@ -1160,16 +1244,12 @@ def benchmark_solvers(r_grid, t_end, v_bc, rho_bc, T_bc, gamma=1.5,
     dt_out = t_end / 100
     t_grid = np.arange(0, t_end + dt_out, dt_out)
     
-    v_bc_func = lambda t: v_bc
-    rho_bc_func = lambda t: rho_bc
-    T_bc_func = lambda t: T_bc
-    
     results = {}
     
     print(f"Running reference: {reference}")
     solver = create_solver(r_grid, gamma=gamma, method=reference, verbose=False)
     t0 = time_module.time()
-    ref_result = solver.solve(t_grid, v_bc_func, rho_bc_func, T_bc_func)
+    ref_result = solver.solve(t_grid, v_bc, rho_bc, T_bc)
     ref_time = time_module.time() - t0
     results[reference] = {
         'result': ref_result,
@@ -1185,7 +1265,7 @@ def benchmark_solvers(r_grid, t_end, v_bc, rho_bc, T_bc, gamma=1.5,
         print(f"Running: {method}")
         solver = create_solver(r_grid, gamma=gamma, method=method, verbose=False)
         t0 = time_module.time()
-        result = solver.solve(t_grid, v_bc_func, rho_bc_func, T_bc_func)
+        result = solver.solve(t_grid, v_bc, rho_bc, T_bc)
         elapsed = time_module.time() - t0
         
         error_v = np.sqrt(np.mean((result['v'][-1] - ref_result['v'][-1])**2))

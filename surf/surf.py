@@ -3698,16 +3698,6 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
         spinup_sampled = np.asarray([model_time_seconds[0]])
         t_grid_combined = np.concatenate([spinup_sampled, time_out_seconds])
     
-    # Boundary condition functions (MUST return plain floats, no units)
-    def v_bc_func(t):
-        return float(np.interp(t, model_time_seconds, v_bc_si))
-    
-    def rho_bc_func(t):
-        return float(np.interp(t, model_time_seconds, rho_bc_si))
-    
-    def T_bc_func(t):
-        return float(np.interp(t, model_time_seconds, T_bc_K))
-    
     # Initialize solver with selected method string.
     options = dict(mhd_options or {})
     mhd_init = options.pop('mhd_init', None)
@@ -3729,9 +3719,10 @@ def solve_radial_compressible(v_bc_kms, rho_bc_kgm3, T_bc_K, model_time, time_ou
     # Run simulation
     results = solver.solve(
         t_grid=t_grid_combined,
-        v_bc_func=v_bc_func,
-        rho_bc_func=rho_bc_func,
-        T_bc_func=T_bc_func,
+        v_bc=v_bc_si,
+        rho_bc=rho_bc_si,
+        T_bc=T_bc_K,
+        bc_times=model_time_seconds,
         num_particles=num_particles,
         particle_injection_rate=particle_injection_rate,
         particle_release_rate=particle_release_rate,

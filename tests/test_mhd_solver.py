@@ -37,7 +37,7 @@ def test_mhd_energy_and_flux_in_si_units():
 def test_radial_flux_constraint_and_force_free_radial_field():
     r = np.linspace(2e10, 4e10, 64)
     solver = MHDSolver(r, br=1e-6)
-    out = solver.solve([0, 1000], lambda t: 0, lambda t: 1e-18, lambda t: 1e5,
+    out = solver.solve([0, 1000], 0, 1e-18, 1e5,
                        rho_init=np.full(64, 1e-18), v_init=np.zeros(64),
                        T_init=np.full(64, 1e5))
     np.testing.assert_allclose(out['br']*r**2, np.full((2, 64), 1e-6*r[0]**2), rtol=1e-15)
@@ -69,7 +69,7 @@ def test_spherical_flux_budgets_and_gravity_work():
 
 def test_radial_flow_state_has_no_transverse_velocity_degrees_of_freedom():
     solver = MHDSolver(np.linspace(2e10, 4e10, 32), boundary={'bt': 10e-9})
-    out = solver.solve([0, 100], lambda t: 4e5, lambda t: 1e-18, lambda t: 1e5)
+    out = solver.solve([0, 100], 4e5, 1e-18, 1e5)
     assert solver.U.shape == (32, 5)
     assert set(('br', 'bt', 'bn')).issubset(out)
     assert 'vt' not in out and 'vn' not in out
@@ -87,7 +87,7 @@ def test_reduced_perpendicular_shock_tube_is_positive(method):
     bt = np.where(left, 1., -1.)*np.sqrt(MU0)
     solver = create_solver(1e6+x, gamma=2, method=method,
                            br=.75*np.sqrt(MU0), boundary={'bt': np.sqrt(MU0)})
-    out = solver.solve([0, .1], lambda t: 0, lambda t: 1, lambda t: M_P_SI/K_B_SI,
+    out = solver.solve([0, .1], 0, 1, M_P_SI/K_B_SI,
                        v_init=np.zeros(n), rho_init=rho, T_init=pressure/rho*M_P_SI/K_B_SI,
                        mhd_init={'bt': bt, 'bn': np.zeros(n)})
     assert np.all(np.isfinite(out['T'])) and np.min(out['T']) > 0
@@ -105,7 +105,7 @@ def test_invalid_inputs_fail_explicitly():
         with pytest.raises(ValueError):
             MHDSolver(r, **kwargs)
     with pytest.raises(ValueError, match='strictly increasing'):
-        MHDSolver(r).solve([0, 0], lambda t: 4e5, lambda t: 1e-18, lambda t: 1e5)
+        MHDSolver(r).solve([0, 0], 4e5, 1e-18, 1e5)
     with pytest.raises(ValueError, match='scalar'):
         normalize_boundary({'br': np.ones(8)}, 8, 1)
     with pytest.raises(ValueError, match='finite'):
@@ -129,7 +129,7 @@ def test_perpendicular_fast_shock_rankine_hugoniot_solution():
     x = (np.arange(n)+.5)/n
     initial = np.where((x < .5)[:, None], upstream, right)
     solver = MHDSolver(1e6+x, gamma=gamma, boundary={'bt': upstream[3]})
-    result = solver.solve([0., .1], lambda t: 3., lambda t: 1., lambda t: .1*M_P_SI/K_B_SI,
+    result = solver.solve([0., .1], 3., 1., .1*M_P_SI/K_B_SI,
                           v_init=initial[:, 1], rho_init=initial[:, 0],
                           T_init=initial[:, 2]/initial[:, 0]*M_P_SI/K_B_SI,
                           mhd_init={'bt': initial[:, 3]})
@@ -144,7 +144,7 @@ def test_spherical_transverse_field_expansion():
     r = np.linspace(2e10, 4e10, 100)
     solver = MHDSolver(r, boundary={'bt': 1e-10})
     # Negligible gas/magnetic pressure: rho~r^-2, Bt~r^-1, v~constant.
-    result = solver.solve([0, 50000], lambda t: 4e5, lambda t: 1e-18, lambda t: 10.)
+    result = solver.solve([0, 50000], 4e5, 1e-18, 10.)
     interior = slice(5, -5)
     np.testing.assert_allclose(result['bt'][-1, interior],
                                1e-10*r[0]/r[interior], rtol=.015)

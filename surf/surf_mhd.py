@@ -14,7 +14,13 @@ from surf.surf_solvers import (
     NUMBA_CACHE,
     SMALL_P,
     SMALL_RHO,
+    _catch_up_particles_huxt_batch,
+    _eval_boundary,
     _mc_limiter,
+    _record_particles,
+    constant_boundary,
+    periodic_boundary,
+    time_series_boundary,
 )
 
 MU0 = 4e-7 * np.pi
@@ -90,7 +96,7 @@ def boundary_for_longitude(model, i):
     Returns
     -------
     dict
-        Radial field, transverse boundary functions, and gravity flag.
+        Radial field, tabulated transverse boundaries, and gravity flag.
     """
     config = model.mhd_boundary
     offset = getattr(model, '_mhd_time_offset', 0.0)
@@ -101,24 +107,84 @@ def boundary_for_longitude(model, i):
             boundary[key] = float(value)
         elif 'time' in config:
             series = value if value.ndim == 1 else value[:, i]
-            boundary[key] = lambda t, series=series: float(
-                np.interp(t + offset, config['time'], series)
-            )
+            boundary[key] = time_series_boundary(config['time'], series, offset)
         else:
             # Carrington bin centres, same convention as v_boundary. Vectors
             # are inertial RTN components; frame only changes longitude mapping.
             lons = (np.arange(len(value)) + 0.5) * 2 * np.pi / len(value)
             lon0 = model.cr_lon_init.to_value('rad') + model.lon[i].to_value('rad')
             omega = 2 * np.pi / model.rotation_period.to_value('s')
-            boundary[key] = lambda t, value=value, lons=lons: float(np.interp(
-                lon0 - omega * (t + offset), lons, value, period=2 * np.pi
-            ))
+            boundary[key] = periodic_boundary(lons, value, lon0, omega, offset)
     return {
         'br': float(config['br']),
         'boundary': boundary,
         'gravity': model.mhd_gravity,
     }
 
+
+# Pointwise MHD kernels. States are tuples (rho, rho*vr, E, Bt, Bn) for conserved
+# variables and (rho, vr, p, Bt, Bn) for primitives.
+
+@njit(cache=NUMBA_CACHE)
+def _primitive_s(U0, U1, U2, U3, U4, gamma):
+    """Convert a conserved state to primitive variables."""
+    kinetic = 0.5 * U1**2 / U0
+    magnetic = (U3**2 + U4**2) / (2 * MU0)
+    return U0, U1 / U0, (gamma - 1) * (U2 - kinetic - magnetic), U3, U4
+
+
+@njit(cache=NUMBA_CACHE)
+def _conserved_s(q0, q1, q2, q3, q4, gamma):
+    """Convert a primitive state to conserved variables."""
+    energy = (q2 / (gamma - 1)
+              + 0.5 * q0 * q1**2
+              + (q3**2 + q4**2) / (2 * MU0))
+    return q0, q1 * q0, energy, q3, q4
+
+
+@njit(cache=NUMBA_CACHE)
+def _fast_speed_s(q0, q2, q3, q4, gamma):
+    """Return the reduced system's radial fast-mode speed."""
+    a2 = gamma * q2 / q0
+    bt2 = (q3**2 + q4**2) / (MU0 * q0)
+    # With transverse momentum removed, force-free Br has no radial wave
+    # characteristic. Only gas and transverse magnetic pressure contribute.
+    return np.sqrt(a2 + bt2)
+
+
+@njit(cache=NUMBA_CACHE)
+def _flux_s(q, gamma):
+    """Return the physical flux for a primitive state tuple."""
+    U = _conserved_s(q[0], q[1], q[2], q[3], q[4], gamma)
+    pt = q[2] + (q[3]**2 + q[4]**2) / (2 * MU0)
+    # The analytic radial background stress cancels its geometric source.
+    return U[1], U[1] * q[1] + pt, (U[2] + pt) * q[1], q[1] * q[3], q[1] * q[4]
+
+
+@njit(cache=NUMBA_CACHE)
+def _hll_flux_s(ql, qr, gamma):
+    """Return the two-wave HLL flux between two primitive state tuples."""
+    cl = _fast_speed_s(ql[0], ql[2], ql[3], ql[4], gamma)
+    cr = _fast_speed_s(qr[0], qr[2], qr[3], qr[4], gamma)
+    sl = min(ql[1] - cl, qr[1] - cr)
+    sr = max(ql[1] + cl, qr[1] + cr)
+    fl = _flux_s(ql, gamma)
+    fr = _flux_s(qr, gamma)
+    if sl >= 0:
+        return fl
+    if sr <= 0:
+        return fr
+    Ul = _conserved_s(ql[0], ql[1], ql[2], ql[3], ql[4], gamma)
+    Ur = _conserved_s(qr[0], qr[1], qr[2], qr[3], qr[4], gamma)
+    width = sr - sl
+    return ((sr * fl[0] - sl * fr[0] + sl * sr * (Ur[0] - Ul[0])) / width,
+            (sr * fl[1] - sl * fr[1] + sl * sr * (Ur[1] - Ul[1])) / width,
+            (sr * fl[2] - sl * fr[2] + sl * sr * (Ur[2] - Ul[2])) / width,
+            (sr * fl[3] - sl * fr[3] + sl * sr * (Ur[3] - Ul[3])) / width,
+            (sr * fl[4] - sl * fr[4] + sl * sr * (Ur[4] - Ul[4])) / width)
+
+
+# Array forms of the kernels, for analysis and tests
 
 @njit(cache=NUMBA_CACHE)
 def _primitive(U, gamma):
@@ -136,11 +202,8 @@ def _primitive(U, gamma):
     ndarray
         Primitive state ``[rho, vr, p, Bt, Bn]``.
     """
-    q = U.copy()
-    q[1] = U[1] / U[0]
-    kinetic = 0.5 * U[1]**2 / U[0]
-    magnetic = (U[3]**2 + U[4]**2) / (2 * MU0)
-    q[2] = (gamma - 1) * (U[2] - kinetic - magnetic)
+    q = np.empty(5)
+    q[0], q[1], q[2], q[3], q[4] = _primitive_s(U[0], U[1], U[2], U[3], U[4], gamma)
     return q
 
 
@@ -160,13 +223,8 @@ def _conserved(q, gamma):
     ndarray
         Conserved state ``[rho, rho*vr, E, Bt, Bn]``.
     """
-    U = q.copy()
-    U[1] *= q[0]
-    U[2] = (
-        q[2] / (gamma - 1)
-        + 0.5 * q[0] * q[1]**2
-        + (q[3]**2 + q[4]**2) / (2 * MU0)
-    )
+    U = np.empty(5)
+    U[0], U[1], U[2], U[3], U[4] = _conserved_s(q[0], q[1], q[2], q[3], q[4], gamma)
     return U
 
 
@@ -188,11 +246,7 @@ def _fast_speed(q, br, gamma):
     float
         Radial fast-mode speed, in m/s.
     """
-    a2 = gamma * q[2] / q[0]
-    bt2 = (q[3]**2 + q[4]**2) / (MU0 * q[0])
-    # With transverse momentum removed, force-free Br has no radial wave
-    # characteristic. Only gas and transverse magnetic pressure contribute.
-    return np.sqrt(a2 + bt2)
+    return _fast_speed_s(q[0], q[2], q[3], q[4], gamma)
 
 
 @njit(cache=NUMBA_CACHE)
@@ -213,15 +267,8 @@ def _flux(q, br, gamma):
     ndarray
         Mass, momentum, energy, and transverse induction fluxes.
     """
-    U = _conserved(q, gamma)
-    pt = q[2] + (q[3]**2 + q[4]**2) / (2 * MU0)
     F = np.empty(5)
-    F[0] = U[1]
-    # The analytic radial background stress cancels its geometric source.
-    F[1] = U[1] * q[1] + pt
-    F[2] = (U[2] + pt) * q[1]
-    F[3] = q[1] * q[3]
-    F[4] = q[1] * q[4]
+    F[0], F[1], F[2], F[3], F[4] = _flux_s((q[0], q[1], q[2], q[3], q[4]), gamma)
     return F
 
 
@@ -243,22 +290,17 @@ def _hll_flux(ql, qr, br, gamma):
     ndarray
         HLL interface flux.
     """
-    cl = _fast_speed(ql, br, gamma)
-    cr = _fast_speed(qr, br, gamma)
-    sl = min(ql[1] - cl, qr[1] - cr)
-    sr = max(ql[1] + cl, qr[1] + cr)
-    fl, fr = _flux(ql, br, gamma), _flux(qr, br, gamma)
-    if sl >= 0:
-        return fl
-    if sr <= 0:
-        return fr
-    jump = _conserved(qr, gamma) - _conserved(ql, gamma)
-    return (sr * fl - sl * fr + sl * sr * jump) / (sr - sl)
+    F = np.empty(5)
+    F[0], F[1], F[2], F[3], F[4] = _hll_flux_s(
+        (ql[0], ql[1], ql[2], ql[3], ql[4]), (qr[0], qr[1], qr[2], qr[3], qr[4]), gamma)
+    return F
 
+
+# Finite-volume operator and time stepping
 
 @njit(cache=NUMBA_CACHE)
-def _rhs(U, bc, r, faces, magnetic_flux, gamma, plm, gravity):
-    """Return the finite-volume spatial operator for the MHD state.
+def _rhs_into(U, bc, r, faces, gamma, plm, gravity, result, q, slopes, fluxes):
+    """Evaluate the finite-volume spatial operator for the MHD state.
 
     Parameters
     ----------
@@ -268,23 +310,24 @@ def _rhs(U, bc, r, faces, magnetic_flux, gamma, plm, gravity):
         Primitive inner-boundary state.
     r, faces : ndarray
         Cell-centre and interface radii, in m.
-    magnetic_flux : float
-        Constant value of ``r**2 * Br``.
     gamma : float
         Adiabatic index.
     plm, gravity : bool
         Whether to use PLM reconstruction and solar gravity.
+    result : ndarray
+        Time derivative of each conserved cell state, filled in place.
+    q, slopes, fluxes : ndarray
+        Work arrays.
 
     Returns
     -------
-    ndarray
-        Time derivative of each conserved cell state.
+    None
     """
     nr = len(r)
-    q = np.empty_like(U)
-    slopes = np.zeros_like(U)
     for i in range(nr):
-        q[i] = _primitive(U[i], gamma)
+        q[i, 0], q[i, 1], q[i, 2], q[i, 3], q[i, 4] = _primitive_s(
+            U[i, 0], U[i, 1], U[i, 2], U[i, 3], U[i, 4], gamma)
+    slopes[:, :] = 0.0
     if plm:
         for i in range(1, nr - 1):
             for k in range(5):
@@ -298,18 +341,26 @@ def _rhs(U, bc, r, faces, magnetic_flux, gamma, plm, gravity):
                         or q[i, 2] + slopes[i, 2] * (face - r[i]) <= SMALL_P):
                     slopes[i, :] = 0.0
 
-    fluxes = np.empty((nr + 1, 5))
     for j in range(nr + 1):
         if j == 0:
-            ql, qr = bc, q[0]
+            ql = (bc[0], bc[1], bc[2], bc[3], bc[4])
+            qr = (q[0, 0], q[0, 1], q[0, 2], q[0, 3], q[0, 4])
         elif j == nr:
-            ql, qr = q[-1], q[-1]  # zero-gradient outflow
+            # zero-gradient outflow
+            ql = (q[nr - 1, 0], q[nr - 1, 1], q[nr - 1, 2], q[nr - 1, 3], q[nr - 1, 4])
+            qr = ql
         else:
-            ql = q[j - 1] + slopes[j - 1] * (faces[j] - r[j - 1])
-            qr = q[j] + slopes[j] * (faces[j] - r[j])
-        fluxes[j] = _hll_flux(ql, qr, magnetic_flux / faces[j]**2, gamma)
+            dl = faces[j] - r[j - 1]
+            dr = faces[j] - r[j]
+            ql = (q[j - 1, 0] + slopes[j - 1, 0] * dl, q[j - 1, 1] + slopes[j - 1, 1] * dl,
+                  q[j - 1, 2] + slopes[j - 1, 2] * dl, q[j - 1, 3] + slopes[j - 1, 3] * dl,
+                  q[j - 1, 4] + slopes[j - 1, 4] * dl)
+            qr = (q[j, 0] + slopes[j, 0] * dr, q[j, 1] + slopes[j, 1] * dr,
+                  q[j, 2] + slopes[j, 2] * dr, q[j, 3] + slopes[j, 3] * dr,
+                  q[j, 4] + slopes[j, 4] * dr)
+        (fluxes[j, 0], fluxes[j, 1], fluxes[j, 2],
+         fluxes[j, 3], fluxes[j, 4]) = _hll_flux_s(ql, qr, gamma)
 
-    result = np.empty_like(U)
     for i in range(nr):
         lo, hi = faces[i], faces[i + 1]
         # Difference-of-powers factorizations avoid cancellation for thin shells.
@@ -327,6 +378,36 @@ def _rhs(U, bc, r, faces, magnetic_flux, gamma, plm, gravity):
             acceleration = -GM_SUN / r[i]**2
             result[i, 1] += U[i, 0] * acceleration
             result[i, 2] += U[i, 1] * acceleration
+
+
+@njit(cache=NUMBA_CACHE)
+def _rhs(U, bc, r, faces, magnetic_flux, gamma, plm, gravity):
+    """Return the finite-volume spatial operator for the MHD state.
+
+    Parameters
+    ----------
+    U : ndarray
+        Conserved cell states.
+    bc : ndarray
+        Primitive inner-boundary state.
+    r, faces : ndarray
+        Cell-centre and interface radii, in m.
+    magnetic_flux : float
+        Constant value of ``r**2 * Br``. Br is force free, so it does not enter.
+    gamma : float
+        Adiabatic index.
+    plm, gravity : bool
+        Whether to use PLM reconstruction and solar gravity.
+
+    Returns
+    -------
+    ndarray
+        Time derivative of each conserved cell state.
+    """
+    nr = len(r)
+    result = np.empty((nr, 5))
+    _rhs_into(U, bc, r, faces, gamma, plm, gravity, result,
+              np.empty((nr, 5)), np.empty((nr, 5)), np.empty((nr + 1, 5)))
     return result
 
 
@@ -347,9 +428,12 @@ def _admissible(U, gamma):
         True when all states are physically admissible.
     """
     for i in range(len(U)):
-        if not np.all(np.isfinite(U[i])) or U[i, 0] <= SMALL_RHO:
+        for k in range(5):
+            if not np.isfinite(U[i, k]):
+                return False
+        if U[i, 0] <= SMALL_RHO:
             return False
-        if _primitive(U[i], gamma)[2] <= SMALL_P:
+        if _primitive_s(U[i, 0], U[i, 1], U[i, 2], U[i, 3], U[i, 4], gamma)[2] <= SMALL_P:
             return False
     return True
 
@@ -374,10 +458,225 @@ def _mhd_dt(U, br, dx, gamma, cfl):
     """
     dt = np.inf
     for i in range(len(U)):
-        q = _primitive(U[i], gamma)
-        speed = abs(q[1]) + _fast_speed(q, br[i], gamma)
+        q = _primitive_s(U[i, 0], U[i, 1], U[i, 2], U[i, 3], U[i, 4], gamma)
+        speed = abs(q[1]) + _fast_speed_s(q[0], q[2], q[3], q[4], gamma)
         dt = min(dt, cfl * dx[i] / speed)
     return dt
+
+
+@njit(cache=NUMBA_CACHE)
+def _mhd_boundary(t, bc_times, bc_v, bc_rho, bc_T, bt_mode, bt_x, bt_y, bt_par,
+                  bn_mode, bn_x, bn_y, bn_par, q):
+    """Fill the primitive inner-boundary state at a model time.
+
+    Parameters
+    ----------
+    t : float
+        Model time, in s.
+    bc_times, bc_v, bc_rho, bc_T : ndarray
+        Plasma boundary sample times and values in SI units.
+    bt_mode, bt_x, bt_y, bt_par, bn_mode, bn_x, bn_y, bn_par
+        Tabulated transverse field boundaries, as for ``_eval_boundary``.
+    q : ndarray
+        Primitive boundary state, filled in place.
+
+    Returns
+    -------
+    None
+    """
+    rho = np.interp(t, bc_times, bc_rho)
+    vr = np.interp(t, bc_times, bc_v)
+    temperature = np.interp(t, bc_times, bc_T)
+    bt = _eval_boundary(bt_mode, bt_x, bt_y, bt_par, t)
+    bn = _eval_boundary(bn_mode, bn_x, bn_y, bn_par, t)
+    if not (np.isfinite(bt) and np.isfinite(bn)):
+        raise ValueError('MHD boundary values must be finite')
+    q[0] = rho
+    q[1] = vr
+    q[2] = rho * K_B_SI * temperature / M_P_SI
+    q[3] = bt
+    q[4] = bn
+    for k in range(5):
+        if not np.isfinite(q[k]):
+            raise ValueError('MHD inflow density and temperature must be positive and finite')
+    if q[0] <= SMALL_RHO or q[2] <= SMALL_P:
+        raise ValueError('MHD inflow density and temperature must be positive and finite')
+
+
+@njit(cache=NUMBA_CACHE, nogil=True)
+def _run_mhd(U, time, t_grid, bc_times, bc_v, bc_rho, bc_T,
+             bt_mode, bt_x, bt_y, bt_par, bn_mode, bn_x, bn_y, bn_par,
+             r, faces, dx, min_dx, magnetic_flux, br_cells, gamma, cfl, plm_default, rk2,
+             gravity, p_r, p_v, p_active, p_injected, p_inj_times, p_rel_times,
+             p_behaviors, p_positive_time, p_step_times, v_out, rho_out, T_out, b_out,
+             rec_r, rec_v, rec_t, rec_on):
+    """Advance the MHD solution through every output time.
+
+    Each step is limited by the CFL condition, including the changing inflow. Steps that
+    give a nonphysical state are retried with PCM and half the time step; negative thermal
+    energy is never hidden by clipping it.
+
+    Parameters
+    ----------
+    U : ndarray
+        Conserved cell states, updated in place.
+    time : float
+        Initial time, in s.
+    t_grid : ndarray
+        Output times, in s.
+    bc_times, bc_v, bc_rho, bc_T : ndarray
+        Plasma boundary sample times and values in SI units.
+    bt_mode, bt_x, bt_y, bt_par, bn_mode, bn_x, bn_y, bn_par
+        Tabulated transverse field boundaries, as for ``_eval_boundary``.
+    r, faces, dx : ndarray
+        Cell-centre radii, interface radii and cell widths, in m.
+    min_dx, magnetic_flux : float
+        Smallest cell width and ``r**2 * Br``.
+    br_cells : ndarray
+        Radial field at each cell centre, in T.
+    gamma, cfl : float
+        Adiabatic index and CFL number.
+    plm_default, rk2, gravity : bool
+        PLM reconstruction, RK2 integration and solar gravity switches.
+    p_r, p_v, p_active, p_injected : ndarray
+        Tracer state, updated in place.
+    p_inj_times, p_rel_times, p_behaviors, p_positive_time : ndarray
+        Tracer injection and release times and boundary behaviour.
+    p_step_times : ndarray
+        Fixed tracer-update times, in s.
+    v_out, rho_out, T_out, b_out : ndarray
+        Plasma and magnetic field output at each output time, filled in place.
+    rec_r, rec_v, rec_t, rec_on : ndarray
+        Tracer output, filled in place.
+
+    Returns
+    -------
+    time : float
+        Final time, in s.
+    rejected : int
+        Number of rejected step attempts.
+    """
+    nr = r.size
+    nt = t_grid.size
+    face_br = magnetic_flux / faces[:-1]**2
+    k1 = np.empty_like(U)
+    stage = np.empty_like(U)
+    result = np.empty_like(U)
+    q = np.empty_like(U)
+    slopes = np.empty_like(U)
+    fluxes = np.empty((nr + 1, 5))
+    bc0 = np.empty(5)
+    bc1 = np.empty(5)
+    rejected = 0
+
+    p_step_idx = np.searchsorted(p_step_times, time, side='right')
+    previous_particle_time = time
+
+    t_idx = 0
+    if abs(t_grid[0] - time) < 1e-5:
+        _mhd_snapshot(U, gamma, br_cells, time, 0, v_out, rho_out, T_out, b_out,
+                      p_r, p_v, p_active, rec_r, rec_v, rec_t, rec_on)
+        t_idx = 1
+
+    while t_idx < nt:
+        target_time = t_grid[t_idx]
+        while time < target_time:
+            dt = _mhd_dt(U, face_br, dx, gamma, cfl)
+            if time + dt > target_time:
+                dt = target_time - time
+
+            plm = plm_default
+            accepted = False
+            for attempt in range(24):
+                _mhd_boundary(time, bc_times, bc_v, bc_rho, bc_T, bt_mode, bt_x, bt_y, bt_par,
+                              bn_mode, bn_x, bn_y, bn_par, bc0)
+                _mhd_boundary(time + dt, bc_times, bc_v, bc_rho, bc_T, bt_mode, bt_x, bt_y,
+                              bt_par, bn_mode, bn_x, bn_y, bn_par, bc1)
+                speed = max(
+                    abs(bc0[1]) + _fast_speed_s(bc0[0], bc0[2], bc0[3], bc0[4], gamma),
+                    abs(bc1[1]) + _fast_speed_s(bc1[0], bc1[2], bc1[3], bc1[4], gamma),
+                )
+                limit = cfl * min_dx / speed
+                if dt > limit * (1 + 1e-12):
+                    dt = limit
+                    continue
+                _rhs_into(U, bc0, r, faces, gamma, plm, gravity, k1, q, slopes, fluxes)
+                for i in range(nr):
+                    for k in range(5):
+                        stage[i, k] = U[i, k] + dt * k1[i, k]
+                if _admissible(stage, gamma):
+                    if rk2:
+                        _rhs_into(stage, bc1, r, faces, gamma, plm, gravity, k1, q, slopes,
+                                  fluxes)
+                        for i in range(nr):
+                            for k in range(5):
+                                result[i, k] = 0.5 * (U[i, k] + stage[i, k] + dt * k1[i, k])
+                    else:
+                        result[:, :] = stage
+                    if _admissible(result, gamma):
+                        if time + dt == time:
+                            raise RuntimeError('MHD timestep underflow')
+                        U[:, :] = result
+                        time += dt
+                        rejected += attempt
+                        accepted = True
+                        break
+                dt *= 0.5
+                plm = False
+            if not accepted:
+                raise RuntimeError('MHD could not find a positive finite update after 24 retries')
+
+            if (p_r.size
+                    and p_step_idx < p_step_times.size
+                    and p_step_times[p_step_idx] <= time + 1e-7 * max(1.0, abs(time))):
+                p_step_idx, previous_particle_time = _catch_up_particles_huxt_batch(
+                    p_r, p_v, p_active, p_injected, p_inj_times, p_rel_times,
+                    p_behaviors, p_positive_time, U, r, p_step_times,
+                    p_step_idx, previous_particle_time, time)
+
+        _mhd_snapshot(U, gamma, br_cells, time, t_idx, v_out, rho_out, T_out, b_out,
+                      p_r, p_v, p_active, rec_r, rec_v, rec_t, rec_on)
+        t_idx += 1
+    return time, rejected
+
+
+@njit(cache=NUMBA_CACHE)
+def _mhd_snapshot(U, gamma, br_cells, time, t_idx, v_out, rho_out, T_out, b_out,
+                  p_r, p_v, p_active, rec_r, rec_v, rec_t, rec_on):
+    """Store the plasma and magnetic fields and the active tracers at an output time.
+
+    Parameters
+    ----------
+    U : ndarray
+        Conserved cell states.
+    gamma : float
+        Adiabatic index.
+    br_cells : ndarray
+        Radial field at each cell centre, in T.
+    time : float
+        Current time, in s.
+    t_idx : int
+        Output time index.
+    v_out, rho_out, T_out, b_out : ndarray
+        Plasma and field output, filled in place.
+    p_r, p_v, p_active : ndarray
+        Tracer positions, speeds and activity.
+    rec_r, rec_v, rec_t, rec_on : ndarray
+        Tracer output, filled in place.
+
+    Returns
+    -------
+    None
+    """
+    for i in range(len(U)):
+        q = _primitive_s(U[i, 0], U[i, 1], U[i, 2], U[i, 3], U[i, 4], gamma)
+        v_out[t_idx, i] = q[1]
+        rho_out[t_idx, i] = q[0]
+        T_out[t_idx, i] = q[2] * M_P_SI / (q[0] * K_B_SI)
+        b_out[t_idx, i, 0] = br_cells[i]
+        b_out[t_idx, i, 1] = q[3]
+        b_out[t_idx, i, 2] = q[4]
+    _record_particles(time, t_idx, p_r, p_v, p_active, rec_r, rec_v, rec_t, rec_on)
 
 
 class MHDSolver(CompressibleSolver):
@@ -409,7 +708,8 @@ class MHDSolver(CompressibleSolver):
         br : float
             Radial field at the inner cell centre, in T.
         boundary : mapping, optional
-            Transverse magnetic boundary values or functions.
+            Transverse magnetic boundary values: numbers, in T, or the tabulated forms
+            from ``time_series_boundary`` and ``periodic_boundary``.
         gravity : bool
             Whether to include solar gravity.
 
@@ -440,31 +740,16 @@ class MHDSolver(CompressibleSolver):
         self.magnetic_flux = float(br) * self.r[0]**2
         self.br = self.magnetic_flux / self.r**2
         self.gravity = bool(gravity)
-        self.boundary = dict(boundary or {})
-        if set(self.boundary)-{'bt', 'bn'}:
+        boundary = dict(boundary or {})
+        if set(boundary)-{'bt', 'bn'}:
             raise ValueError('MHD boundary keys must be bt and bn; specify br separately')
-        self.U = np.zeros((self.nr, 5))
-
-    def _boundary_values(self, t):
-        """Evaluate the transverse inner-boundary fields.
-
-        Parameters
-        ----------
-        t : float
-            Model time, in s.
-
-        Returns
-        -------
-        dict
-            Finite ``bt`` and ``bn`` values in tesla.
-        """
-        values = {}
+        self.boundary = {}
         for key in ('bt', 'bn'):
-            value = self.boundary.get(key, 0.0)
-            values[key] = float(value(t) if callable(value) else value)
-        if not all(np.isfinite(v) for v in values.values()):
-            raise ValueError('MHD boundary values must be finite')
-        return values
+            value = boundary.get(key, 0.0)
+            if callable(value):
+                raise TypeError('MHD boundary values must be numbers or tabulated boundaries')
+            self.boundary[key] = value if isinstance(value, tuple) else constant_boundary(value)
+        self.U = np.zeros((self.nr, 5))
 
     def _set_initial_conditions(self, rho, v, T):
         """Set the initial plasma and magnetic profiles.
@@ -479,12 +764,14 @@ class MHDSolver(CompressibleSolver):
         None
             ``self.U`` is updated in place.
         """
-        b = self._boundary_values(self._initial_time)
         q = np.zeros((self.nr, 5))
         q[:, 0], q[:, 1] = rho, v
         q[:, 2] = np.asarray(rho) * K_B_SI * np.asarray(T) / M_P_SI
         for k, key in ((3, 'bt'), (4, 'bn')):
-            profile = self._mhd_init.get(key, b[key] * self.r[0] / self.r)
+            b = _eval_boundary(*self.boundary[key], self._initial_time)
+            if not np.isfinite(b):
+                raise ValueError('MHD boundary values must be finite')
+            profile = self._mhd_init.get(key, b * self.r[0] / self.r)
             profile = np.asarray(profile, dtype=float)
             if profile.shape != (self.nr,):
                 raise ValueError(f'mhd_init[{key!r}] must have shape ({self.nr},)')
@@ -495,120 +782,48 @@ class MHDSolver(CompressibleSolver):
         for i in range(self.nr):
             self.U[i] = _conserved(q[i], self.gamma)
 
-    def _get_dt(self):
-        """Return the CFL-limited time step.
-
-        Returns
-        -------
-        float
-            Stable time step, in s.
-        """
-        # Br is strongest at each shell's inner face, especially on coarse grids.
-        face_br = self.magnetic_flux / self.r_int[:-1]**2
-        return _mhd_dt(self.U, face_br, self.dx, self.gamma, self.cfl)
-
-    def _bc(self, t, bc_func):
-        """Build the primitive inner-boundary state.
+    def _run(self, t_grid, boundary, particles, outputs):
+        """Advance the solution through the output times in compiled code.
 
         Parameters
         ----------
-        t : float
-            Model time, in s.
-        bc_func : callable
-            Function returning ``(rho, vr, temperature)``.
+        t_grid : ndarray
+            Output times, in s.
+        boundary : tuple of ndarray
+            Boundary sample times, velocity, density and temperature.
+        particles : tuple of ndarray
+            Packed tracer state and settings.
+        outputs : tuple of ndarray
+            Plasma and tracer output arrays, filled in place.
 
         Returns
         -------
-        ndarray
-            Primitive MHD boundary state.
+        None
+            ``self.U``, ``self.time`` and ``self.rejected_steps`` are updated.
         """
-        rho, vr, temperature = bc_func(t)
-        b = self._boundary_values(t)
-        q = np.array([rho, vr, rho * K_B_SI * temperature / M_P_SI,
-                      b['bt'], b['bn']], dtype=float)
-        if not np.all(np.isfinite(q)) or q[0] <= SMALL_RHO or q[2] <= SMALL_P:
-            raise ValueError('MHD inflow density and temperature must be positive and finite')
-        return q
+        v_out, rho_out, T_out = outputs[:3]
+        self._b_out = np.zeros((len(t_grid), self.nr, 3))
+        self.time, self.rejected_steps = _run_mhd(
+            self.U, self.time, t_grid, *boundary, *self.boundary['bt'], *self.boundary['bn'],
+            self.r, self.r_int, self.dx, self.min_dx, self.magnetic_flux, self.br,
+            self.gamma, self.cfl, self.reconstruction == 'plm',
+            self.time_integration == 'rk2', self.gravity, *particles,
+            v_out, rho_out, T_out, self._b_out, *outputs[3:])
 
-    def _step(self, dt, bc_func):
-        """Advance one admissible Euler or RK2 step.
-
-        Parameters
-        ----------
-        dt : float
-            Requested time step, in s.
-        bc_func : callable
-            Function returning ``(rho, vr, temperature)``.
-
-        Returns
-        -------
-        ndarray
-            Updated conserved state.
-        """
-        # Include changing inflow in the CFL limit. Reject nonphysical stages,
-        # then retry conservatively with PCM and a smaller timestep; never hide
-        # negative thermal energy by clipping it in the temperature output.
-        plm = self.reconstruction == 'plm'
-        for attempt in range(24):
-            bc0 = self._bc(self.time, bc_func)
-            bc1 = self._bc(self.time + dt, bc_func)
-            br_face = self.magnetic_flux / self.r_int[0]**2
-            speed = max(
-                abs(bc0[1]) + _fast_speed(bc0, br_face, self.gamma),
-                abs(bc1[1]) + _fast_speed(bc1, br_face, self.gamma),
-            )
-            limit = self.cfl * self.min_dx / speed
-            if dt > limit * (1 + 1e-12):
-                dt = limit
-                continue
-            args = (
-                self.r, self.r_int, self.magnetic_flux, self.gamma,
-                plm, self.gravity,
-            )
-            stage = self.U + dt * _rhs(self.U, bc0, *args)
-            if _admissible(stage, self.gamma):
-                if self.time_integration == 'rk2':
-                    result = 0.5 * (self.U + stage + dt * _rhs(stage, bc1, *args))
-                else:
-                    result = stage
-                if _admissible(result, self.gamma):
-                    if self.time + dt == self.time:
-                        raise RuntimeError('MHD timestep underflow')
-                    self.U = result
-                    self.time += dt
-                    self.rejected_steps += attempt
-                    return self.U
-            dt *= 0.5
-            plm = False
-        raise RuntimeError('MHD could not find a positive finite update after 24 retries')
-
-    def _snapshot(self):
-        """Store magnetic fields and return the primitive plasma fields.
-
-        Returns
-        -------
-        tuple of ndarray
-            Radial velocity, density, and temperature profiles.
-        """
-        q = np.array([_primitive(row, self.gamma) for row in self.U])
-        self._extra_snapshots.append(np.column_stack((self.br, q[:, 3:5])))
-        temperature = q[:, 2] * M_P_SI / (q[:, 0] * K_B_SI)
-        return q[:, 1], q[:, 0], temperature
-
-    def solve(self, t_grid, v_bc_func, rho_bc_func, T_bc_func, *,
-              mhd_init=None, **kwargs):
+    def solve(self, t_grid, v_bc, rho_bc, T_bc, *, mhd_init=None, **kwargs):
         """Run the MHD solver over an output-time grid.
 
         Parameters
         ----------
         t_grid : ndarray
             Strictly increasing output times, in s.
-        v_bc_func, rho_bc_func, T_bc_func : callable
-            Radial velocity, density, and temperature boundary functions.
+        v_bc, rho_bc, T_bc : float or ndarray
+            Radial velocity, density, and temperature boundary conditions, constant or
+            sampled at ``bc_times``.
         mhd_init : mapping, optional
             Initial ``bt`` and ``bn`` radial profiles, in T.
         **kwargs
-            Initial plasma profiles and particle options accepted by
+            ``bc_times``, initial plasma profiles and particle options accepted by
             :meth:`CompressibleSolver.solve`.
 
         Returns
@@ -635,12 +850,9 @@ class MHDSolver(CompressibleSolver):
             for key in ('v_init', 'rho_init', 'T_init'):
                 if np.shape(kwargs[key]) != (self.nr,):
                     raise ValueError(f'{key} must have shape ({self.nr},)')
-        self._extra_snapshots = []
-        self.rejected_steps = 0
-        result = super().solve(t_grid, v_bc_func, rho_bc_func, T_bc_func, **kwargs)
-        extra = np.asarray(self._extra_snapshots)
+        result = super().solve(t_grid, v_bc, rho_bc, T_bc, **kwargs)
         for i, key in enumerate(MHD_COMPONENTS):
-            result[key] = extra[:, :, i]
+            result[key] = self._b_out[:, :, i]
         result['solver_info'].update(
             physics='ideal-mhd',
             riemann='hll',
