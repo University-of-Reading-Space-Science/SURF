@@ -419,15 +419,15 @@ class ConeCME:
         # Keep track of synodic or sidereal
         self.frame = copy.copy(model.frame)
 
-        # Pull out the particle field for this CME
-        cme_r_field = model.cme_particles_r[cme_id, :, :, :]
-        cme_v_field = model.cme_particles_v[cme_id, :, :, :]
+        # Work on whole time series as plain arrays, then build each time step's entry from
+        # slices. Creating astropy Time and Quantity objects step by step is slow.
+        # Tracer radii are in km and speeds in km/s; axes are (time, front/back, longitude).
+        cme_r_field = model.cme_particles_r[cme_id, :, :, :].value
+        cme_v_field = model.cme_particles_v[cme_id, :, :, :].value
+        times = model.time_init + model.time_out
 
-        # The common 1-D case has exactly two trajectories per CME.  Convert
-        # their complete time series in bulk; constructing Astropy Time and
-        # Quantity objects separately for every output step is substantially
-        # more expensive than the passive-particle integration itself.
         if model.lon.size == 1:
+            # A single longitude has exactly two trajectories per CME: the front and the back.
             model_lon = np.atleast_1d(model.lon)[0]
             relative_lon = (model_lon - self.longitude).to_value(u.rad)
             if relative_lon > np.pi:
@@ -437,115 +437,68 @@ class ConeCME:
             tracked_lons = (
                 np.array([relative_lon, relative_lon]) * u.rad + self.longitude
             ).to(model.lon.unit)
-            tracked_r = np.stack(
-                [cme_r_field[:, 0, 0].value, cme_r_field[:, 1, 0].value],
-                axis=1,
-            ) * u.km
-            tracked_r = tracked_r.to(model.r.unit)
-            tracked_v = np.stack(
-                [cme_v_field[:, 0, 0].value, cme_v_field[:, 1, 0].value],
-                axis=1,
-            ) * (u.km / u.s)
-            tracked_times = model.time_init + model.time_out
-            front_id = np.array([1.0, 0.0]) * u.dimensionless_unscaled
-            self.coords = {}
-            for j, model_time in enumerate(model.time_out):
-                entry = {
-                    'time': tracked_times[j],
-                    'model_time': model_time,
-                    'front_id': np.array([]) * u.dimensionless_unscaled,
-                    'lon': np.array([]) * model.lon.unit,
-                    'r': np.array([]) * model.r.unit,
-                    'lat': np.array([]) * model.latitude.unit,
-                    'v': np.array([]) * model.v_grid.unit,
-                }
-                if np.any(np.isfinite(tracked_r[j])):
-                    entry.update({
-                        'front_id': front_id.copy(),
-                        'lon': tracked_lons.copy(),
-                        'r': tracked_r[j].copy(),
-                        'lat': model.latitude.copy(),
-                        'v': tracked_v[j].copy(),
-                    })
-                self.coords[j] = entry
-            return
+            r_unit = model.r.unit
+            tracked_r = (cme_r_field[:, :, 0] * u.km).to_value(r_unit)
+            tracked_v = cme_v_field[:, :, 0]
+            has_cme = np.any(np.isfinite(tracked_r), axis=1)
 
-        # Setup dictionary to track this CME
-        self.coords = {j: {'time': np.array([]), 'model_time': np.array([]) * u.s,
-                           'front_id': np.array([]) * u.dimensionless_unscaled,
-                           'lon': np.array([]) * model.lon.unit,
-                           'r': np.array([]) * model.r.unit,
-                           'lat': np.array([]) * model.latitude.unit,
-                           'v': np.array([]) * model.v_grid.unit} for j in range(model.nt_out)}
+            def boundary(j):
+                return (np.array([1.0, 0.0]), tracked_lons.value.copy(), tracked_r[j].copy(),
+                        tracked_v[j].copy())
+            lon_unit = tracked_lons.unit
+        else:
+            # Center longitudes on the CME, between -pi and pi
+            lon = model.lon - self.longitude
+            lon[lon > np.pi * u.rad] -= 2 * np.pi * u.rad
+            lon[lon < -np.pi * u.rad] += 2 * np.pi * u.rad
 
-        # Loop through timesteps, save out coords to coords dict
-        for j, t in enumerate(model.time_out):
+            # Order the front by increasing longitude and the back by decreasing longitude, so
+            # the boundary wraps around the CME
+            id_sort_inc = np.argsort(lon)
+            id_sort_dec = np.flipud(id_sort_inc)
+            lon_unit = lon.unit
+            lon_front = (lon[id_sort_inc] + self.longitude).to_value(lon_unit)
+            lon_back = (lon[id_sort_dec] + self.longitude).to_value(lon_unit)
+            r_unit = u.solRad
+            r_front = cme_r_field[:, 0, id_sort_inc]
+            r_back = cme_r_field[:, 1, id_sort_dec]
+            r_front_out = (r_front * u.km).to_value(r_unit)
+            r_back_out = (r_back * u.km).to_value(r_unit)
+            v_front = cme_v_field[:, 0, id_sort_inc]
+            v_back = cme_v_field[:, 1, id_sort_dec]
+            good_front = np.isfinite(r_front)
+            good_back = np.isfinite(r_back)
+            has_cme = np.any(good_front, axis=1) | np.any(good_back, axis=1)
 
-            self.coords[j]['model_time'] = t
-            self.coords[j]['time'] = model.time_init + t
+            def boundary(j):
+                # Only keep good values
+                gf, gb = good_front[j], good_back[j]
+                front_id = np.hstack([np.ones(np.count_nonzero(gf)),
+                                      np.zeros(np.count_nonzero(gb))])
+                return (front_id,
+                        np.hstack([lon_front[gf], lon_back[gb]]),
+                        np.hstack([r_front_out[j, gf], r_back_out[j, gb]]),
+                        np.hstack([v_front[j, gf], v_back[j, gb]]))
 
-            cme_r_front = cme_r_field[j, 0, :]
-            cme_r_back = cme_r_field[j, 1, :]
-
-            cme_v_front = cme_v_field[j, 0, :]
-            cme_v_back = cme_v_field[j, 1, :]
-
-            if np.any(np.isfinite(cme_r_front)) | np.any(np.isfinite(cme_r_back)):
-                # Get longitudes and center on CME
-                lon = model.lon - self.longitude
-
-                # single longitude runs need different treatment to multi lon runs.
-                if lon.size == 1:
-                    if lon > np.pi * u.rad:
-                        lon -= 2 * np.pi * u.rad
-                    elif lon < -np.pi * u.rad:
-                        lon += 2 * np.pi * u.rad
-
-                    lons = np.hstack([lon, lon])
-                    cme_r = np.hstack([cme_r_front, cme_r_back])
-                    cme_v = np.hstack([cme_v_front, cme_v_back])
-                    front_id = np.hstack([1.0, 0.0])
-                else:
-                    # Correct the wrap arounds at +/-pi
-                    lon[lon > np.pi * u.rad] -= 2 * np.pi * u.rad
-                    lon[lon < -np.pi * u.rad] += 2 * np.pi * u.rad
-
-                    # Find indices that sort the longitudes, to make a wraparound of lons
-                    id_sort_inc = np.argsort(lon)
-                    id_sort_dec = np.flipud(id_sort_inc)
-
-                    cme_r_front = cme_r_front[id_sort_inc]
-                    cme_r_back = cme_r_back[id_sort_dec]
-
-                    cme_v_front = cme_v_front[id_sort_inc]
-                    cme_v_back = cme_v_back[id_sort_dec]
-
-                    lon_front = lon[id_sort_inc]
-                    lon_back = lon[id_sort_dec]
-
-                    # Only keep good values
-                    id_good = np.isfinite(cme_r_front)
-                    cme_r_front = cme_r_front[id_good]
-                    cme_v_front = cme_v_front[id_good]
-                    lon_front = lon_front[id_good]
-
-                    id_good = np.isfinite(cme_r_back)
-                    cme_r_back = cme_r_back[id_good]
-                    cme_v_back = cme_v_back[id_good]
-                    lon_back = lon_back[id_good]
-
-                    # Get one array of longitudes and radii from the front and back particles
-                    lons = np.hstack([lon_front, lon_back])
-                    cme_r = np.hstack([cme_r_front, cme_r_back])
-                    cme_v = np.hstack([cme_v_front, cme_v_back])
-                    front_id = np.hstack([np.ones(cme_r_front.shape), np.zeros(cme_r_back.shape)])
-
-                # Save to dict
-                self.coords[j]['r'] = (cme_r * u.km).to(u.solRad)
-                self.coords[j]['v'] = cme_v * (u.km / u.s)
-                self.coords[j]['lon'] = lons + self.longitude
-                self.coords[j]['front_id'] = front_id * u.dimensionless_unscaled
-                self.coords[j]['lat'] = model.latitude.copy()
+        # Save out coords to the coords dict at each time step. Units are made once here, as
+        # composing a unit such as km/s is slow.
+        kms = u.km / u.s
+        self.coords = {}
+        for j, model_time in enumerate(model.time_out):
+            if has_cme[j]:
+                front_id, lons, cme_r, cme_v = boundary(j)
+                entry = {'front_id': front_id << u.dimensionless_unscaled,
+                         'lon': lons << lon_unit,
+                         'r': cme_r << r_unit,
+                         'lat': model.latitude.copy(),
+                         'v': cme_v << kms}
+            else:
+                entry = {'front_id': np.array([]) << u.dimensionless_unscaled,
+                         'lon': np.array([]) << model.lon.unit,
+                         'r': np.array([]) << model.r.unit,
+                         'lat': np.array([]) << model.latitude.unit,
+                         'v': np.array([]) << model.v_grid.unit}
+            self.coords[j] = {'time': times[j], 'model_time': model_time, **entry}
         return
 
     def compute_arrival_at_body(self, body_name):
