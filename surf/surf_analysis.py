@@ -18,6 +18,7 @@ from sunpy.coordinates import get_horizons_coord
 from appdirs import user_data_dir
 
 from surf import surf as s
+from surf.surf import zerototwopi
 from surf import surf_inputs as sin
 from surf import surf_insitu as sinsit
 
@@ -3116,31 +3117,6 @@ def run_WSA_SURF_td_wedge_about_observer(start_dt, stop_dt, vel_path, vel_format
         surf_ts.loc[t, 'vsw'] = np.interp(lat_t, np.deg2rad(lat_list), v_lat_t)
         
     return surf_ts
-
-
-def zerototwopi(angles):
-    """
-    Function to constrain angles to the 0 - 2pi domain.
-    Args:
-        angles: a numpy array of angles.
-    Returns:
-        angles_out: a numpy array of angles constrained to 0 - 2pi domain.
-    """
-    # Check if angles is an astropy unit.
-    if isinstance(angles, u.Quantity):
-        angles_out = angles.to(u.rad).value
-    else:
-        angles_out = angles
-
-    twopi = 2.0 * np.pi
-    a = -np.floor_divide(angles_out, twopi)
-    angles_out = angles_out + (a * twopi)
-
-    # If it came in with units, restore them
-    if isinstance(angles, u.Quantity):
-        angles_out = angles_out * u.rad
-
-    return angles_out
 
 
 def observer_styles():

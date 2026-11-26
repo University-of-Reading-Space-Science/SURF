@@ -15,14 +15,18 @@ reference data with ``python tests/generate_reference_data.py`` and record the
 reason in the commit message.
 """
 import datetime
+import importlib.metadata
+import os
 import pathlib
 
+import h5py
 import numpy as np
 import pytest
 from astropy import units as u
 from astropy.utils import iers
 
 import surf.surf as s
+import surf.surf_analysis as sa
 import surf.surf_inputs as sin
 
 REFERENCE_FILE = pathlib.Path(__file__).parent / "reference_data" / "surf_regression.npz"
@@ -297,14 +301,22 @@ def test_parallel_solve_matches_serial():
 
 @pytest.mark.parametrize("solver", ["huxt", "hydro"])
 def test_save_and_load_round_trip(solver, tmp_path):
+    cme_list = make_cmes()
+    cme_list[0].cme_density = 300 / u.cm ** 3
+    cme_list[0].cme_temperature = 5e5 * u.K
     if solver == "huxt":
         model = _model(b_boundary=B_BOUNDARY, lon_start=330 * u.deg, lon_stop=30 * u.deg)
-        model.solve(make_cmes(), streak_carr=STREAK_CARR)
+        model.solve(cme_list, streak_carr=STREAK_CARR)
     else:
         model = _model(solver="hydro", lon_out=0 * u.deg)
-        model.solve(make_cmes())
+        model.solve(cme_list)
     model._data_dir_ = str(tmp_path)  # keep the test output out of the user data folder
-    loaded, cmes = s.load_SURF_run(model.save(tag="roundtrip"))
+    filepath = model.save(tag="roundtrip")
+    loaded, cmes = s.load_SURF_run(filepath)
+
+    # The file must be closed after loading, so it can be opened for writing again
+    with h5py.File(filepath, "a"):
+        pass
 
     assert loaded.solver == model.solver
     np.testing.assert_array_equal(loaded.time_out.value, model.time_out.value)
@@ -327,6 +339,9 @@ def test_save_and_load_round_trip(solver, tmp_path):
     for loaded_cme, cme in zip(cmes, model.cmes, strict=True):
         assert loaded_cme.v == cme.v
         assert loaded_cme.longitude == cme.longitude
+        assert u.isclose(loaded_cme.cme_density, cme.cme_density)
+        assert loaded_cme.cme_temperature == cme.cme_temperature
+        assert loaded_cme.profile_type == cme.profile_type
         for j, coords in cme.coords.items():
             np.testing.assert_array_equal(loaded_cme.coords[j]["r"].to_value(u.km),
                                           coords["r"].to_value(u.km))
@@ -366,3 +381,84 @@ def test_chunked_solve_matches_single_solve(settings, chunk_simtime):
             chunked_cme.compute_arrival_at_body("EARTH")["t_transit"].to_value(u.s),
             single_cme.compute_arrival_at_body("EARTH")["t_transit"].to_value(u.s),
             rtol=1e-9, equal_nan=True)
+
+
+# ----------------------------------------------------------------------------
+# Tests for specific fixes
+# ----------------------------------------------------------------------------
+
+@pytest.mark.parametrize("frame", ["synodic", "sidereal"])
+def test_cme_arrival_accepts_single_values_and_any_angle_unit(frame):
+    model = _model(lon_start=300 * u.deg, lon_stop=60 * u.deg, frame=frame)
+    model.solve(make_cmes()[:1])
+    cme = model.cmes[0]
+    n_times = model.nt_out
+    radius = 215 * u.solRad
+    expected = cme.compute_arrival_at_location(np.full(n_times, np.deg2rad(10.0)) * u.rad,
+                                               np.full(n_times, radius.value) * radius.unit)
+    assert expected["hit"]
+    if frame == "synodic":
+        assert u.isclose(expected["lon"], 10 * u.deg)
+
+    for longitude in (10 * u.deg, np.deg2rad(10.0) * u.rad, np.full(n_times, 10.0) * u.deg):
+        stats = cme.compute_arrival_at_location(longitude, radius)
+        assert stats["hit"]
+        assert u.isclose(stats["t_transit"], expected["t_transit"], rtol=1e-12)
+        assert u.isclose(stats["lon"], expected["lon"], rtol=1e-12)
+
+    with pytest.raises(ValueError):
+        cme.compute_arrival_at_location(np.zeros(3) * u.rad, radius)
+
+
+def test_zerototwopi_is_shared_and_handles_units():
+    assert sin.zerototwopi is s.zerototwopi
+    assert sa.zerototwopi is s.zerototwopi
+
+    wrapped = s.zerototwopi(np.array([-90.0, 450.0]) * u.deg)
+    assert wrapped.unit == u.rad
+    np.testing.assert_allclose(wrapped.to_value(u.deg), [270.0, 90.0])
+
+    plain = s.zerototwopi(np.array([-np.pi / 2, 5 * np.pi / 2]))
+    assert not isinstance(plain, u.Quantity)
+    np.testing.assert_allclose(plain, [3 * np.pi / 2, np.pi / 2])
+
+
+def test_streaklines_are_the_same_in_degrees_and_radians():
+    def run(streak_carr):
+        model = _model(lon_start=300 * u.deg, lon_stop=60 * u.deg)
+        model.solve([], streak_carr=streak_carr)
+        return model.streak_particles_r.value
+
+    np.testing.assert_allclose(run(np.array([30.0, 150.0]) * u.deg),
+                               run(np.deg2rad([30.0, 150.0]) * u.rad), rtol=1e-12)
+
+
+def test_solve_clears_all_restart_state():
+    model = _model(lon_start=330 * u.deg, lon_stop=30 * u.deg)
+    model.solve([])
+    model.set_initial_state(model.get_final_state())
+    # Stand-in HCS and streakline restart state, as this run tracks neither
+    model._hcs_r_init, model._hcs_count_init, model._streak_r_init = {}, {}, {}
+    assert model._v_init is not None
+
+    model.solve([])
+    for attr in ("_v_init", "_rho_init", "_temp_init", "_cme_r_init", "_cme_v_init",
+                 "_hcs_r_init", "_hcs_count_init", "_streak_r_init", "_mhd_init"):
+        assert getattr(model, attr) is None, attr
+
+
+def test_cone_cme_works_without_an_installed_package(monkeypatch):
+    def not_installed(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", not_installed)
+    assert s.get_version() == "unknown"
+    assert s.ConeCME().__version__ == "unknown"
+
+
+def test_setup_dirs_does_not_need_optional_data_folders(monkeypatch):
+    isdir = os.path.isdir
+    monkeypatch.setattr(os.path, "isdir", lambda path: (
+        False if path.endswith(("example_inputs", "insitu")) else isdir(path)))
+    dirs = s._setup_dirs_()
+    assert os.path.isfile(dirs["ephemeris"])

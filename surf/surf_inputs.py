@@ -33,6 +33,7 @@ from scipy import interpolate
 from sunpy.coordinates import sun
 
 from surf import surf as s
+from surf.surf import zerototwopi
 
 def convert_hdf4_to_hdf5(hdf4_path, hdf5_path):
     """
@@ -1607,31 +1608,6 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
     model = s.SURF(**surf_kwargs)
 
     return model
-
-
-def zerototwopi(angles):
-    """
-    Function to constrain angles to the 0 - 2pi domain.
-    Args:
-        angles: a numpy array of angles.
-    Returns:
-        angles_out: a numpy array of angles constrained to 0 - 2pi domain.
-    """
-    # Check if angles has astropy unit.
-    if isinstance(angles, u.Quantity):
-        angles_out = angles.to(u.rad).value
-    else:
-        angles_out = angles
-
-    twopi = 2.0 * np.pi
-    a = -np.floor_divide(angles_out, twopi)
-    angles_out = angles_out + (a * twopi)
-
-    # If it came in with units, restore them
-    if isinstance(angles, u.Quantity):
-        angles_out = angles_out * u.rad
-
-    return angles_out
 
 
 def get_DONKI_coneCMEs(startdate, enddate, mostAccOnly='true', catalog='ALL', feature='LE'):

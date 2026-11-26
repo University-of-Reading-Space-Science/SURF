@@ -10,6 +10,8 @@ import numpy as np
 import requests
 import sunpy.coordinates as coords
 
+from surf.surf import zerototwopi
+
 def get_naif_body_codes_dict():
     """ Return a dictionary with the names and naif codes of bodies that can be looked up in
     Horizons for use in generating an offline ephemeris for SURF."""
@@ -27,21 +29,6 @@ def get_naif_body_codes_dict():
               'JUPITER': 599,
               'SATURN': 699}
     return bodies
-
-
-def zerototwopi(angles):
-    """
-    Function to constrain angles to the 0 - 2pi domain.
-    Args:
-        angles: a numpy array of angles
-    Returns:
-        angles_out: a numpy array of angles in the 0 - 2pi domain.
-    """
-    twopi = 2.0 * np.pi
-    angles_out = angles
-    a = -np.floor_divide(angles_out, twopi)
-    angles_out = angles_out + (a * twopi)
-    return angles_out
 
 
 def get_body_time_ranges():

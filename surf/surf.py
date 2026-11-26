@@ -589,33 +589,22 @@ class ConeCME:
         # Get body ephemeris
         times = Time([coord['time'] for i, coord in self.coords.items()])
 
-        is_scalar = np.ndim(longitude) & np.ndim(radius)  # np.iscalar doesnt work on quantities
-        if not is_scalar:
-            # If not scalar, must have coords for each time step.
-            match_len = (longitude.size == radius.size) & (longitude.size == times.size)
-            if not match_len:
-                raise ValueError('longitude and radius must be single values or be arrays of'
-                                 ' length equal to the number of time steps')
-
-        if is_scalar == 1:
-            arrive_rad = np.ones(times.size) * radius
-            arrive_lon = np.ones(times.size) * longitude
+        # Each of longitude and radius is a single value or has one value per time step
+        for name, value in (('longitude', longitude), ('radius', radius)):
+            if value.size not in (1, times.size):
+                raise ValueError(f'{name} must be a single value or an array with one value per '
+                                 f'time step ({times.size}), not {value.size} values')
+        arrive_lon = np.ones(times.size) * np.ravel(longitude)
+        arrive_rad = np.ones(times.size) * np.ravel(radius)
 
         # Correct longitudes if in sidereal frame
         if self.frame == 'sidereal':
             earth = Observer('EARTH', times)
             delta_lon = earth.lon_hae - earth.lon_hae[0]
-            arrive_lon = zerototwopi(longitude + delta_lon)
-            arrive_lon = arrive_lon * earth.lon.unit
+            arrive_lon = zerototwopi(arrive_lon + delta_lon)
 
         # Center longitudes on CME nose, between -180:180
-        arrive_lon = arrive_lon - self.longitude
-        id_low = arrive_lon < -180 * u.deg
-        id_high = arrive_lon > 180 * u.deg
-        if np.any(id_low):
-            arrive_lon[id_low] += 360 * u.deg
-        elif np.any(id_high):
-            arrive_lon[id_high] -= 360 * u.deg
+        arrive_lon = zerototwopi(arrive_lon - self.longitude + np.pi * u.rad) - np.pi * u.rad
 
         hit = False
         t_front = []
@@ -667,8 +656,7 @@ class ConeCME:
                 if r_front[-1] > arrive_rad[i]:
                     hit = True
                     hit_id = i
-                    hit_lon = arrive_lon[i] + self.longitude
-                    hit_lon = zerototwopi(hit_lon) * u.rad
+                    hit_lon = zerototwopi(arrive_lon[i] + self.longitude)
                     hit_rad = arrive_rad[i]
 
                     # Interpolate the arrival time and transit time
@@ -2013,7 +2001,7 @@ class SURF:
                     cme_hae = np.interp(cme.t_launch.to(u.s).value,
                                         dt_t0.value, dlon_t0)
                     # adjust the CME HEEQ longitude accordingly
-                    cme.longitude_surf = zerototwopi(cme.longitude + cme_hae) * u.rad
+                    cme.longitude_surf = zerototwopi(cme.longitude + cme_hae)
                 else:
                     cme.longitude_surf = cme.longitude
 
@@ -2178,7 +2166,7 @@ class SURF:
             for istreak, carr in enumerate(streak_carr):
 
                 # convert from Carrington longitude to model lon at t=0
-                lon_src = zerototwopi((carr - self.cr_lon_init)) * u.rad
+                lon_src = zerototwopi(carr - self.cr_lon_init)
 
                 # Use the full-run spin-up origin and absolute run clock.
                 # This preserves the ordinary solve() rotation numbering.
@@ -2386,6 +2374,9 @@ class SURF:
         self._temp_init = None
         self._cme_r_init = None
         self._cme_v_init = None
+        self._hcs_r_init = None
+        self._hcs_count_init = None
+        self._streak_r_init = None
         self._mhd_init = None
         return
 
@@ -2814,8 +2805,7 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
                 dlon_t0 = earthpos.lon_hae - earthpos.lon_hae[0]
                 cme_hae = np.interp(
                     cme.t_launch.to(u.s).value, dt_t0.value, dlon_t0)
-                cme.longitude_surf = zerototwopi(
-                    cme.longitude + cme_hae) * u.rad
+                cme.longitude_surf = zerototwopi(cme.longitude + cme_hae)
             else:
                 cme.longitude_surf = cme.longitude
         cme_params = np.array([cme.parameter_array(model) for cme in checked_cmes])
@@ -2890,8 +2880,7 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
         time_from_start = full_model_time - full_model_time[0]
         lon_array = [model.lon] if model.lon.size == 1 else model.lon
         for istreak, carr in enumerate(streak_carr):
-            lon_src = zerototwopi(
-                (carr - model.cr_lon_init)) * u.rad
+            lon_src = zerototwopi(carr - model.cr_lon_init)
             dl_spinup = (2 * np.pi * full_buffertime.to(u.s)
                          / model.rotation_period)
             lon_0 = zerototwopi(
@@ -3697,33 +3686,38 @@ def _setup_dirs_():
     fig_dir.mkdir(parents=True, exist_ok=True)
     dirs['SURF_figures'] = str(fig_dir)
 
-    # Just check the directories exist.
-    for key, val in dirs.items():
-        if key == 'ephemeris':
-            if not os.path.isfile(val):
-                raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), val)
-        else:
-            if not os.path.isdir(val):
-                raise NotADirectoryError(errno.ENOENT, os.strerror(errno.ENOENT), val)
+    # The ephemeris is needed by every run. The example_inputs and insitu folders are only needed
+    # by the functions that read them, which report a missing file themselves.
+    if not os.path.isfile(dirs['ephemeris']):
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), dirs['ephemeris'])
 
     return dirs
 
 
-@jit(nopython=True, cache=surf_constants()['numba_cache'])
 def zerototwopi(angles):
     """
-    Function to constrain angles to the 0 - 2pi domain.
+    Wrap angles into the range 0 to 2pi.
     Args:
-        angles: a numpy array of angles.
+        angles: Angles as an astropy Quantity in any angular unit, or as plain numbers (or a
+                dimensionless Quantity) in radians.
     Returns:
-        angles_out: a numpy array of angles constrained to 0 - 2pi domain.
+        angles_out: The wrapped angles, as a Quantity in radians if the input had angular units,
+                    otherwise as plain numbers in radians.
     """
+    has_angle_unit = isinstance(angles, u.Quantity) and angles.unit.physical_type == 'angle'
+    if has_angle_unit:
+        angles_out = angles.to_value(u.rad)
+    elif isinstance(angles, u.Quantity):
+        angles_out = angles.to_value(u.dimensionless_unscaled)
+    else:
+        angles_out = angles
 
     twopi = 2.0 * np.pi
-    angles_out = angles
     a = -np.floor_divide(angles_out, twopi)
     angles_out = angles_out + (a * twopi)
 
+    if has_angle_unit:
+        angles_out = angles_out * u.rad
     return angles_out
 
 
@@ -4519,12 +4513,13 @@ def load_SURF_run(filepath):
     Args:
         filepath: The full path to a HDF5 file containing the output from SURF.save()
     Returns:
-        cme_list: A list of instances of ConeCME
         model: An instance of SURF containing loaded results.
+        cme_list: A list of instances of ConeCME
     """
-    if os.path.isfile(filepath):
+    if not os.path.isfile(filepath):
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), filepath)
 
-        data = h5py.File(filepath, 'r')
+    with h5py.File(filepath, 'r') as data:
 
         cr_num = np.int32(data['cr_num'])
         cr_lon_init = data['cr_lon_init'][()] * u.Unit(data['cr_lon_init'].attrs['unit'])
@@ -4679,20 +4674,20 @@ def load_SURF_run(filepath):
                               u.Unit(cme_data['initial_height'].attrs['unit']))
             v = cme_data['v'][()] * u.Unit(cme_data['v'].attrs['unit'])
             
-            # check for the new (post 4.2.1) cone CME parameters
-            if 'cme_expansion' in cme_data:
-                cme_expansion = cme_data['cme_expansion'][()]
-                cme_fixed_duration = cme_data['cme_fixed_duration'][()]
-                fixed_duration = (cme_data['fixed_duration'][()] *
-                                  u.Unit(cme_data['fixed_duration'].attrs['unit']))
-                
-                cme = ConeCME(t_launch=t_launch, longitude=lon, latitude=lat, v=v, width=width,
-                              thickness=thickness, initial_height=initial_height,
-                              cme_expansion=cme_expansion, cme_fixed_duration=cme_fixed_duration,
-                              fixed_duration=fixed_duration)
-            else:
-                cme = ConeCME(t_launch=t_launch, longitude=lon, latitude=lat, v=v, width=width,
+            cme_kwargs = dict(t_launch=t_launch, longitude=lon, latitude=lat, v=v, width=width,
                               thickness=thickness, initial_height=initial_height)
+            # Parameters added in later versions; older files fall back to the defaults
+            if 'cme_expansion' in cme_data:
+                cme_kwargs['cme_expansion'] = bool(cme_data['cme_expansion'][()])
+                cme_kwargs['cme_fixed_duration'] = bool(cme_data['cme_fixed_duration'][()])
+                cme_kwargs['fixed_duration'] = (cme_data['fixed_duration'][()] *
+                                                u.Unit(cme_data['fixed_duration'].attrs['unit']))
+            for key in ('cme_density', 'cme_temperature'):
+                if key in cme_data:
+                    cme_kwargs[key] = cme_data[key][()] * u.Unit(cme_data[key].attrs['unit'])
+            if 'profile_type' in cme_data:
+                cme_kwargs['profile_type'] = cme_data['profile_type'][()].decode("utf-8")
+            cme = ConeCME(**cme_kwargs)
             
             cme.frame = cme_data['frame'][()].decode("utf-8")
 
@@ -4732,10 +4727,6 @@ def load_SURF_run(filepath):
 
         # Update CMEs in model output
         model.cmes = cme_list
-
-    else:
-        # File doesn't exist return nothing
-        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), filepath)
 
     return model, cme_list
 
@@ -4794,7 +4785,10 @@ def bgrid_from_hcs(hcs_particles_r, input_b_ts, model_time, time_out, r_grid, lo
 
 
 def get_version():
-    """Return the installed SURF package version."""
-    from importlib.metadata import version
+    """Return the installed SURF package version, or 'unknown' if SURF is not pip-installed."""
+    from importlib.metadata import PackageNotFoundError, version
 
-    return version("surfs-up")
+    try:
+        return version("surfs-up")
+    except PackageNotFoundError:
+        return "unknown"
