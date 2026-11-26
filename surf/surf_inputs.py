@@ -1473,10 +1473,8 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
                        solver=solver, nlon=nlon, dr=dr, v_max=v_max, gamma=gamma)
 
     # extract the values from the model class
-    buffertime = model.buffertime  # standard buffer time seems insufficient
     simtime = model.simtime
     frame = model.frame
-    dt = model.dt
     cr_lon_init = model.cr_lon_init
 
     latitude = model.latitude
@@ -1489,8 +1487,7 @@ def set_time_dependent_boundary(vgrid_Carr, time_grid, starttime, simtime, r_min
     elif frame == 'sidereal':
         rotation_period = constants['sidereal_period']
 
-    # compute the model time step
-    model_time = s.model_time_grid(buffertime, simtime, dt)
+    model_time = model.model_time
 
     # interpolate the solar wind speed onto the model grid 
     # variables to store the input conditions.

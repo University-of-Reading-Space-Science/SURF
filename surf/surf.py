@@ -3,6 +3,7 @@ import os
 
 import copy
 import errno
+import warnings
 from appdirs import user_data_dir
 from astropy.constants import m_p
 import astropy.coordinates as acoords
@@ -757,7 +758,7 @@ class SURF:
                  input_iscme_ts=np.nan, input_t_ts=np.nan * u.s,
                  track_cmes=True, solver='huxt', parallel=False,
                  nlon=128, dr=1.5 * u.solRad, v_max=3000 * (u.km / u.s),
-                 gamma=1.5, mhd_boundary=None, mhd_gravity=False):
+                 gamma=1.5, mhd_boundary=None, mhd_gravity=False, spinup=True):
         """
         Initialise the SURF model instance.
 
@@ -815,6 +816,10 @@ class SURF:
                      'hydro-pcm-pui': Compressible HLLC+PCM with pick-up ion deceleration
                      'mhd': Ideal MHD with HLL+PLM+RK2 and physical vector fields
                      'mhd-pcm': Ideal MHD with HLL+PCM+Euler
+            spinup: If True (default), run a spin-up period before t = 0 so the solar wind fills
+                    the domain. Set False to start at t = 0 with no spin-up, which is only
+                    meaningful with an initial state from set_initial_state(); otherwise the
+                    domain starts from a uniform 400 km/s.
             parallel: Boolean flag to enable parallel computation across longitude slices
                       (default True). Uses joblib threading backend for parallelization. Set to
                       False for debugging or if running on a single-core system.
@@ -908,19 +913,14 @@ class SURF:
         # Set up the latitude
         self.latitude = latitude.to(u.rad)
 
-        # Setup time coords - in seconds
-        self.simtime = simtime.to('s')  # number of days to simulate (in seconds)
+        # Set up the time grid. The spin-up (buffer) period is long enough for the slowest
+        # expected solar wind to cross the radial grid.
         self.dt_scale = dt_scale * u.dimensionless_unscaled
-        time_grid_dict = time_grid(
-            self.simtime, self.dt_scale, dr=self.dr, v_max=self.v_max)
-        self.dtdr = time_grid_dict['dtdr']
-        self.Nt = time_grid_dict['Nt']
-        self.dt = time_grid_dict['dt']
-        self.time = time_grid_dict['time']
-        self.nt_out = time_grid_dict['nt_out']
-        self.dt_out = time_grid_dict['dt_out']
-        self.time_out = time_grid_dict['time_out']
-        del time_grid_dict
+        if spinup:
+            buffertime = 1.05 * (self.rrel[-1] / surf_constants()['v_min']).to(u.day)
+        else:
+            buffertime = 0 * u.day
+        self._set_time_grid(simtime=simtime, buffertime=buffertime)
 
         # Establish the Carrington (time stationary) speed boundary condition 
         if np.all(np.isnan(v_boundary)):
@@ -1061,10 +1061,6 @@ class SURF:
             self.temp_boundary = np.interp(self.temp_boundary_lons.value, lon_shifted,
                                            temp_b_shifted.value, period=self.twopi) * temp_unit
 
-        # Compute the buffertime required to spin up SURF, based on minimum speed on the inner
-        # boundary and span of radial grid
-        self.buffertime = 1.05 * (self.rrel[-1] / self.v_boundary.min()).to(u.day)
-
         # Preallocate space for the solar wind fields for the cme and ambient solution.
         # Use Fortran order (column-major) for better cache efficiency during solve:
         # - We iterate over longitude (last dimension)
@@ -1142,6 +1138,7 @@ class SURF:
 
             self.input_v_ts = input_v_ts[:, y_ind]
             self.model_time = input_t_ts
+            self.buffertime = np.maximum(-input_t_ts[0], 0 * u.s)
             self.input_v_ts_flag = True
 
             # B polarity
@@ -1186,7 +1183,28 @@ class SURF:
                 self.input_temp_ts = temp_from_velocity * u.K
                 self.input_temp_ts_flag = True
 
+        self._check_spinup()
         return
+
+    def _check_spinup(self):
+        """
+        Warn if the spin-up is too short for the slowest inner-boundary wind to cross the radial
+        grid, in which case the start of the run still contains the initial conditions.
+        Returns:
+            None
+        """
+        if self.buffertime <= 0 * u.s:
+            return
+        v_slowest = self.v_boundary.min()
+        if self.input_v_ts_flag:
+            v_slowest = min(v_slowest, np.nanmin(self.input_v_ts))
+        spinup_needed = 1.05 * (self.rrel[-1] / v_slowest).to(u.s)
+        if self.buffertime + self.dt < spinup_needed:
+            warnings.warn(
+                f"The slowest inner-boundary speed ({v_slowest.to_value(self.kms):.0f} km/s) needs "
+                f"a spin-up of {spinup_needed.to_value(u.day):.1f} days to cross the model "
+                f"domain, but the spin-up is {self.buffertime.to_value(u.day):.1f} days. The "
+                "start of the run may still reflect the initial conditions.", stacklevel=3)
 
     def _allocate_mhd_grids(self):
         """Physical vector components, separate from the passive b_grid polarity."""
@@ -1195,6 +1213,33 @@ class SURF:
             setattr(self, key + '_grid', np.zeros(
                 (self.nt_out, self.nr, self.nlon), order='F') * unit)
 
+    def _set_time_grid(self, simtime=None, buffertime=None):
+        """
+        Set the simulation length and spin-up period, and rebuild the model and output time steps.
+
+        Change simtime or buffertime through this method rather than by assigning the attributes,
+        so that the time steps stay consistent with them.
+        Args:
+            simtime: Duration of the simulation. Unchanged if None.
+            buffertime: Duration of the spin-up period before t = 0. Unchanged if None. Rounded
+                        down to a whole number of model time steps.
+        Returns:
+            None
+        """
+        if simtime is not None:
+            self.simtime = simtime.to(u.s)
+        if buffertime is None:
+            buffertime = self.buffertime
+        grid = time_grid(self.simtime, self.dt_scale, dr=self.dr, v_max=self.v_max,
+                         buffertime=buffertime)
+        self.dt = grid['dt']
+        self.dtdr = grid['dtdr']
+        self.buffertime = grid['buffertime']
+        self.model_time = grid['model_time']
+        self.dt_out = grid['dt_out']
+        self.nt_out = grid['nt_out']
+        self.time_out = grid['time_out']
+
     def ts_from_vlong(self):
         """
         Generate the input ambient time series from the v_boundary (lon) values
@@ -1202,11 +1247,10 @@ class SURF:
             None
         """
 
-        model_time = model_time_grid(self.buffertime, self.simtime, self.dt)
-        buffertime = -model_time[0]
+        model_time = self.model_time
+        buffertime = self.buffertime
         dlondt = self.twopi * self.dt / self.rotation_period
         nlon = self.nlon  # Use the actual model longitude count
-        self.model_time = model_time
 
         # How many radians of Carrington rotation in this simulation length
         simlon = self.twopi * self.simtime / self.rotation_period
@@ -1911,8 +1955,8 @@ class SURF:
                 self._rho_init[i] = rho[:, i].copy()
                 self._temp_init[i] = temp[:, i].copy()
 
-        # Zero the buffer time so ts_from_vlong skips spin-up
-        self.buffertime = 0.0 * u.day
+        # A restart needs no spin-up
+        self._set_time_grid(buffertime=0 * u.s)
 
     def solve(self, cme_list, streak_carr=np.array([])*u.rad, save=False, tag=''):
         """
@@ -2635,6 +2679,7 @@ def surf_constants():
     dr = 1.5 * u.solRad  # Radial grid step. With v_max, this sets the model time step [1.5 Rs]
     nlat = 45  # Number of latitude bins for a full latitude grid [45]
     v_max = 3000 * (u.km / u.s)  # Maximum expected solar wind speed. Sets timestep [3000 km/s]
+    v_min = 270 * (u.km / u.s)  # Minimum expected solar wind speed. Sets spin-up length [270 km/s]
 
     # Physical and astronomical constants.
     twopi = 2.0 * np.pi
@@ -2661,7 +2706,7 @@ def surf_constants():
     min_pressure = 1e-30
 
     constants = {'twopi': twopi, 'daysec': daysec, 'kms': kms, 'alpha': alpha,
-                 'r_accel': r_accel, 'synodic_period': synodic_period,
+                 'r_accel': r_accel, 'v_min': v_min, 'synodic_period': synodic_period,
                  'sidereal_period': sidereal_period, 'v_max': v_max,
                  'dr': dr, 'nlon': nlon, 'nlong': nlon, 'nlat': nlat,
                  'v_sw_1au': v_sw_1au, 'n_sw_1au': n_sw_1au, 'T_sw_1au': T_sw_1au,
@@ -2885,7 +2930,6 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
         chunk_start = t_elapsed
         if model.mhd:
             model._mhd_time_offset = chunk_start.to_value(u.s)
-        model.simtime = (ideal_end - chunk_start).to(u.s)
 
         if verbose:
             print(f"  chunk {ic + 1}/{n_chunks}: "
@@ -2894,14 +2938,15 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
 
         # --- Configure the model for this chunk ---
 
+        if state is not None:
+            # Restart from previous chunk — skip spin-up
+            model.set_initial_state(state)
+        model._set_time_grid(simtime=ideal_end - chunk_start,
+                             buffertime=full_buffertime if state is None else 0 * u.s)
+
+        # Output times on the full run's timeline (the first HUXt chunk already has them)
         dt_half = 0.5 * model.dt
-        if ic == 0 and not model.compressible:
-            tg = time_grid(
-                model.simtime, model.dt_scale, dr=model.dr, v_max=model.v_max)
-            model.nt_out = tg['nt_out']
-            model.dt_out = tg['dt_out']
-            model.time_out = tg['time_out']
-        else:
+        if ic > 0 or model.compressible:
             if ic == 0:
                 mask = (full_time_out < ideal_end + dt_half)
             else:
@@ -2921,16 +2966,7 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
             model.temp_grid = np.zeros((model.nt_out, model.nr, model.nlon),
                                        order='F') * u.K
 
-        if state is not None:
-            # Restart from previous chunk — skip spin-up
-            model.set_initial_state(state)
-
-        # Determine buffer for this chunk
-        if state is None:
-            model.buffertime = full_buffertime
-        # else: set_initial_state already zeroed buffertime
-
-        chunk_model_time = model_time_grid(model.buffertime, model.simtime, model.dt)
+        chunk_model_time = model.model_time
         if state is not None and not model.compressible:
             chunk_model_time = chunk_model_time + full_dt_out
         model.model_time = chunk_model_time
@@ -3098,6 +3134,7 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
     # Restore the full input time series
     model.input_v_ts = full_input_v_ts
     model.model_time = full_model_time
+    model.buffertime = full_buffertime
     if model.track_b and full_input_b_ts is not None:
         model.input_b_ts = full_input_b_ts
     if full_input_iscme_ts is not None:
@@ -3580,17 +3617,25 @@ def latitude_grid(latitude_min=np.nan, latitude_max=np.nan, nlat=None):
     return lat, nlat
 
 
-def time_grid(simtime, dt_scale, dr=None, v_max=None):
+def time_grid(simtime, dt_scale, dr=None, v_max=None, buffertime=0 * u.s):
     """
-    Define the model timestep and time grid based on CFL condition and specified simulation time.
+    Define the model time step, the model time steps including spin-up, and the output time steps.
+
+    Model time steps are whole multiples of dt, so t = 0 falls exactly on a step. Building them
+    with np.arange(-buffertime, ...) accumulates rounding error, which left the t = 0 step slightly
+    negative or positive depending on the run configuration and so shifted the output by one step.
     Args:
-        simtime: The length of the simulation
-        dt_scale: An integer specifying how frequently model timesteps should be saved to output.
-        dr: Radial grid spacing. Uses the legacy SURF default if omitted.
-        v_max: Maximum speed for the CFL condition. Uses the legacy default if omitted.
+        simtime: The length of the simulation.
+        dt_scale: An integer specifying how frequently model time steps are saved to output.
+        dr: Radial grid spacing. Uses the SURF default if omitted.
+        v_max: Maximum speed for the CFL condition. Uses the SURF default if omitted.
+        buffertime: Length of the spin-up period before t = 0. Rounded down to a whole number of
+                    model time steps.
     Returns:
-        time_grid_dict: A dictionary containing arrays of the models intrinsic time steps and the
-                        requsted output timesteps.
+        time_grid_dict: A dictionary of the model time step (dt, dtdr), the spin-up period rounded
+                        to whole steps (buffertime), the model time steps from the start of spin-up
+                        to the end of the simulation (model_time), and the output time step, count
+                        and times (dt_out, nt_out, time_out).
     """
     constants = surf_constants()
     if v_max is None:
@@ -3605,37 +3650,20 @@ def time_grid(simtime, dt_scale, dr=None, v_max=None):
     dt = (dr / v_max).to('s')
     dtdr = dt / dr
 
-    nt = np.int32(np.floor(simtime.to(dt.unit) / dt))  # number of time steps in the simulation
-    time = np.arange(0, nt) * dt  # Model time steps
+    # Model time steps, from the start of spin-up to the end of the simulation
+    n_buffer = int(np.fix((buffertime / dt).decompose().value))
+    n_sim = int(np.ceil((simtime / dt).decompose().value))
+    model_time = np.arange(-n_buffer, n_sim + 1) * dt
 
+    nt = np.int32(np.floor(simtime.to(dt.unit) / dt))  # number of time steps in the simulation
     dt_out = dt_scale * dt  # time step of the output
     nt_out = np.int32(nt / dt_scale)  # number of time steps in the output
     time_out = np.arange(0, nt_out) * dt_out  # Output time steps
 
-    time_grid_dict = {'dt': dt, 'dtdr': dtdr, 'Nt': nt, 'time': time,
-                      'dt_out': dt_out, 'nt_out': nt_out, 'time_out': time_out}
+    time_grid_dict = {'dt': dt, 'dtdr': dtdr, 'buffertime': n_buffer * dt,
+                      'model_time': model_time, 'dt_out': dt_out, 'nt_out': nt_out,
+                      'time_out': time_out}
     return time_grid_dict
-
-
-def model_time_grid(buffertime, simtime, dt):
-    """
-    Define the model time steps, from the start of the spin-up period to the end of the simulation.
-
-    The steps are whole multiples of dt, so t = 0 falls exactly on a model step. Building the grid
-    with np.arange(-buffertime, ...) instead accumulates rounding error, which left the t = 0 step
-    slightly negative or positive depending on the run configuration and so shifted the output by
-    one model step.
-    Args:
-        buffertime: Duration of the spin-up period. Rounded down to a whole number of steps.
-        simtime: Duration of the simulation.
-        dt: The model time step.
-    Returns:
-        model_time: Array of model times, in seconds, with t = 0 at the end of the spin-up period.
-    """
-    dt = dt.to(u.s)
-    n_buffer = int(np.fix((buffertime / dt).decompose().value))
-    n_sim = int(np.ceil((simtime / dt).decompose().value))
-    return np.arange(-n_buffer, n_sim + 1) * dt
 
 
 def _setup_dirs_():

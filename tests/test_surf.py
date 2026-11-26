@@ -39,7 +39,8 @@ N_LON_SAMPLES = 16
 
 NLON = 128
 _LONS = np.linspace(0, 2 * np.pi, NLON, endpoint=False)
-V_BOUNDARY = (400 + 150 * np.sin(_LONS) + 60 * np.cos(3 * _LONS)) * (u.km / u.s)
+# Boundary speeds stay above the 270 km/s the spin-up period is sized for
+V_BOUNDARY = (430 + 110 * np.sin(_LONS) + 40 * np.cos(3 * _LONS)) * (u.km / u.s)
 B_BOUNDARY = np.sign(np.cos(_LONS + 0.4))
 STREAK_CARR = np.deg2rad([30.0, 150.0, 270.0]) * u.rad
 MHD_BOUNDARY = {"br": 10 * u.nT, "bt": -20 * u.nT, "bn": 5 * u.nT}
@@ -99,7 +100,7 @@ def case_huxt_time_dependent():
     n_days = 8
     time_grid = 59610.0 + np.arange(n_days)  # MJD, starting 2022-02-01
     drift = np.linspace(0, np.pi / 2, n_days)
-    vgrid = 400 + 150 * np.sin(_LONS[:, None] + drift[None, :])
+    vgrid = 430 + 120 * np.sin(_LONS[:, None] + drift[None, :])
     bgrid = np.sign(np.cos(_LONS[:, None] + 0.4 + drift[None, :]))
     model = sin.set_time_dependent_boundary(
         vgrid * (u.km / u.s), time_grid, datetime.datetime(2022, 2, 3),
