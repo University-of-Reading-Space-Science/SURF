@@ -1498,7 +1498,7 @@ def plot_radial(model, time, lon, save=False, tag=''):
 
     if model.lon.size == 1:
         id_lon = 0
-        lon_out = model.lon.value
+        lon_out = float(np.asarray(model.lon.to(u.deg).value).reshape(-1)[0])
     else:
         id_lon = np.argmin(np.abs(model.lon - lon))
         lon_out = model.lon[id_lon].to(u.deg).value
@@ -1508,16 +1508,22 @@ def plot_radial(model, time, lon, save=False, tag=''):
     ymin = 200
     ymax = 1000
 
-    # Plot the CME points on if needed
+    # Plot the CME points on if needed. Skip CMEs that have no tracked boundary at this time
+    # (not yet launched, already left the domain, or not tracked).
     cme_colors = get_cme_colors()
-    for c, cme in enumerate(model.cmes):
+    for c, cme in enumerate(getattr(model, 'cmes', [])):
         cc = np.mod(c, len(cme_colors))
 
-        lon_cme = cme.coords[id_t]['lon']
-        r_cme = cme.coords[id_t]['r'].to(u.solRad)
+        coords = getattr(cme, 'coords', {}).get(int(id_t))
+        if coords is None:
+            continue
+        lon_cme = coords['lon']
+        r_cme = coords['r'].to(u.solRad)
 
-        id_front = cme.coords[id_t]['front_id'] == 1.0
-        id_back = cme.coords[id_t]['front_id'] == 0.0
+        id_front = coords['front_id'] == 1.0
+        id_back = coords['front_id'] == 0.0
+        if not np.any(id_front) or not np.any(id_back):
+            continue
         r_front = r_cme[id_front]
         lon_front = lon_cme[id_front]
         r_back = r_cme[id_back]
@@ -1529,10 +1535,14 @@ def plot_radial(model, time, lon, save=False, tag=''):
         r_back = r_back[id_cme_lon]
 
         id_cme = (model.r >= r_back) & (model.r <= r_front)
+        if not np.any(id_cme):
+            continue
         label = f"CME {c:02d}"
         ax.plot(model.r[id_cme], model.v_grid[id_t, id_cme, id_lon], '.',
                 color=cme_colors[cc], label=label)
 
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend()
     ax.set_ylim(ymin, ymax)
     ax.set_ylabel(ylab if not is_compressible else 'V (km/s)')
     ax.set_xlim(model.r.value.min(), model.r.value.max())

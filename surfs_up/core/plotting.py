@@ -9,7 +9,6 @@ import matplotlib.ticker as mticker
 import numpy as np
 
 
-CME_COLORS = ["r", "c", "m", "y", "deeppink", "darkorange"]
 SPEED_LIMITS_KMS = (300, 900)
 TIMESERIES_FIGSIZE = (10, 6.25)
 TIMESERIES_LEGEND_FONTSIZE = 12
@@ -75,14 +74,6 @@ def style_timeseries_legends(axes, run_name, ambient_name=None):
             [item[1] for item in ordered],
             fontsize=TIMESERIES_LEGEND_FONTSIZE,
         )
-
-
-def _cme_coords_at_time(cme, time_index: int):
-    """Return CME coordinates for a model time index, if available."""
-    coords = getattr(cme, "coords", None)
-    if not isinstance(coords, dict):
-        return None
-    return coords.get(int(time_index))
 
 
 def format_datetime_axis_like_surf(fig, axes, times):
@@ -226,116 +217,3 @@ def plot_custom_timeseries(model, radius, lon):
     )
     return fig, axes if n_panels > 1 else axes[0]
 
-
-def plot_radial(model, time, lon, save: bool = False, tag: str = ""):
-    """Plot a radial profile, tolerating CMEs missing the selected time index."""
-    if (time < model.time_out.min()) | (time > model.time_out.max()):
-        print("Error, input time outside span of model times. Defaulting to closest time")
-        time_index = int(np.argmin(np.abs(model.time_out - time)))
-        time = model.time_out[time_index]
-
-    if model.lon.size != 1:
-        if (lon < model.lon.min()) | (lon > model.lon.max()):
-            print(
-                "Error, input lon outside range of model longitudes."
-                " Defaulting to closest longitude"
-            )
-            lon_index = int(np.argmin(np.abs(model.lon - lon)))
-            lon = model.lon[lon_index]
-
-    is_compressible = hasattr(model, "compressible") and model.compressible
-    if is_compressible:
-        fig, axes = plt.subplots(3, 1, figsize=(14, 14), sharex=True)
-        ax = axes[0]
-    else:
-        fig, ax = plt.subplots(figsize=(14, 7))
-        axes = [ax]
-
-    time_index = int(np.argmin(np.abs(model.time_out - time)))
-    time_out = model.time_out[time_index].to(u.day).value
-
-    if model.lon.size == 1:
-        lon_index = 0
-        lon_out = float(np.asarray(model.lon.value).reshape(-1)[0])
-    else:
-        lon_index = int(np.argmin(np.abs(model.lon - lon)))
-        lon_out = model.lon[lon_index].to(u.deg).value
-
-    ax.plot(model.r, model.v_grid[time_index, :, lon_index], "k-")
-    ax.set_ylim(*SPEED_LIMITS_KMS)
-
-    for cme_index, cme in enumerate(getattr(model, "cmes", [])):
-        coords = _cme_coords_at_time(cme, time_index)
-        if coords is None:
-            continue
-
-        lon_cme = coords["lon"]
-        r_cme = coords["r"].to(u.solRad)
-        front_id = coords["front_id"]
-
-        id_front = front_id == 1.0
-        id_back = front_id == 0.0
-        if not np.any(id_front) or not np.any(id_back):
-            continue
-
-        lon_front = lon_cme[id_front]
-        lon_back = lon_cme[id_back]
-        r_front = r_cme[id_front]
-        r_back = r_cme[id_back]
-
-        r_front = r_front[int(np.argmin(np.abs(lon_front - lon)))]
-        r_back = r_back[int(np.argmin(np.abs(lon_back - lon)))]
-
-        id_cme = (model.r >= r_back) & (model.r <= r_front)
-        if not np.any(id_cme):
-            continue
-
-        ax.plot(
-            model.r[id_cme],
-            model.v_grid[time_index, id_cme, lon_index],
-            ".",
-            color=CME_COLORS[np.mod(cme_index, len(CME_COLORS))],
-            label=f"CME {cme_index:02d}",
-        )
-
-    ax.set_ylabel("V (km/s)" if is_compressible else "Solar Wind Speed (km/s)")
-    ax.set_xlim(model.r.value.min(), model.r.value.max())
-    if not is_compressible:
-        ax.set_xlabel("Radial distance ($R_{sun}$)")
-
-    if is_compressible:
-        m_p = 1.6726e-27
-        n_profile = model.rho_grid[time_index, :, lon_index].value / m_p / 1e6
-        axes[1].semilogy(model.r, n_profile, "b-")
-        axes[1].set_ylabel("n (protons/cm^3)", color="b")
-        axes[1].tick_params(axis="y", labelcolor="b")
-        axes[1].set_xlim(model.r.value.min(), model.r.value.max())
-        axes[1].grid(True, alpha=0.3)
-
-        t_profile = model.temp_grid[time_index, :, lon_index].value
-        axes[2].semilogy(model.r, t_profile, "r-")
-        axes[2].set_ylabel("T (K)", color="r")
-        axes[2].tick_params(axis="y", labelcolor="r")
-        axes[2].set_xlabel("Radial distance ($R_{sun}$)")
-        axes[2].set_xlim(model.r.value.min(), model.r.value.max())
-        axes[2].grid(True, alpha=0.3)
-
-    fig.subplots_adjust(left=0.1, bottom=0.1, right=0.95, top=0.95)
-    label = f"SURF Time: {time_out:3.2f} days Lon: {lon_out:3.2f}$^\\circ$"
-    if is_compressible:
-        axes[0].set_title(label, fontsize=20)
-    else:
-        ax.text(0.05, 1.02, label, color="k", fontsize=20, transform=ax.transAxes)
-
-    for axis in axes:
-        axis.grid(True, alpha=0.3)
-
-    if ax.get_legend_handles_labels()[0]:
-        ax.legend()
-
-    if save:
-        filepath = f"SURF_Radial{tag}.png"
-        fig.savefig(filepath)
-        return fig, ax
-
-    return fig, ax

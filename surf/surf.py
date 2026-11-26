@@ -686,6 +686,29 @@ class ConeCME:
         return arrival_stats
 
 
+def _sample_trajectory(group, times, with_v=False):
+    """
+    Interpolate a particle trajectory from the compressible solvers onto the output times.
+    Args:
+        group: Dict of the particle's 'r', 't' and (if with_v) 'v' arrays.
+        times: The output times, in the same units as group['t'].
+        with_v: If True, also interpolate the particle speed.
+    Returns:
+        r_out: Particle position at each output time, NaN outside the trajectory. None if the
+               trajectory has no valid points.
+        v_out: Particle speed at each output time, or None.
+    """
+    valid = ~np.isnan(group['r'])
+    if not np.any(valid):
+        return None, None
+    t_valid = group['t'][valid]
+    r_out = np.interp(times, t_valid, group['r'][valid], left=np.nan, right=np.nan)
+    v_out = None
+    if with_v:
+        v_out = np.interp(times, t_valid, group['v'][valid], left=np.nan, right=np.nan)
+    return r_out, v_out
+
+
 class SURF:
     """
     A class containing the SURF model.
@@ -749,11 +772,11 @@ class SURF:
                  gamma=1.5, mhd_boundary=None, mhd_gravity=False, spinup=True):
         """
         Initialise the SURF model instance.
-
+        Args:
             v_boundary: Inner solar wind speed boundary condition. An array of size nlon
                         (default 128). Units of km/s.
             b_boundary: Inner B polarity boundary condition. An array of size nlon (default 128).
-                        Units of km/s.
+                        No units; only the sign (the polarity) is used.
             cr_num: Integer Carrington rotation number. Used to determine the planetary and
                     spacecraft positions
             cr_lon_init: Carrington longitude of Earth at model initialisation, in degrees.
@@ -776,23 +799,21 @@ class SURF:
             input_v_ts: Time series of inner boundary V conditions. For initialising SURF with,
                         for example, in-situ observations from L1. If used as keyword input
                         argument, overrides v_boundary input.
-            input_bv_ts: Time series of inner boundary B conditions. For initialising SURF with,
+            input_b_ts: Time series of inner boundary B conditions. For initialising SURF with,
                          for example, in-situ observations from L1. If used as keyword input
                          argument, overrides b_boundary input.
             input_rho_ts: Time series of inner boundary density conditions in kg/m³. For
                           initialising SURF with, for example, in-situ observations from L1. If
                           used as keyword input argument, overrides rho_boundary input. Only used
-                          if compressible=True.
+                          by the hydro and MHD solvers.
             input_temp_ts: Time series of inner boundary temperature conditions in Kelvin. For
                            initialising SURF with, for example, in-situ observations from L1. If
                            used as keyword input argument, overrides temp_boundary input. Only
-                           used if compressible=True.
+                           used by the hydro and MHD solvers.
             input_t_ts: Times of input_v_ts in seconds, including spin up.
             input_iscme_ts: Boolean mask time series indicating what time steps correspond to CMEs
                             in input_v_ts. If used as keyword input argument, overrides ConeCMEs
                             past to surf.sovle().
-            save_full_v: Boolean flag to determine if full v field (including spin up) is saved for
-                         post-processing.
             track_cmes: Boolean flag to determine if CMEs are tracked at run time (small speed
                         reduction).
             solver: String specifying the numerical solver to use. Options:
@@ -809,13 +830,13 @@ class SURF:
                     meaningful with an initial state from set_initial_state(); otherwise the
                     domain starts from a uniform 400 km/s.
             parallel: Boolean flag to enable parallel computation across longitude slices
-                      (default True). Uses joblib threading backend for parallelization. Set to
+                      (default False). Uses joblib threading backend for parallelization. Set to
                       False for debugging or if running on a single-core system.
             rho_boundary: Inner density boundary condition in kg/m³. An array of size nlon. Only
-                          used if compressible=True. If not provided, defaults to realistic solar
+                          used by the hydro and MHD solvers. If not provided, defaults to realistic solar
                           wind density scaled from 1 AU (5 protons/cm³) using r⁻² scaling to r_min.
             temp_boundary: Inner temperature boundary condition in Kelvin. An array of size nlon.
-                           Only used if compressible=True. If not provided, defaults to realistic
+                           Only used by the hydro and MHD solvers. If not provided, defaults to realistic
                            solar wind temperature scaled from 1 AU (10⁵ K) using r⁻⁰·⁶⁷ scaling to
                            r_min.
             gamma: Effective adiabatic index used by the compressible solver. Defaults to 1.5.
@@ -1016,38 +1037,13 @@ class SURF:
         cr_frac = self.cr_num.value + ((self.twopi - self.cr_lon_init.value) / self.twopi)
         self.time_init = coords.sun.carrington_rotation_time(cr_frac)
 
-        # Rotate the boundary condition as required by cr_lon_init.
-        lon_shifted = zerototwopi((self.v_boundary_lons - self.cr_lon_init).value)
-        id_sort = np.argsort(lon_shifted)
-        lon_shifted = lon_shifted[id_sort]
-        v_b_shifted = self.v_boundary[id_sort]
-        self.v_boundary = np.interp(self.v_boundary_lons.value, lon_shifted, v_b_shifted,
-                                    period=self.twopi)
-
-        lon_shifted = zerototwopi((self.b_boundary_lons - self.cr_lon_init).value)
-        id_sort = np.argsort(lon_shifted)
-        lon_shifted = lon_shifted[id_sort]
-        b_b_shifted = self.b_boundary[id_sort]
-        self.b_boundary = np.interp(self.b_boundary_lons.value, lon_shifted, b_b_shifted,
-                                    period=self.twopi)
-
-        # Rotate rho and temp boundaries if compressible
+        # Rotate the boundary conditions as required by cr_lon_init.
+        self.v_boundary = self._rotate_boundary(self.v_boundary, self.v_boundary_lons)
+        self.b_boundary = self._rotate_boundary(self.b_boundary, self.b_boundary_lons)
         if compressible:
-            lon_shifted = zerototwopi((self.rho_boundary_lons - self.cr_lon_init).value)
-            id_sort = np.argsort(lon_shifted)
-            lon_shifted = lon_shifted[id_sort]
-            rho_b_shifted = self.rho_boundary[id_sort]
-            rho_unit = self.rho_boundary.unit
-            self.rho_boundary = np.interp(self.rho_boundary_lons.value, lon_shifted,
-                                          rho_b_shifted.value, period=self.twopi) * rho_unit
-
-            lon_shifted = zerototwopi((self.temp_boundary_lons - self.cr_lon_init).value)
-            id_sort = np.argsort(lon_shifted)
-            lon_shifted = lon_shifted[id_sort]
-            temp_b_shifted = self.temp_boundary[id_sort]
-            temp_unit = self.temp_boundary.unit
-            self.temp_boundary = np.interp(self.temp_boundary_lons.value, lon_shifted,
-                                           temp_b_shifted.value, period=self.twopi) * temp_unit
+            self.rho_boundary = self._rotate_boundary(self.rho_boundary, self.rho_boundary_lons)
+            self.temp_boundary = self._rotate_boundary(self.temp_boundary,
+                                                       self.temp_boundary_lons)
 
         # Preallocate space for the solar wind fields for the cme and ambient solution.
         # Use Fortran order (column-major) for better cache efficiency during solve:
@@ -1099,12 +1095,7 @@ class SURF:
 
 
         # Numpy array of model parameters for parsing to external functions that use numba
-        
-        self.model_params = np.array([self.dtdr.value, self.alpha, self.r_accel.value,
-                                      self.dt_scale.value, self.nt_out, self.nr, self.nlon,
-                                      self.r[0].to('km').value,
-                                      self.rotation_period.to(u.s).value, self.gamma,
-                                      int(self.pui)])
+        self.model_params = self._model_params()
 
         # Process inputs for time dependent boundary conditions, e.g., from in-situ data
         self.input_b_ts = np.nan
@@ -1173,6 +1164,124 @@ class SURF:
 
         self._check_spinup()
         return
+
+    def _rotate_boundary(self, values, lons):
+        """
+        Rotate a longitudinal boundary condition by cr_lon_init.
+        Args:
+            values: Boundary values at each of lons.
+            lons: The Carrington longitudes of values.
+        Returns:
+            The boundary values at lons, after rotation.
+        """
+        lon_shifted = zerototwopi((lons - self.cr_lon_init).value)
+        id_sort = np.argsort(lon_shifted)
+        return np.interp(lons.value, lon_shifted[id_sort], values[id_sort], period=self.twopi)
+
+    def _model_params(self):
+        """
+        Return the model parameters as a plain array, for the numba-compiled solvers.
+        Returns:
+            Array of dtdr, alpha, r_accel, dt_scale, nt_out, nr, nlon, inner boundary radius (km),
+            rotation period (s), gamma and the pick-up ion flag.
+        """
+        return np.array([self.dtdr.value, self.alpha, self.r_accel.value,
+                         self.dt_scale.value, self.nt_out, self.nr, self.nlon,
+                         self.r[0].to('km').value,
+                         self.rotation_period.to(u.s).value, self.gamma,
+                         int(self.pui)])
+
+    def _prepare_cmes(self, cme_list):
+        """
+        Check a list of ConeCMEs for a run, set their model longitudes and sort them by launch time.
+        The ConeCMEs are copied, so the caller's objects are not modified.
+        Args:
+            cme_list: A list of ConeCME instances.
+        Returns:
+            cmes: The checked ConeCMEs, in launch order.
+            cme_params: Array of the ConeCME parameters, one row per CME in the same order, or None
+                        if there are no CMEs.
+        """
+        # Quality control the CME list. Check:
+        # Only ConeCMEs in list
+        # Make sidereal correction if necessary
+        # Check launch time is not in spin up period before simulation time.
+        earthpos = None
+        cmes = []
+        for cme in copy.deepcopy(cme_list):
+            if not isinstance(cme, ConeCME):
+                print("Warning: cme_list contained objects other than ConeCME instances."
+                      " These were excluded")
+                continue
+            if cme.t_launch < 0 * u.s:
+                print(f"Warning: ConeCME had negative t_launch ({cme.t_launch}), "
+                      f"which is not allowed.")
+                print("Warning: This ConeCME object was not passed into the SURF solver")
+                continue
+
+            if self.frame == 'sidereal':
+                # if the solution is in the sideral frame, adjust CME longitudes
+                if earthpos is None:
+                    earthpos = self.get_observer('EARTH')
+                # time and longitude from start of run
+                dt_t0 = (earthpos.time - self.time_init).to(u.s)
+                dlon_t0 = earthpos.lon_hae - earthpos.lon_hae[0]
+                # find the CME hae longitude relative to the run start
+                cme_hae = np.interp(cme.t_launch.to(u.s).value, dt_t0.value, dlon_t0)
+                # adjust the CME HEEQ longitude accordingly
+                cme.longitude_surf = zerototwopi(cme.longitude + cme_hae)
+            else:
+                cme.longitude_surf = cme.longitude
+            cmes.append(cme)
+
+        if len(cmes) == 0:
+            return cmes, None
+
+        for cme in cmes:
+            # sanity check the CME initial height is the same as the model inner boundary
+            assert self.r[0] == cme.initial_height
+            # check CME speeds aren't so fast they will butt up against the CFL condition.
+            if cme.v >= self.v_max:
+                raise ValueError(f'CME speed {cme.v} is larger than allowed for CFL limit'
+                                 f' of {self.v_max}')
+            elif cme.v >= 0.8 * self.v_max:
+                print(f'Warning: CME speed of {cme.v} is close to CFL limit of {self.v_max}. '
+                      f'Simulation may be unstable')
+
+        # Sort the CMEs in launch order.
+        cme_params = np.array([cme.parameter_array(self) for cme in cmes])
+        id_sort = np.argsort(cme_params[:, 0])
+        return [cmes[i] for i in id_sort], cme_params[id_sort]
+
+    def _add_cmes_to_inputs(self, cme_params):
+        """
+        Insert CMEs into the inner boundary time series at each model longitude, and record
+        which time steps are in each CME in input_iscme_ts.
+        Args:
+            cme_params: Array of ConeCME parameters, as returned by _prepare_cmes(), or None.
+        Returns:
+            None
+        """
+        self.input_iscme_ts = np.zeros((self.model_time.size, self.nlon), dtype='int')
+        if cme_params is None:
+            return
+        for i in range(self.lon.size):
+            lon_out = self.lon.value if self.lon.size == 1 else self.lon[i].value
+            if self.compressible:
+                v, isincme, rho, temp = add_cmes_to_input_series(
+                    self.input_v_ts[:, i].value, self.model_time, lon_out,
+                    self.r[0].to('km').value, cme_params, self.latitude.value,
+                    rhoinput=self.input_rho_ts[:, i].value,
+                    tempinput=self.input_temp_ts[:, i].value, compressible=True)
+                self.input_rho_ts[:, i] = rho * (u.kg / u.m ** 3)
+                self.input_temp_ts[:, i] = temp * u.K
+            else:
+                v, isincme, _, _ = add_cmes_to_input_series(
+                    self.input_v_ts[:, i].value, self.model_time, lon_out,
+                    self.r[0].to('km').value, cme_params, self.latitude.value,
+                    rhoinput=None, tempinput=None, compressible=False)
+            self.input_v_ts[:, i] = v * self.kms
+            self.input_iscme_ts[:, i] = isincme
 
     def _check_spinup(self):
         """
@@ -1650,90 +1759,45 @@ class SURF:
             # Get time_out as plain array
             time_out_sec = self.time_out.value
             
-            # Process CME particles
+            # Process CME particles: the leading and trailing edges of each CME
             if self.track_cmes:
                 for cme_id in range(n_cme):
-                    leading_key = f'cme_{cme_id}_leading'
-                    trailing_key = f'cme_{cme_id}_trailing'
-                    
-                    if leading_key in groups:
-                        # Compressible solver returns 1D trajectory arrays
-                        r_traj = groups[leading_key]['r']
-                        t_traj = groups[leading_key]['t']
-                        valid_mask = ~np.isnan(r_traj)
-                        if np.any(valid_mask):
-                            r_valid = r_traj[valid_mask]
-                            t_valid = t_traj[valid_mask]
-                            r_out = np.interp(time_out_sec, t_valid, r_valid,
-                                             left=np.nan, right=np.nan)
-                            cme_particles_r_out[cme_id, :, 0] = r_out
-                            v_traj = groups[leading_key]['v'][valid_mask]
-                            cme_particles_v_out[cme_id, :, 0] = np.interp(
-                                time_out_sec, t_valid, v_traj,
-                                left=np.nan, right=np.nan)
-                    
-                    if trailing_key in groups:
-                        # Compressible solver returns 1D trajectory arrays
-                        r_traj = groups[trailing_key]['r']
-                        t_traj = groups[trailing_key]['t']
-                        valid_mask = ~np.isnan(r_traj)
-                        if np.any(valid_mask):
-                            r_valid = r_traj[valid_mask]
-                            t_valid = t_traj[valid_mask]
-                            r_out = np.interp(time_out_sec, t_valid, r_valid,
-                                             left=np.nan, right=np.nan)
-                            cme_particles_r_out[cme_id, :, 1] = r_out
-                            v_traj = groups[trailing_key]['v'][valid_mask]
-                            cme_particles_v_out[cme_id, :, 1] = np.interp(
-                                time_out_sec, t_valid, v_traj,
-                                left=np.nan, right=np.nan)
-            
-            # Process HCS particles
+                    for edge, side in enumerate(('leading', 'trailing')):
+                        group = groups.get(f'cme_{cme_id}_{side}')
+                        if group is None:
+                            continue
+                        r_out, v_out = _sample_trajectory(group, time_out_sec, with_v=True)
+                        if r_out is not None:
+                            cme_particles_r_out[cme_id, :, edge] = r_out
+                            cme_particles_v_out[cme_id, :, edge] = v_out
+
+            # Process HCS particles. Their polarities are already set above.
             if self.track_b:
                 # One group per HCS crossing, named 'hcs_<n>'
                 for ihcs in range(n_hcs_max):
-                    hcs_key = f'hcs_{ihcs}'
-                    if hcs_key in groups:
-                        # Preserve the monotonically increasing crossing
-                        # index even if this particle left the grid before
-                        # the next saved output. Otherwise a later chunk
-                        # can reuse the slot with the wrong polarity.
-                        final_hcs_count = max(final_hcs_count, ihcs + 1)
-                        # Compressible solver returns 1D trajectory arrays
-                        r_traj = groups[hcs_key]['r']
-                        t_traj = groups[hcs_key]['t']
-                        valid_mask = ~np.isnan(r_traj)
-                        if np.any(valid_mask):
-                            r_valid = r_traj[valid_mask]
-                            t_valid = t_traj[valid_mask]
-                            r_out = np.interp(time_out_sec, t_valid, r_valid,
-                                             left=np.nan, right=np.nan)
-                            hcs_particles_r_out[ihcs, :, 0] = r_out
-                            
-                            # Store polarity sign in second component
-                            if ihcs < len(hcs_polarities):
-                                hcs_particles_r_out[ihcs, :, 1] = hcs_polarities[ihcs]
-                            else:
-                                hcs_particles_r_out[ihcs, :, 1] = np.nan
-        
+                    group = groups.get(f'hcs_{ihcs}')
+                    if group is None:
+                        continue
+                    # Preserve the monotonically increasing crossing
+                    # index even if this particle left the grid before
+                    # the next saved output. Otherwise a later chunk
+                    # can reuse the slot with the wrong polarity.
+                    final_hcs_count = max(final_hcs_count, ihcs + 1)
+                    r_out, _ = _sample_trajectory(group, time_out_sec)
+                    if r_out is not None:
+                        hcs_particles_r_out[ihcs, :, 0] = r_out
+
             # Process streakline particles
             if self.track_streak:
                 for istreak in range(n_streaks):
                     for irot in range(n_rots):
-                        streak_name = f'streak_{istreak}_rot_{irot}'
-                        if streak_name in groups:
-                            # Compressible solver returns 1D trajectory arrays
-                            # (already converted in solve_radial_compressible)
-                            r_traj = groups[streak_name]['r']
-                            t_traj = groups[streak_name]['t']
-                            valid_mask = ~np.isnan(r_traj)
-                            if np.any(valid_mask):
-                                r_valid = r_traj[valid_mask]
-                                t_valid = t_traj[valid_mask]
-                                r_out = np.interp(time_out_sec, t_valid, r_valid,
-                                                 left=np.nan, right=np.nan)
-                                streak_particles_r_out[:, istreak, irot] = r_out
-        
+                        group = groups.get(f'streak_{istreak}_rot_{irot}')
+                        if group is None:
+                            continue
+                        r_out, _ = _sample_trajectory(group, time_out_sec)
+                        if r_out is not None:
+                            streak_particles_r_out[:, istreak, irot] = r_out
+
         # Return tuple consistent with builtin solver format
         final_v = v_out_kms[-1].copy()
         final_cme_r = cme_particles_r_out[:, -1, :].copy()
@@ -1923,11 +1987,7 @@ class SURF:
         
         # Update model_params with current alpha and gamma values
         # (in case user changed them after initialization)
-        self.model_params = np.array([self.dtdr.value, self.alpha, self.r_accel.value,
-                                      self.dt_scale.value, self.nt_out, self.nr, self.nlon,
-                                      self.r[0].to('km').value,
-                                      self.rotation_period.to(u.s).value, self.gamma,
-                                      int(self.pui)])
+        self.model_params = self._model_params()
 
         # ======================================================================
         # Generate ambient solar wind time series
@@ -1940,74 +2000,7 @@ class SURF:
         # ======================================================================
         # Process CME list
         # ======================================================================
-        # Make a copy of the CME list objects so that the originals are not modified
-        input_cme_list = copy.deepcopy(cme_list)
-
-        # Quality control the CME list. Check:
-        # Only ConeCMEs in list
-        # Make sidereal correction if necessary
-        # Check launch time is not in spin up period before simulation time.
-        cme_list_checked = []
-        for cme in input_cme_list:
-
-            if isinstance(cme, ConeCME):
-
-                if self.frame == 'sidereal':
-                    # if the solution is in the sideral frame, adjust CME longitudes
-                    earthpos = self.get_observer('EARTH')
-                    # time and longitude from start of run
-                    dt_t0 = (earthpos.time - self.time_init).to(u.s)
-                    dlon_t0 = earthpos.lon_hae - earthpos.lon_hae[0]
-                    # find the CME hae longitude relative to the run start
-                    cme_hae = np.interp(cme.t_launch.to(u.s).value,
-                                        dt_t0.value, dlon_t0)
-                    # adjust the CME HEEQ longitude accordingly
-                    cme.longitude_surf = zerototwopi(cme.longitude + cme_hae)
-                else:
-                    cme.longitude_surf = cme.longitude
-
-                if cme.t_launch >= 0*u.s:
-                    # add the CME to the list
-                    cme_list_checked.append(cme)
-                else:
-                    print(f"Warning: ConeCME had negative t_launch ({cme.t_launch}), "
-                          f"which is not allowed.")
-                    print(f"Warning: This ConeCME object was not passed into the SURF solver")
-            else:
-                print("Warning: cme_list contained objects other than ConeCME instances."
-                      " These were excluded")
-
-        self.cmes = cme_list_checked
-
-        # If CMEs parsed, get an array of their parameters for using with the solver
-        if len(self.cmes) > 0:
-            cme_params = [cme.parameter_array(self) for cme in self.cmes]
-            cme_params = np.array(cme_params)
-            # Sort the CMEs in launch order.
-            id_sort = np.argsort(cme_params[:, 0])
-            cme_params = cme_params[id_sort]
-            # Also sort the list of ConeCMEs so that it corresponds ot cme_params
-            self.cmes = [self.cmes[i] for i in id_sort]
-        else:
-            # create dummy cme
-            dummy_cme = ConeCME()
-            cme_params = np.nan * np.zeros((1, len(dummy_cme.parameter_array(self))))
-
-        # sanity check the CME initial height is the same as the model inner boundary
-        if len(self.cmes) > 0:
-            for cme in self.cmes:
-                assert self.r[0] == cme.initial_height
-
-        # check CME speeds aren't so fast they will butt up agains the CFL condition.
-        if len(self.cmes) > 0:
-            v_max = self.v_max
-            for cme in self.cmes:
-                if cme.v >= v_max:
-                    raise ValueError(f'CME speed {cme.v} is larger than allowed for CFL limit'
-                                     f' of {v_max}')
-                elif cme.v >= 0.8 * v_max:
-                    print(f'Warning: CME speed of {cme.v} is close to CFL limit of {v_max}. '
-                          f'Simulation may be unstable')
+        self.cmes, cme_params = self._prepare_cmes(cme_list)
 
         # ======================================================================
         # Add CMEs
@@ -2031,43 +2024,8 @@ class SURF:
         else:
             # CME input has not been specified, but ConeCME's may have been input
             # So configure input_iscme_ts from the ConeCMES.
-            self.input_iscme_ts = 0 * np.ones((self.model_time.size,
-                                               self.nlon), dtype='int')
-
             n_cme = len(self.cmes)
-            if n_cme > 0:
-                # Loop through model longitudes and add the CMEs
-                for i in range(self.lon.size):
-                    if self.lon.size == 1:
-                        lon_out = self.lon.value
-                    else:
-                        lon_out = self.lon[i].value
-
-                    # Add the CMEs to the input series
-                    if self.compressible:
-                        v, isincme, rho, temp = add_cmes_to_input_series(
-                           
-                            self.input_v_ts[:, i].value,
-                            self.model_time, lon_out,
-                            self.r[0].to('km').value, cme_params,
-                            self.latitude.value,
-                            rhoinput=self.input_rho_ts[:, i].value,
-                            tempinput=self.input_temp_ts[:, i].value,
-                            compressible=True)
-                        self.input_v_ts[:, i] = v * (u.km / u.s)
-                        self.input_rho_ts[:, i] = rho * (u.kg / u.m ** 3)
-                        self.input_temp_ts[:, i] = temp * u.K
-                    else:
-                        v, isincme, rho, temp = add_cmes_to_input_series(
-                            self.input_v_ts[:, i].value,
-                            self.model_time, lon_out,
-                            self.r[0].to('km').value, cme_params,
-                            self.latitude.value,
-                            rhoinput=None,
-                            tempinput=None,
-                            compressible=False)
-                        self.input_v_ts[:, i] = v * (u.km / u.s)
-                    self.input_iscme_ts[:, i] = isincme
+            self._add_cmes_to_inputs(cme_params)
 
         # Boundary CMEs still affect the solution when tracking is disabled,
         # but no tracer storage or tracer integration is then required.
@@ -2231,65 +2189,38 @@ class SURF:
         if self.parallel:
             # Parallel execution using joblib
             results = Parallel(n_jobs=-1, backend='threading')(
-                delayed(self.process_longitude)(i, n_cme_tracers, n_hcs_max, streak_times) 
+                delayed(self.process_longitude)(i, n_cme_tracers, n_hcs_max, streak_times)
                 for i in range(self.lon.size)
             )
-            
-            # Unpack results into grids
-            for (i, v, cme_r_bounds, cme_v_bounds, hcs_r, streak_r,
-                 rho_out, temp_out, final_v, final_cme_r,
-                 final_cme_v, final_hcs_r, final_hcs_count,
-                 final_streak_r) in results:
-                self.v_grid[:, :, i] = v * self.kms
-                self.cme_particles_r[:, :, :, i] = cme_r_bounds * u.dimensionless_unscaled
-                self.cme_particles_v[:, :, :, i] = cme_v_bounds * u.dimensionless_unscaled
-                if self.track_b:
-                    self.hcs_particles_r[:, :, :, i] = hcs_r * u.dimensionless_unscaled
-                if self.track_streak:
-                    self.streak_particles_r[:, :, :, i] = streak_r * u.dimensionless_unscaled
-                
-                # Save density and temperature output for compressible solver
-                if self.compressible:
-                    self.rho_grid[:, :, i] = rho_out * (u.kg / u.m ** 3)
-                    self.temp_grid[:, :, i] = temp_out * u.K
-                self._final_v_state[i] = final_v
-                self._final_cme_r_state[i] = final_cme_r
-                self._final_cme_v_state[i] = final_cme_v
-                if self.track_b and final_hcs_r is not None:
-                    self._final_hcs_r_state[i] = final_hcs_r
-                    self._final_hcs_count_state[i] = final_hcs_count
-                if self.track_streak and final_streak_r is not None:
-                    self._final_streak_r_state[i] = final_streak_r
         else:
-            # Serial execution (original loop)
-            for i in range(self.lon.size):
-                (i, v, cme_r_bounds, cme_v_bounds, hcs_r, streak_r,
-                 rho_out, temp_out, final_v, final_cme_r, final_cme_v,
-                 final_hcs_r, final_hcs_count, final_streak_r) = (
-                    self.process_longitude(i, n_cme_tracers, n_hcs_max, streak_times))
-                
-                # Save the output at each longitude
-                self.v_grid[:, :, i] = v * self.kms
-                self.cme_particles_r[:, :, :, i] = cme_r_bounds * u.dimensionless_unscaled
-                self.cme_particles_v[:, :, :, i] = cme_v_bounds * u.dimensionless_unscaled
-                if self.track_b:
-                    self.hcs_particles_r[:, :, :, i] = hcs_r * u.dimensionless_unscaled
-                if self.track_streak:
-                    self.streak_particles_r[:, :, :, i] = streak_r * u.dimensionless_unscaled
-                
-                # Save density and temperature output for compressible solver
-                if self.compressible:
-                    self.rho_grid[:, :, i] = rho_out * (u.kg / u.m ** 3)
-                    self.temp_grid[:, :, i] = temp_out * u.K
-                self._final_v_state[i] = final_v
-                self._final_cme_r_state[i] = final_cme_r
-                self._final_cme_v_state[i] = final_cme_v
-                if self.track_b and final_hcs_r is not None:
-                    self._final_hcs_r_state[i] = final_hcs_r
-                    self._final_hcs_count_state[i] = final_hcs_count
-                if self.track_streak and final_streak_r is not None:
-                    self._final_streak_r_state[i] = final_streak_r
+            results = (self.process_longitude(i, n_cme_tracers, n_hcs_max, streak_times)
+                       for i in range(self.lon.size))
 
+        # Save the output at each longitude
+        for (i, v, cme_r_bounds, cme_v_bounds, hcs_r, streak_r,
+             rho_out, temp_out, final_v, final_cme_r,
+             final_cme_v, final_hcs_r, final_hcs_count,
+             final_streak_r) in results:
+            self.v_grid[:, :, i] = v * self.kms
+            self.cme_particles_r[:, :, :, i] = cme_r_bounds * u.dimensionless_unscaled
+            self.cme_particles_v[:, :, :, i] = cme_v_bounds * u.dimensionless_unscaled
+            if self.track_b:
+                self.hcs_particles_r[:, :, :, i] = hcs_r * u.dimensionless_unscaled
+            if self.track_streak:
+                self.streak_particles_r[:, :, :, i] = streak_r * u.dimensionless_unscaled
+            
+            # Save density and temperature output for compressible solver
+            if self.compressible:
+                self.rho_grid[:, :, i] = rho_out * (u.kg / u.m ** 3)
+                self.temp_grid[:, :, i] = temp_out * u.K
+            self._final_v_state[i] = final_v
+            self._final_cme_r_state[i] = final_cme_r
+            self._final_cme_v_state[i] = final_cme_v
+            if self.track_b and final_hcs_r is not None:
+                self._final_hcs_r_state[i] = final_hcs_r
+                self._final_hcs_count_state[i] = final_hcs_count
+            if self.track_streak and final_streak_r is not None:
+                self._final_streak_r_state[i] = final_streak_r
         # Update CMEs positions by tracking through the solution.
         if (self.track_cmes
                 and not getattr(self, '_defer_cme_coordinate_tracking', False)):
@@ -2753,42 +2684,9 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
 
     full_cmes = None
     if cme_list and not model.input_iscme_ts_flag:
-        checked_cmes = [copy.deepcopy(cme) for cme in cme_list
-                        if isinstance(cme, ConeCME) and cme.t_launch >= 0*u.s]
-        for cme in checked_cmes:
-            if model.frame == 'sidereal':
-                earthpos = model.get_observer('EARTH')
-                dt_t0 = (earthpos.time - model.time_init).to(u.s)
-                dlon_t0 = earthpos.lon_hae - earthpos.lon_hae[0]
-                cme_hae = np.interp(
-                    cme.t_launch.to(u.s).value, dt_t0.value, dlon_t0)
-                cme.longitude_surf = zerototwopi(cme.longitude + cme_hae)
-            else:
-                cme.longitude_surf = cme.longitude
-        cme_params = np.array([cme.parameter_array(model) for cme in checked_cmes])
-        order = np.argsort(cme_params[:, 0])
-        cme_params = cme_params[order]
-        full_cmes = [checked_cmes[i] for i in order]
+        full_cmes, cme_params = model._prepare_cmes(cme_list)
         model._chunk_n_cme = len(full_cmes)
-        model.input_iscme_ts = np.zeros(
-            (model.model_time.size, model.nlon), dtype='int')
-        for i in range(model.lon.size):
-            lon_out = model.lon.value if model.lon.size == 1 else model.lon[i].value
-            if model.compressible:
-                v, isincme, rho, temp = add_cmes_to_input_series(
-                    model.input_v_ts[:, i].value, model.model_time, lon_out,
-                    model.r[0].to('km').value, cme_params, model.latitude.value,
-                    rhoinput=model.input_rho_ts[:, i].value,
-                    tempinput=model.input_temp_ts[:, i].value, compressible=True)
-                model.input_rho_ts[:, i] = rho * (u.kg/u.m**3)
-                model.input_temp_ts[:, i] = temp * u.K
-            else:
-                v, isincme, _, _ = add_cmes_to_input_series(
-                    model.input_v_ts[:, i].value, model.model_time, lon_out,
-                    model.r[0].to('km').value, cme_params, model.latitude.value,
-                    rhoinput=None, tempinput=None, compressible=False)
-            model.input_v_ts[:, i] = v * model.kms
-            model.input_iscme_ts[:, i] = isincme
+        model._add_cmes_to_inputs(cme_params)
         model.input_iscme_ts_flag = True
 
     full_input_iscme_ts_flag = model.input_iscme_ts_flag

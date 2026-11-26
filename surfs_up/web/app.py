@@ -32,7 +32,6 @@ from surfs_up.core import (
     format_datetime_axis_like_surf,
     full_run_name,
     plot_custom_timeseries,
-    plot_radial as plot_radial_profile,
     run_generated_code,
     sample_custom_timeseries,
     style_timeseries_legends,
@@ -1669,7 +1668,7 @@ def create_app(config: dict | None = None) -> Flask:
                     with _horizons_plot_observers(model, sa, options["bodies"]):
                         sa.plot_compressible(model, plot_time, **options)
             elif kind == "radial":
-                _figure, radial_axes = plot_radial_profile(
+                sa.plot_radial(
                     model,
                     float(request.args.get("radial_time", 1.5)) * u.day,
                     lon=float(request.args.get("radial_lon", 0)) * u.deg,
