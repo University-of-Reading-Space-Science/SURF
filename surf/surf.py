@@ -1050,7 +1050,9 @@ class SURF:
         # - We iterate over longitude (last dimension)
         # - For each longitude, we fill the entire (time, radius) slice
         # - Fortran order makes these slices contiguous in memory
-        self.v_grid = np.zeros((self.nt_out, self.nr, self.nlon), order='F') * self.kms
+        # The grids are left in Fortran order after solve(), as converting them would copy each
+        # one. Indexing is unaffected; only the memory layout differs.
+        self.v_grid = self._zeros_grid(self.kms)
         if self.track_b:
             self.b_grid = np.zeros((self.nt_out, self.nr, self.nlon), order='F')
 
@@ -1071,10 +1073,8 @@ class SURF:
         # Initialize density and temperature grids for compressible solver
         if self.compressible:
             # Use Fortran order for cache-efficient memory access during solve
-            self.rho_grid = np.zeros((self.nt_out, self.nr, self.nlon),
-                                     order='F') * (u.kg / u.m ** 3)
-            self.temp_grid = np.zeros((self.nt_out, self.nr, self.nlon),
-                                      order='F') * u.K
+            self.rho_grid = self._zeros_grid(u.kg / u.m ** 3)
+            self.temp_grid = self._zeros_grid(u.K)
             # Note: Grids are initialized to zero here and will be populated during solve()
 
             # Compute typical solar wind values at the inner boundary for use in 
@@ -1303,12 +1303,22 @@ class SURF:
                 f"domain, but the spin-up is {self.buffertime.to_value(u.day):.1f} days. The "
                 "start of the run may still reflect the initial conditions.", stacklevel=3)
 
+    def _zeros_grid(self, unit):
+        """
+        Return a zeroed (time, radius, longitude) output grid with the given unit.
+        The grid is in Fortran order, so that the slice for each longitude is contiguous while
+        the solution is filled in. The unit is attached with << so that the array isn't copied.
+        Args:
+            unit: The astropy unit of the grid.
+        Returns:
+            The grid, as a Quantity.
+        """
+        return np.zeros((self.nt_out, self.nr, self.nlon), order='F') << unit
+
     def _allocate_mhd_grids(self):
         """Physical vector components, separate from the passive b_grid polarity."""
         for key in ('br', 'bt', 'bn'):
-            unit = u.T
-            setattr(self, key + '_grid', np.zeros(
-                (self.nt_out, self.nr, self.nlon), order='F') * unit)
+            setattr(self, key + '_grid', self._zeros_grid(u.T))
 
     def _set_time_grid(self, simtime=None, buffertime=None):
         """
@@ -2244,13 +2254,6 @@ class SURF:
                                          self.time_out.value,
                                          self.r.to(u.km).value, lons)
 
-        # Convert grids back to C order (row-major) for compatibility with rest of codebase
-        # This ensures all downstream analysis and plotting code works as expected
-        self.v_grid = np.ascontiguousarray(self.v_grid.value) * self.kms
-        if self.compressible:
-            self.rho_grid = np.ascontiguousarray(self.rho_grid.value) * (u.kg / u.m ** 3)
-            self.temp_grid = np.ascontiguousarray(self.temp_grid.value) * u.K
-
         if save:
             if tag == '':
                 print("Warning, blank tag means file likely to be overwritten")
@@ -2801,13 +2804,10 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
             model.time_out = chunk_time_out_abs - chunk_start
 
         # Reallocate output grids for this chunk
-        model.v_grid = np.zeros((model.nt_out, model.nr, model.nlon),
-                                order='F') * model.kms
+        model.v_grid = model._zeros_grid(model.kms)
         if model.compressible:
-            model.rho_grid = np.zeros((model.nt_out, model.nr, model.nlon),
-                                      order='F') * (u.kg / u.m ** 3)
-            model.temp_grid = np.zeros((model.nt_out, model.nr, model.nlon),
-                                       order='F') * u.K
+            model.rho_grid = model._zeros_grid(u.kg / u.m ** 3)
+            model.temp_grid = model._zeros_grid(u.K)
 
         chunk_model_time = model.model_time
         if state is not None and not model.compressible:
@@ -2885,15 +2885,16 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
             else:
                 del model._defer_cme_coordinate_tracking
 
-        # Collect output — offset time_out by elapsed time
+        # Collect output — offset time_out by elapsed time. The grids are reallocated for each
+        # chunk, so they don't need copying.
         if model.nt_out > 0:
-            v_chunks.append(model.v_grid.value.copy())
+            v_chunks.append(model.v_grid.value)
             for key in mhd_chunks:
-                mhd_chunks[key].append(getattr(model, key + '_grid').value.copy())
+                mhd_chunks[key].append(getattr(model, key + '_grid').value)
             time_out_chunks.append((model.time_out + chunk_start).copy())
             if model.compressible:
-                rho_chunks.append(model.rho_grid.value.copy())
-                temp_chunks.append(model.temp_grid.value.copy())
+                rho_chunks.append(model.rho_grid.value)
+                temp_chunks.append(model.temp_grid.value)
             if model.track_b and hasattr(model, 'b_grid'):
                 b_chunks.append(model.b_grid.copy())
             cme_r_chunks.append(model.cme_particles_r.value.copy())
@@ -2914,17 +2915,17 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
 
     # --- Concatenate all chunks ---
     model.simtime = full_simtime
-    model.v_grid = np.concatenate(v_chunks, axis=0) * model.kms
+    model.v_grid = np.concatenate(v_chunks, axis=0) << model.kms
     model.time_out = np.concatenate([t.value for t in time_out_chunks]) * model.dt.unit
     model.nt_out = model.v_grid.shape[0]
     for key, chunks in mhd_chunks.items():
         unit = u.T if key.startswith('b') else model.kms
-        setattr(model, key + '_grid', np.concatenate(chunks, axis=0) * unit)
+        setattr(model, key + '_grid', np.concatenate(chunks, axis=0) << unit)
     if model.mhd:
         model._mhd_time_offset = 0.0
     if model.compressible:
-        model.rho_grid = np.concatenate(rho_chunks, axis=0) * (u.kg / u.m ** 3)
-        model.temp_grid = np.concatenate(temp_chunks, axis=0) * u.K
+        model.rho_grid = np.concatenate(rho_chunks, axis=0) << (u.kg / u.m ** 3)
+        model.temp_grid = np.concatenate(temp_chunks, axis=0) << u.K
     if b_chunks:
         model.b_grid = np.concatenate(b_chunks, axis=0)
     if hcs_chunks:
