@@ -3,6 +3,7 @@ import os
 
 import copy
 import errno
+import functools
 import warnings
 from appdirs import user_data_dir
 from astropy.constants import m_p
@@ -856,11 +857,6 @@ class SURF:
         self.alpha = constants['alpha']  # Scale parameter for SW accel. (incompressible)
         self.r_accel = constants['r_accel']  # Spatial scale param for SW accel. (incompressible)
         self.gamma = gamma  # Adiabatic index for compressible solver
-        # Use a per-instance cache namespace so changes in constants are picked up
-        # when a new SURF instance is created, while still reusing lookups within
-        # the same instance.
-        self._density_temp_cache_id = f"surf-{id(self)}"
-        clear_density_temperature_cache(cache_id=self._density_temp_cache_id)
         self.__version__ = get_version()
         
         # Validate and store solver choice
@@ -977,10 +973,7 @@ class SURF:
                 # OMNI data mapped via Parker nozzle solution
                 v_kms = self.v_boundary.to((u.km / u.s)).value
                 r_inner = r_min.to(u.solRad).value
-                n_sw, _ = get_density_temperature_from_velocity(
-                    v_kms, r_inner, gamma=self.gamma,
-                    cache_id=self._density_temp_cache_id
-                )
+                n_sw, _ = get_density_temperature_from_velocity(v_kms, r_inner, gamma=self.gamma)
                 
                 # Convert density from cm^-3 to kg/m^3
                 # n [cm^-3] * m_p [kg] * 1e6 [cm^3/m^3] = rho [kg/m^3]
@@ -1002,8 +995,7 @@ class SURF:
                 v_kms = self.v_boundary.to((u.km / u.s)).value
                 r_inner = self.r[0].to(u.solRad).value
                 _, temp_from_velocity = get_density_temperature_from_velocity(
-                    v_kms, r_inner, gamma=self.gamma,
-                    cache_id=self._density_temp_cache_id)
+                    v_kms, r_inner, gamma=self.gamma)
                 self.temp_boundary = temp_from_velocity * u.K
                 self.temp_boundary_lons = self.v_boundary_lons
             elif not np.all(np.isnan(temp_boundary)):
@@ -1156,9 +1148,7 @@ class SURF:
                 v_kms = self.input_v_ts.to((u.km / u.s)).value
                 r_inner = self.r[0].to(u.solRad).value
                 _, temp_from_velocity = get_density_temperature_from_velocity(
-                    v_kms, r_inner, gamma=self.gamma,
-                    cache_id=self._density_temp_cache_id
-                )
+                    v_kms, r_inner, gamma=self.gamma)
                 self.input_temp_ts = temp_from_velocity * u.K
                 self.input_temp_ts_flag = True
 
@@ -1849,9 +1839,7 @@ class SURF:
                 v_kms = self.v_boundary.to((u.km / u.s)).value
                 r_inner = self.r[0].to(u.solRad).value
                 _, temp_from_velocity = get_density_temperature_from_velocity(
-                    v_kms, r_inner, gamma=self.gamma,
-                    cache_id=self._density_temp_cache_id
-                )
+                    v_kms, r_inner, gamma=self.gamma)
                 self.temp_boundary = temp_from_velocity * u.K
     
     def get_final_state(self):
@@ -2053,11 +2041,8 @@ class SURF:
             # convert Br to polarity
             self.input_b_ts = np.sign(self.input_b_ts)
 
-            # find the number of HCS crossings at long
-            n_hcs = np.zeros(self.lon.size)
-            for i in range(self.lon.size):
-                db = self.input_b_ts[:-1, i] - self.input_b_ts[1:, i]
-                n_hcs[i] = (abs(db) > 0.01).sum()
+            # find the number of HCS crossings at each longitude
+            n_hcs = (abs(np.diff(self.input_b_ts, axis=0)) > 0.01).sum(axis=0)
 
             # create variables to store the HCS positions
             n_hcs_max = int(max(n_hcs)) + 1
@@ -2089,86 +2074,73 @@ class SURF:
                 int(np.ceil((full_streak_duration + self.buffertime)
                             / self.rotation_period) + 1))
             streak_times = np.ones((self.nlon, len(streak_carr), nrot, 2)) * np.nan
+            # Injection times (in s) set by solve_chunked for the full run
             full_injection_times = getattr(
                 self, '_streak_injection_times', None)
+            # Work in plain seconds and radians; unit arithmetic inside these loops is slow.
+            model_time_s = absolute_model_time.to_value(u.s)
+            period = self.rotation_period.to_value(u.s)
+            dt = self.dt.to_value(u.s)
+            dlon = self.dlon.to_value(u.rad)
+            buffer_s = streak_buffertime.to_value(u.s)
+            lon_values = np.atleast_1d(self.lon.to_value(u.rad))
+
             # work out the source longitude at start of spin up
             for istreak, carr in enumerate(streak_carr):
 
                 # convert from Carrington longitude to model lon at t=0
-                lon_src = zerototwopi(carr - self.cr_lon_init)
+                lon_src = zerototwopi(carr - self.cr_lon_init).to_value(u.rad)
 
                 # Use the full-run spin-up origin and absolute run clock.
                 # This preserves the ordinary solve() rotation numbering.
-                dl_spinup = (2 * np.pi * streak_buffertime.to(u.s)
-                             / self.rotation_period)
-                lon_0 = zerototwopi(
-                    lon_src.to(u.rad).value - dl_spinup)
-                time_from_start = absolute_model_time + streak_buffertime
-                streak_lon_t = (
-                    lon_0
-                    + time_from_start * 2 * np.pi / self.rotation_period
-                ) * u.rad
+                dl_spinup = 2 * np.pi * buffer_s / period
+                lon_0 = zerototwopi(lon_src - dl_spinup)
+                time_from_start = model_time_s + buffer_s
+                streak_lon_t = lon_0 + time_from_start * 2 * np.pi / period
 
                 # save the streakline footpoint longitude on the model time step
                 # Interpolate on the (non-periodic) time axis, then wrap the
                 # angular result. Passing ``period=2*pi`` to np.interp wraps
                 # the x coordinates, which are seconds, and corrupts chunked
                 # streakline footpoints.
-                streak_lon_unwrapped = np.unwrap(streak_lon_t.to_value(u.rad))
+                streak_lon_unwrapped = np.unwrap(streak_lon_t)
                 self.streak_lon_r0[:, istreak] = zerototwopi(np.interp(
                     self.time_out.to_value(self.model_time.unit),
                     self.model_time.to_value(self.model_time.unit),
                     streak_lon_unwrapped))
 
-                # Handle both scalar and array longitude cases
-                lon_array = [self.lon] if self.lon.size == 1 else self.lon
-                for ilon, lon in enumerate(lon_array):
+                for ilon, lon in enumerate(lon_values):
                     for irot in range(0, nrot):
                         if full_injection_times is not None:
-                            injection_time_value = full_injection_times[
-                                ilon, istreak, irot]
-                            if np.isnan(injection_time_value):
+                            injection_time = full_injection_times[ilon, istreak, irot]
+                            if np.isnan(injection_time):
                                 continue
-                            injection_time = (
-                                injection_time_value * self.dt.unit)
-                            id_in = np.argmin(
-                                abs(absolute_model_time - injection_time))
+                            id_in = np.argmin(abs(model_time_s - injection_time))
                             if (id_in > 0
-                                    and id_in < len(absolute_model_time) - 1
-                                    and abs(absolute_model_time[id_in]
-                                            - injection_time) <= self.dt / 2):
+                                    and id_in < len(model_time_s) - 1
+                                    and abs(model_time_s[id_in] - injection_time) <= dt / 2):
                                 streak_times[
                                     ilon, istreak, irot, 0] = id_in
                             continue
 
-                        target_in = (
-                            lon - self.dlon / 2
-                            + 2 * np.pi * irot * u.rad)
+                        target_in = lon - dlon / 2 + 2 * np.pi * irot
                         # Quantise the crossing on the full run's model-time
                         # grid, then locate that absolute instant in this
                         # chunk.  A truncated chunk endpoint must not change
                         # which model step owns the injection.
-                        crossing_time = (
-                            (target_in.to(u.rad).value - lon_0)
-                            * self.rotation_period / (2 * np.pi)
-                            - streak_buffertime)
-                        full_step = np.rint(
-                            ((crossing_time + streak_buffertime) / self.dt)
-                            .decompose().value)
-                        injection_time = (
-                            -streak_buffertime + full_step * self.dt)
-                        id_in = np.argmin(
-                            abs(absolute_model_time - injection_time))
+                        crossing_time = (target_in - lon_0) * period / (2 * np.pi) - buffer_s
+                        full_step = np.rint((crossing_time + buffer_s) / dt)
+                        injection_time = -buffer_s + full_step * dt
+                        id_in = np.argmin(abs(model_time_s - injection_time))
                         id_out = np.argmin(abs(streak_lon_t -
-                                               (lon + self.dlon / 2 + 2 * np.pi * irot * u.rad)))
+                                               (lon + dlon / 2 + 2 * np.pi * irot)))
 
                         # argmin selects an endpoint when this full-run step
                         # lies outside the current chunk; reject that alias.
                         is_local_crossing = (
-                            abs(absolute_model_time[id_in] - injection_time)
-                            <= self.dt / 2)
+                            abs(model_time_s[id_in] - injection_time) <= dt / 2)
                         if (id_in > 0
-                                and id_in < len(absolute_model_time) - 1
+                                and id_in < len(model_time_s) - 1
                                 and is_local_crossing):
                             streak_times[ilon, istreak, irot, 0] = id_in
                             streak_times[ilon, istreak, irot, 1] = id_out
@@ -2306,7 +2278,6 @@ class SURF:
                     else:
                         cmegrp.create_dataset(k, data='None')
 
-
                 if k not in ["coords", "frame", "label"]:
                     # check if the CME property has a value (new BOOLs do not)
                     if hasattr(v, 'value'):
@@ -2316,7 +2287,6 @@ class SURF:
                         dset = cmegrp.create_dataset(k, data=v)
                         dset.attrs['unit'] = 'None'
 
-                out_file.flush()
                 # Now handle the dictionary of CME boundary coordinates coords > time_out > position
                 if k == "coords":
                     coordgrp = cmegrp.create_group(k)
@@ -2329,8 +2299,6 @@ class SURF:
                             else:
                                 dset = timegrp.create_dataset(pos_label, data=pos_data.value)
                                 dset.attrs['unit'] = pos_data.unit.to_string()
-
-                            out_file.flush()
 
         # Loop over the attributes of model instance and save select keys/attributes.
         keys = ['cr_num', 'cr_lon_init', 'simtime', 'dt', 'v_max', 'nlon_full',
@@ -2384,8 +2352,6 @@ class SURF:
                     dset.dims[1].label = 'radius'
                     dset.dims[2].label = 'longitude'
 
-                out_file.flush()
-
             # Only save the magnetic field arrays if they exist.
             if self.track_b:
                 if k in mag_keys:
@@ -2400,8 +2366,6 @@ class SURF:
                         dset.dims[0].label = 'time'
                         dset.dims[1].label = 'radius'
                         dset.dims[2].label = 'longitude'
-
-                    out_file.flush()
 
             # Only save the compressible solver arrays if compressible is True
             if self.compressible:
@@ -2419,8 +2383,6 @@ class SURF:
                         dset.dims[1].label = 'radius'
                         dset.dims[2].label = 'longitude'
 
-                    out_file.flush()
-
         out_file.close()
         return out_filepath
 
@@ -2435,9 +2397,15 @@ class SURF:
         Returns:
             obs: An Observer instance for body at times from SURF.time_init + SURF.time_out
         """
-        times = self.time_init + self.time_out
-        obs = Observer(body, times)
-        return obs
+        # Ephemeris lookups are slow, and plots and animations ask for the same bodies
+        # repeatedly, so keep each one for as long as the model times are unchanged.
+        key = (str(body).upper(), float(self.time_init.jd1), float(self.time_init.jd2),
+               self.time_out.to_value(u.s).tobytes())
+        cache = self.__dict__.setdefault('_observer_cache', {})
+        if key not in cache:
+            cache[key] = Observer(body, self.time_init + self.time_out)
+        # A shallow copy, so that reassigning an attribute does not change the cached copy
+        return copy.copy(cache[key])
 
 
 
@@ -2732,29 +2700,24 @@ def solve_chunked(model, cme_list, chunk_simtime, streak_carr=np.array([]) * u.r
         # independently round a crossing to a local endpoint.
         n_streak = len(streak_carr)
         n_rot = model._streak_nrot
+        # Injection times, in s, as plain floats; unit arithmetic in these loops is slow.
         injection_times = np.full(
             (model.nlon, n_streak, n_rot), np.nan)
-        time_from_start = full_model_time - full_model_time[0]
-        lon_array = [model.lon] if model.lon.size == 1 else model.lon
+        full_model_time_s = full_model_time.to_value(u.s)
+        time_from_start = full_model_time_s - full_model_time_s[0]
+        period = model.rotation_period.to_value(u.s)
+        dlon = model.dlon.to_value(u.rad)
+        dl_spinup = 2 * np.pi * full_buffertime.to_value(u.s) / period
         for istreak, carr in enumerate(streak_carr):
-            lon_src = zerototwopi(carr - model.cr_lon_init)
-            dl_spinup = (2 * np.pi * full_buffertime.to(u.s)
-                         / model.rotation_period)
-            lon_0 = zerototwopi(
-                lon_src.to(u.rad).value - dl_spinup)
-            streak_lon_full = (
-                lon_0
-                + time_from_start * 2 * np.pi / model.rotation_period
-            ) * u.rad
-            for ilon, lon in enumerate(lon_array):
+            lon_src = zerototwopi(carr - model.cr_lon_init).to_value(u.rad)
+            lon_0 = zerototwopi(lon_src - dl_spinup)
+            streak_lon_full = lon_0 + time_from_start * 2 * np.pi / period
+            for ilon, lon in enumerate(np.atleast_1d(model.lon.to_value(u.rad))):
                 for irot in range(n_rot):
-                    target = (
-                        lon - model.dlon / 2
-                        + 2 * np.pi * irot * u.rad)
+                    target = lon - dlon / 2 + 2 * np.pi * irot
                     id_in = np.argmin(abs(streak_lon_full - target))
                     if 0 < id_in < len(full_model_time) - 1:
-                        injection_times[ilon, istreak, irot] = (
-                            full_model_time[id_in].to(model.dt.unit).value)
+                        injection_times[ilon, istreak, irot] = full_model_time_s[id_in]
         model._streak_injection_times = injection_times
     if model.track_b and full_input_b_ts is not None:
         full_b_polarity = np.sign(full_input_b_ts)
@@ -3035,16 +2998,10 @@ def clear_density_temperature_cache(cache_id=None):
     if not hasattr(get_density_temperature_from_velocity, '_cache'):
         return
 
-    # Lazily initialise _bounds_cache in case it was never set
-    if not hasattr(get_density_temperature_from_velocity, '_bounds_cache'):
-        get_density_temperature_from_velocity._bounds_cache = {}
-
     if cache_id is None:
         get_density_temperature_from_velocity._cache = {}
-        get_density_temperature_from_velocity._bounds_cache = {}
     else:
         get_density_temperature_from_velocity._cache.pop(cache_id, None)
-        get_density_temperature_from_velocity._bounds_cache.pop(cache_id, None)
 
 
 
@@ -3264,14 +3221,16 @@ def get_density_temperature_from_velocity(v_value, r_target, gamma=1.5, cache_id
     OMNI empirical relations from 1 AU via the Parker nozzle solution, then interpolates
     the given velocity to compute number density and temperature.
     
-    Uses caching to avoid recomputing the lookup table for the same r_target value.
+    Uses caching to avoid recomputing the lookup table for the same r_target and gamma, so
+    models that share an inner boundary (such as the latitudes of SURF3d) map it once. The
+    table depends only on the lookup file, r_target and gamma.
     
     Args:
         v_value: Solar wind velocity in km/s (scalar or array)
         r_target: Target heliocentric distance in solar radii (scalar)
         gamma: Adiabatic index (default 1.5 for solar wind)
-        cache_id: Cache namespace key. Use a unique value per SURF instance to
-                  recompute on new instances while still reusing within each one.
+        cache_id: Cache namespace key. Clear a namespace with
+                  clear_density_temperature_cache() to force the table to be recomputed.
     
     Returns:
         n: Number density in cm^-3 (scalar or array matching v_value)
@@ -4291,19 +4250,22 @@ def load_SURF_run(filepath):
     if not os.path.isfile(filepath):
         raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), filepath)
 
+    # Parse each unit string once; the CME coordinates repeat the same few units many times.
+    unit = functools.lru_cache(maxsize=None)(u.Unit)
+
     with h5py.File(filepath, 'r') as data:
 
         cr_num = np.int32(data['cr_num'])
-        cr_lon_init = data['cr_lon_init'][()] * u.Unit(data['cr_lon_init'].attrs['unit'])
-        simtime = data['simtime'][()] * u.Unit(data['simtime'].attrs['unit'])
+        cr_lon_init = data['cr_lon_init'][()] * unit(data['cr_lon_init'].attrs['unit'])
+        simtime = data['simtime'][()] * unit(data['simtime'].attrs['unit'])
         simtime = simtime.to(u.day)
         dt_scale = data['dt_scale'][()]
-        v_boundary = data['_v_boundary_init_'][()] * u.Unit(data['_v_boundary_init_'].attrs['unit'])
-        r = data['r'][()] * u.Unit(data['r'].attrs['unit'])
-        dr = data['dr'][()] * u.Unit(data['dr'].attrs['unit'])
-        v_max = data['v_max'][()] * u.Unit(data['v_max'].attrs['unit'])
-        lon = data['lon'][()] * u.Unit(data['lon'].attrs['unit'])
-        lat = data['latitude'][()] * u.Unit(data['latitude'].attrs['unit'])
+        v_boundary = data['_v_boundary_init_'][()] * unit(data['_v_boundary_init_'].attrs['unit'])
+        r = data['r'][()] * unit(data['r'].attrs['unit'])
+        dr = data['dr'][()] * unit(data['dr'].attrs['unit'])
+        v_max = data['v_max'][()] * unit(data['v_max'].attrs['unit'])
+        lon = data['lon'][()] * unit(data['lon'].attrs['unit'])
+        lat = data['latitude'][()] * unit(data['latitude'].attrs['unit'])
         nlon = lon.size
         if 'nlon_full' in data:
             nlon_full = int(data['nlon_full'][()])
@@ -4334,21 +4296,21 @@ def load_SURF_run(filepath):
         if track_b:
             b_boundary = data['_b_boundary_init_'][()]
             b_boundary_lons = (data['b_boundary_lons'][()] *
-                               u.Unit(data['b_boundary_lons'].attrs['unit']))
+                               unit(data['b_boundary_lons'].attrs['unit']))
 
         # Load compressible boundaries if they exist (for backward compatibility with older files)
         if compressible:
             if '_rho_boundary_init_' in data:
                 rho_boundary = data['_rho_boundary_init_'][()]
                 rho_boundary_lons = (data['rho_boundary_lons'][()] *
-                                     u.Unit(data['rho_boundary_lons'].attrs['unit']))
+                                     unit(data['rho_boundary_lons'].attrs['unit']))
             else:
                 rho_boundary = np.nan
                 
             if '_temp_boundary_init_' in data:
                 temp_boundary = data['_temp_boundary_init_'][()]
                 temp_boundary_lons = (data['temp_boundary_lons'][()] *
-                                      u.Unit(data['temp_boundary_lons'].attrs['unit']))
+                                      unit(data['temp_boundary_lons'].attrs['unit']))
             else:
                 temp_boundary = np.nan
 
@@ -4399,11 +4361,11 @@ def load_SURF_run(filepath):
         model.lon = lon
         model.nlon = nlon
 
-        model.v_grid = data['v_grid'][()] * u.Unit(data['v_boundary'].attrs['unit'])
+        model.v_grid = data['v_grid'][()] << unit(data['v_boundary'].attrs['unit'])
         if model.mhd:
             for key in ('br', 'bt', 'bn'):
                 dataset = data[key + '_grid']
-                setattr(model, key + '_grid', dataset[()] * u.Unit(dataset.attrs['unit']))
+                setattr(model, key + '_grid', dataset[()] << unit(dataset.attrs['unit']))
         model.cme_particles_r = data['cme_particles_r'][()]
         model.cme_particles_v = data['cme_particles_v'][()]
 
@@ -4411,7 +4373,7 @@ def load_SURF_run(filepath):
             model.b_boundary_lons = b_boundary_lons
             model.b_grid = data['b_grid'][()]
             model.hcs_particles_r = (data['hcs_particles_r'][()] *
-                                     u.Unit(data['hcs_particles_r'].attrs['unit']))
+                                     unit(data['hcs_particles_r'].attrs['unit']))
         
         if compressible:
             if '_rho_boundary_init_' in data:
@@ -4421,14 +4383,14 @@ def load_SURF_run(filepath):
             
             # Load rho_grid and temp_grid if they exist
             if 'rho_grid' in data:
-                model.rho_grid = data['rho_grid'][()] * u.Unit(data['rho_grid'].attrs['unit'])
+                model.rho_grid = data['rho_grid'][()] << unit(data['rho_grid'].attrs['unit'])
             if 'temp_grid' in data:
-                model.temp_grid = data['temp_grid'][()] * u.Unit(data['temp_grid'].attrs['unit'])
+                model.temp_grid = data['temp_grid'][()] << unit(data['temp_grid'].attrs['unit'])
         
         if track_streak:
             model.track_streak = track_streak
             model.streak_particles_r = (data['streak_particles_r'][()] *
-                                        u.Unit(data['streak_particles_r'].attrs['unit']))
+                                        unit(data['streak_particles_r'].attrs['unit']))
             model.streak_lon_r0 = data['streak_lon_r0'][()]
 
         # Create list of the ConeCMEs
@@ -4436,15 +4398,15 @@ def load_SURF_run(filepath):
         all_cmes = data['ConeCMEs']
         for k in all_cmes.keys():
             cme_data = all_cmes[k]
-            t_launch = cme_data['t_launch'][()] * u.Unit(cme_data['t_launch'].attrs['unit'])
-            lon = cme_data['longitude'][()] * u.Unit(cme_data['longitude'].attrs['unit'])
-            lat = cme_data['latitude'][()] * u.Unit(cme_data['latitude'].attrs['unit'])
-            width = cme_data['width'][()] * u.Unit(cme_data['width'].attrs['unit'])
-            thickness = cme_data['thickness'][()] * u.Unit(cme_data['thickness'].attrs['unit'])
+            t_launch = cme_data['t_launch'][()] * unit(cme_data['t_launch'].attrs['unit'])
+            lon = cme_data['longitude'][()] * unit(cme_data['longitude'].attrs['unit'])
+            lat = cme_data['latitude'][()] * unit(cme_data['latitude'].attrs['unit'])
+            width = cme_data['width'][()] * unit(cme_data['width'].attrs['unit'])
+            thickness = cme_data['thickness'][()] * unit(cme_data['thickness'].attrs['unit'])
             thickness = thickness.to('solRad')
             initial_height = (cme_data['initial_height'][()] *
-                              u.Unit(cme_data['initial_height'].attrs['unit']))
-            v = cme_data['v'][()] * u.Unit(cme_data['v'].attrs['unit'])
+                              unit(cme_data['initial_height'].attrs['unit']))
+            v = cme_data['v'][()] * unit(cme_data['v'].attrs['unit'])
             
             cme_kwargs = dict(t_launch=t_launch, longitude=lon, latitude=lat, v=v, width=width,
                               thickness=thickness, initial_height=initial_height)
@@ -4453,10 +4415,10 @@ def load_SURF_run(filepath):
                 cme_kwargs['cme_expansion'] = bool(cme_data['cme_expansion'][()])
                 cme_kwargs['cme_fixed_duration'] = bool(cme_data['cme_fixed_duration'][()])
                 cme_kwargs['fixed_duration'] = (cme_data['fixed_duration'][()] *
-                                                u.Unit(cme_data['fixed_duration'].attrs['unit']))
+                                                unit(cme_data['fixed_duration'].attrs['unit']))
             for key in ('cme_density', 'cme_temperature'):
                 if key in cme_data:
-                    cme_kwargs[key] = cme_data[key][()] * u.Unit(cme_data[key].attrs['unit'])
+                    cme_kwargs[key] = cme_data[key][()] * unit(cme_data[key].attrs['unit'])
             if 'profile_type' in cme_data:
                 cme_kwargs['profile_type'] = cme_data['profile_type'][()].decode("utf-8")
             cme = ConeCME(**cme_kwargs)
@@ -4480,19 +4442,24 @@ def load_SURF_run(filepath):
                                'v': np.array([]) * (u.km / u.s)}
                            for j in range(len(coords_group))}
 
-            for time_key, pos in coords_group.items():
+            # Parse all the coordinate times at once; one Time per entry is slow.
+            time_keys = list(coords_group.keys())
+            if time_keys:
+                times_out = Time([coords_group[key]['time'][()] for key in time_keys],
+                                 format="isot")
+                times_out.format = 'jd'
+            for i_key, time_key in enumerate(time_keys):
+                pos = coords_group[time_key]
                 t = int(time_key.split("_")[2])
-                time_out = Time(pos['time'][()], format="isot")
-                time_out.format = 'jd'
-                coords_data[t]['time'] = time_out
+                coords_data[t]['time'] = times_out[i_key]
                 coords_data[t]['model_time'] = (pos['model_time'][()] *
-                                                u.Unit(pos['model_time'].attrs['unit']))
-                coords_data[t]['lon'] = pos['lon'][()] * u.Unit(pos['lon'].attrs['unit'])
-                coords_data[t]['r'] = pos['r'][()] * u.Unit(pos['r'].attrs['unit'])
-                coords_data[t]['v'] = pos['v'][()] * u.Unit(pos['v'].attrs['unit'])
-                coords_data[t]['lat'] = pos['lat'][()] * u.Unit(pos['lat'].attrs['unit'])
+                                                unit(pos['model_time'].attrs['unit']))
+                coords_data[t]['lon'] = pos['lon'][()] * unit(pos['lon'].attrs['unit'])
+                coords_data[t]['r'] = pos['r'][()] * unit(pos['r'].attrs['unit'])
+                coords_data[t]['v'] = pos['v'][()] * unit(pos['v'].attrs['unit'])
+                coords_data[t]['lat'] = pos['lat'][()] * unit(pos['lat'].attrs['unit'])
                 coords_data[t]['front_id'] = (pos['front_id'][()] *
-                                              u.Unit(pos['front_id'].attrs['unit']))
+                                              unit(pos['front_id'].attrs['unit']))
 
             cme.coords = coords_data
             cme_list.append(cme)
@@ -4501,6 +4468,31 @@ def load_SURF_run(filepath):
         model.cmes = cme_list
 
     return model, cme_list
+
+
+@jit(nopython=True, cache=surf_constants()['numba_cache'])
+def _hcs_radial_index(r_hcs, r_grid, dr):
+    """
+    Return the radial grid index of an HCS crossing. This is the first minimum of
+    abs(r_hcs - r_grid + dr / 2), as np.argmin gives, found by searching from the cell
+    containing the crossing. The distance falls and then rises along the grid.
+    Args:
+        r_hcs: Radius of the HCS crossing, in km.
+        r_grid: Equally spaced radial grid, in km.
+        dr: Radial grid spacing, in km.
+    Returns:
+        The radial index.
+    """
+    nr = r_grid.size
+    k = int(min(max((r_hcs + dr / 2 - r_grid[0]) / dr, 0.0), nr - 1.0))
+    # step outwards to the end of the minimum, then back to its first point
+    while k < nr - 1 and (abs(r_hcs - r_grid[k + 1] + dr / 2)
+                          <= abs(r_hcs - r_grid[k] + dr / 2)):
+        k += 1
+    while k > 0 and (abs(r_hcs - r_grid[k - 1] + dr / 2)
+                     <= abs(r_hcs - r_grid[k] + dr / 2)):
+        k -= 1
+    return k
 
 
 @jit(nopython=True, cache=surf_constants()['numba_cache'])
@@ -4520,36 +4512,26 @@ def bgrid_from_hcs(hcs_particles_r, input_b_ts, model_time, time_out, r_grid, lo
     nt = len(time_out)
     nr = len(r_grid)
     nlon = len(lons)
+    n_hcs = hcs_particles_r.shape[0]
     dr = r_grid[1] - r_grid[0]
 
-    bgrid = np.ones((nt, nr, nlon)) * np.nan
-    for ilon in range(0, nlon):
+    bgrid = np.empty((nt, nr, nlon))
+    for t in range(0, nt):
+        # find the closest input time to the current snapshot time
+        id_t = np.argmin(np.abs(model_time - time_out[t]))
 
-        # find the closest input longitude to the current longitude
-        id_lon = ilon
-        for t in range(0, nt):
+        # make all the bgrid equal to the inner boundary polarity
+        for ir in range(nr):
+            bgrid[t, ir, :] = input_b_ts[id_t, :]
 
-            # find the closest input time to the current snapshot time
-            thistime = time_out[t]
-            id_t = np.argmin(np.abs(model_time - thistime))
-
-            # make all the bgrid at this longitude equal to the inner boundary polarity
-            bgrid[t, :, ilon] = input_b_ts[id_t, id_lon]
-
-            # step through each HCS inversion and flip everything beyond each one
-            hcs_crossings_r = hcs_particles_r[:, t, 0, ilon]
-            hcs_crossings_p = hcs_particles_r[:, t, 1, ilon]
-
-            # hcs crossings are ordered so the further is the first. flip them
-            hcs_crossings_r = np.flip(hcs_crossings_r)
-            hcs_crossings_p = np.flip(hcs_crossings_p)
-
-            for ihcs in range(0, len(hcs_crossings_r)):
-                if np.isfinite(hcs_crossings_r[ihcs]):
-                    # find the r index corresponding to this HCS crossing
-                    r_i = np.argmin(np.abs(hcs_crossings_r[ihcs] - r_grid + dr / 2))
-                    # flip everything at and beyond this radius
-                    if hcs_crossings_p[ihcs] > 0:
+        # step through each HCS inversion and flip everything beyond each one.
+        # hcs crossings are ordered so the furthest is the first, so apply them from the last.
+        for ilon in range(nlon):
+            for ihcs in range(n_hcs - 1, -1, -1):
+                r_hcs = hcs_particles_r[ihcs, t, 0, ilon]
+                if np.isfinite(r_hcs):
+                    r_i = _hcs_radial_index(r_hcs, r_grid, dr)
+                    if hcs_particles_r[ihcs, t, 1, ilon] > 0:
                         bgrid[t, r_i:, ilon] = -1.0
                     else:
                         bgrid[t, r_i:, ilon] = 1.0
