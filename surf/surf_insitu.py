@@ -1107,19 +1107,34 @@ def remove_ICMEs(data_df, icmes, interpolate=True, icme_buffer=0.1 * u.day, inte
     return data
 
 
+def _links_to_cme(linked_events):
+    """True if a DONKI ``linkedEvents`` entry includes a CME activity."""
+    if not isinstance(linked_events, list):
+        return False
+    return any(
+        isinstance(event, dict) and '-CME-' in str(event.get('activityID', ''))
+        for event in linked_events
+    )
+
+
 def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.day,
-                    min_quality=1):
+                    require_linked_cme=True):
     """
     Scrape the DONKI database of interplanetary shocks at Earth or STEREO, to create a pseudo-ICME
     list in the same format as the Cane and Richardson list.
+
+    DONKI has no ICME product, so each shock is treated as an ICME start with
+    an assumed duration. By default only shocks that DONKI links to a CME are
+    kept, which drops shocks with no CME driver (e.g. at stream interaction
+    regions).
     Args:
         startdate: Datetime of the start of the window
         enddate: Datetime of the end of the window
         location: Earth or STEREO A/B
         ICME_duration: Timespan of the assumed ICME duration. Should have units of days.
-        min_quality: Minimum DONKI ``quality`` rating to include. Valid values
-                     are -1 (all), 0 (weak or better), 1 (some signatures or
-                     better; default), and 2 (clear signatures only).
+        require_linked_cme: If True (default), only include shocks whose
+                     ``linkedEvents`` contain a CME. If False, include every
+                     shock at ``location``.
 
     Returns:
         icmes: A dataframe of ICMEs
@@ -1132,10 +1147,6 @@ def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.
     if (enddate - startdate).days > 60:
         raise ValueError('DONKI API doesnt permit requests for more than 60 days of data.  Please '
                          'reduce the time window.')
-
-    min_quality = int(min_quality)
-    if min_quality not in (-1, 0, 1, 2):
-        raise ValueError('min_quality must be -1, 0, 1, or 2')
 
     # construct the url
     startdate_str = startdate.strftime('%Y-%m-%d')
@@ -1152,13 +1163,14 @@ def get_DONKI_ICMEs(startdate, enddate, location='Earth', ICME_duration=1.5 * u.
         # convert to DataFrame
         df = pd.DataFrame(data)
 
-        # Only include ICMEs at the requested location and quality. Treat a
-        # missing quality as DONKI's -1 (unspecified) rating.
-        quality_values = (
-            df['quality'] if 'quality' in df else pd.Series(-1, index=df.index)
-        )
-        quality = pd.to_numeric(quality_values, errors='coerce').fillna(-1)
-        mask = (df['location'] == location) & (quality >= min_quality)
+        # Only include shocks at the requested location.
+        mask = df['location'] == location
+        if require_linked_cme:
+            linked_events = (
+                df['linkedEvents'] if 'linkedEvents' in df
+                else pd.Series(None, index=df.index, dtype=object)
+            )
+            mask &= linked_events.apply(_links_to_cme)
         icmes = df[mask].reset_index()
 
         # Put it in the same format as the Cane & Richardson ICME list. Assign
@@ -1336,7 +1348,7 @@ def get_STEREO_ICMEs(
 
 
 def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme_buffer=1,
-                interp_gaps=True, donki_min_quality=1):
+                interp_gaps=True, donki_require_linked_cme=True):
     """
     Remove ICME periods from OMNI solar wind data.
     
@@ -1363,10 +1375,10 @@ def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme
         If True, interpolate through the data gaps created by ICME removal
         using time-weighted interpolation with forward/backward fill for edges.
         Default is True.
-    donki_min_quality : {-1, 0, 1, 2}, optional
-        Minimum DONKI ICME quality to remove when ``icme_list='DONKI'``.
-        The default, 1, includes ratings 1 and 2.
-    
+    donki_require_linked_cme : bool, optional
+        When ``icme_list='DONKI'``, only remove shocks that DONKI links to a
+        CME. Default is True.
+
     Returns
     -------
     omni_noicmes : pandas.DataFrame
@@ -1392,7 +1404,8 @@ def removeICMEs(omni, icme_list='CaneRichardson', pre_icme_buffer=0.2, post_icme
     # load the ICME list
     if icme_list == 'DONKI':
         icmes = get_DONKI_ICMEs(
-            dl_starttime, dl_endtime, min_quality=donki_min_quality
+            dl_starttime, dl_endtime,
+            require_linked_cme=donki_require_linked_cme,
         )
     elif icme_list == 'CaneRichardson':
         icmes = ICMElist()

@@ -348,14 +348,6 @@
             <option value="DONKI">DONKI</option>
           </select>
         </label>
-        <label id="donki-icme-quality-field">Minimum DONKI ICME quality
-          <select name="donki_icme_min_quality" id="donki-icme-min-quality">
-            <option value="2">2 — Clear signatures only</option>
-            <option value="1" selected>1 — Lacks some signatures or better</option>
-            <option value="0">0 — Weak signatures or better</option>
-            <option value="-1">−1 — Include unspecified</option>
-          </select>
-        </label>
         <div class="contents" id="insitu-icme-buffer-fields">
           <label>ICME buffer before (days)
             <input name="insitu_pre_icme_buffer_days" id="insitu-pre-icme-buffer-days"
@@ -2294,11 +2286,6 @@
       const disabled = omniIcmeList?.value === "None";
       fields?.querySelectorAll("input").forEach(input => input.disabled = disabled);
       fields?.classList.toggle("opacity-50", disabled);
-      const qualityField = document.getElementById("donki-icme-quality-field");
-      const qualitySelect = document.getElementById("donki-icme-min-quality");
-      const qualityDisabled = omniIcmeList?.value !== "DONKI";
-      if (qualitySelect) qualitySelect.disabled = qualityDisabled;
-      qualityField?.classList.toggle("opacity-50", qualityDisabled);
     }
     function syncOmniForecastTimeState() {
       if (!omniForecastDatetime || !insituMode) return;

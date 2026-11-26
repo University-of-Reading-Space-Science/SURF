@@ -1229,10 +1229,6 @@ def _request_from_form() -> SimulationRequest:
             raise ValueError("ICME buffers must be zero or greater.")
         ambient["pre_icme_buffer_days"] = pre_icme_buffer_days
         ambient["post_icme_buffer_days"] = post_icme_buffer_days
-        donki_min_quality = int(_float("donki_icme_min_quality", 1))
-        if donki_min_quality not in {-1, 0, 1, 2}:
-            raise ValueError("Minimum DONKI ICME quality must be -1, 0, 1, or 2.")
-        ambient["donki_icme_min_quality"] = donki_min_quality
     elif source == "omni":
         ambient["use_215_inner_boundary"] = "use_215_inner_boundary" in request.form
         ambient["icme_list"] = request.form.get("omni_icme_list", "None")
@@ -1242,10 +1238,6 @@ def _request_from_form() -> SimulationRequest:
             raise ValueError("ICME buffers must be zero or greater.")
         ambient["pre_icme_buffer_days"] = pre_icme_buffer_days
         ambient["post_icme_buffer_days"] = post_icme_buffer_days
-        donki_min_quality = int(_float("donki_icme_min_quality", 1))
-        if donki_min_quality not in {-1, 0, 1, 2}:
-            raise ValueError("Minimum DONKI ICME quality must be -1, 0, 1, or 2.")
-        ambient["donki_icme_min_quality"] = donki_min_quality
 
     solver = request.form.get("solver", "hydro").strip().lower()
     default_cme_profile = "square"

@@ -306,16 +306,11 @@ def build_generated_code(request: SimulationRequest) -> str:
                     post_icme_buffer_days = float(
                         ambient.get("post_icme_buffer_days", 1.0)
                     )
-                    donki_quality_arg = (
-                        f", donki_min_quality={int(ambient.get('donki_icme_min_quality', 1))}"
-                        if omni_icme_list == "DONKI" else ""
-                    )
                     lines.append(
                         "omni_input = sinsit.removeICMEs("
                         f"omni_input, icme_list={omni_icme_list!r}, "
                         f"pre_icme_buffer={pre_icme_buffer_days}, "
-                        f"post_icme_buffer={post_icme_buffer_days}"
-                        f"{donki_quality_arg})"
+                        f"post_icme_buffer={post_icme_buffer_days})"
                     )
             wrapper_icme_list = omni_icme_list
             sta_buffer_args = ""
@@ -380,16 +375,11 @@ def build_generated_code(request: SimulationRequest) -> str:
                 post_icme_buffer_days = float(
                     ambient.get("post_icme_buffer_days", 1.0)
                 )
-                donki_quality_arg = (
-                    f", donki_min_quality={int(ambient.get('donki_icme_min_quality', 1))}"
-                    if omni_icme_list == "DONKI" else ""
-                )
                 lines.append(
                     "omni_input = sinsit.removeICMEs("
                     f"omni_input, icme_list={omni_icme_list!r}, "
                     f"pre_icme_buffer={pre_icme_buffer_days}, "
-                    f"post_icme_buffer={post_icme_buffer_days}"
-                    f"{donki_quality_arg})"
+                    f"post_icme_buffer={post_icme_buffer_days})"
                 )
                 wrapper_icme_list = "None"
             if ambient.get("use_215_inner_boundary", True):
